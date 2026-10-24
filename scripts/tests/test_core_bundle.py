@@ -27,11 +27,14 @@ class CoreBundleTests(unittest.TestCase):
         metadata['patch_sha256'] = hashlib.sha256((root / 'nce/core-onboarding.patch').read_bytes()).hexdigest()
         metadata_path.write_text(json.dumps(metadata))
 
-    def test_complete_bundle_template_and_explicit_template_only_provenance_match(self):
+    def test_complete_bundle_and_explicit_template_context_provenance_records_match(self):
         result = bundle.validate_bundle(ROOT)
-        self.assertEqual(result['files'], 18)
-        self.assertEqual(result['templateBytes'], 51175)
+        self.assertEqual(result['files'], 19)
+        self.assertEqual(result['templateBytes'], 51129)
         self.assertEqual(result['templateSource'], bundle.TEMPLATE_SOURCE)
+        self.assertEqual(result['gameRecipeBytes'], 30349)
+        self.assertEqual(result['gameRecipeSource'], bundle.TEMPLATE_SOURCE)
+        self.assertEqual(result['contextBytes'], 13139)
 
     def test_changed_patch_bytes_without_manifest_update_are_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -55,14 +58,57 @@ class CoreBundleTests(unittest.TestCase):
                 bundle.full_template_section(p.read_bytes())
 
     def test_claimed_template_source_hash_or_override_cannot_be_substituted(self):
-        for field, value in [('commit', 'f' * 40), ('repository', 'Other/Core'), ('path', 'other.json'), ('sha256', 'f' * 64)]:
-            with self.subTest(field=field), tempfile.TemporaryDirectory() as directory:
+        for index in [0, 1, 2]:
+            for field, value in [('commit', 'f' * 40), ('repository', 'Other/Core'), ('path', 'other.json'), ('sha256', 'f' * 64)]:
+                with self.subTest(index=index, field=field), tempfile.TemporaryDirectory() as directory:
+                    root = self.fixture(directory)
+                    p = root / 'nce/core-patch-baseline.json'
+                    metadata = json.loads(p.read_text()); metadata['per_file_overrides'][index][field] = value
+                    p.write_text(json.dumps(metadata))
+                    with self.assertRaisesRegex(ValueError, 'override provenance'):
+                        bundle.validate_bundle(root)
+
+    def test_duplicate_missing_and_foreign_override_records_are_rejected(self):
+        for kind in ['duplicate', 'missing', 'foreign']:
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as directory:
                 root = self.fixture(directory)
-                p = root / 'nce/core-patch-baseline.json'
-                metadata = json.loads(p.read_text()); metadata['per_file_overrides'][0][field] = value
+                p = root / 'nce/core-patch-baseline.json'; metadata = json.loads(p.read_text())
+                if kind == 'duplicate': metadata['per_file_overrides'][1] = copy.deepcopy(metadata['per_file_overrides'][0])
+                elif kind == 'missing': metadata['per_file_overrides'].pop()
+                else: metadata['per_file_overrides'][1]['path'] = 'foreign.json'
                 p.write_text(json.dumps(metadata))
-                with self.assertRaisesRegex(ValueError, 'override provenance'):
-                    bundle.validate_bundle(root)
+                with self.assertRaises(ValueError): bundle.validate_bundle(root)
+
+    def test_frontend_binding_stays_disabled_literal_runner_only_and_region_bound(self):
+        template = json.loads(bundle.full_template_section((ROOT / 'nce/core-onboarding.patch').read_bytes()))
+        for kind in ['enabled-default', 'wildcard-input', 'condition', 'role', 'action', 'resource', 'region']:
+            with self.subTest(kind=kind):
+                changed = copy.deepcopy(template)
+                policy = changed['Resources']['GameStudioFrontendPublishPolicy']; grant = policy['Properties']['PolicyDocument']['Statement'][0]
+                if kind == 'enabled-default': changed['Parameters']['GameStudioFrontendAppId']['Default'] = 'dother'
+                elif kind == 'wildcard-input': changed['Parameters']['GameStudioFrontendAppId']['AllowedPattern'] = '.*'
+                elif kind == 'condition': policy['Condition'] = 'Serverless'
+                elif kind == 'role': policy['Properties']['Roles'] = [{'Ref': 'SourceRole'}]
+                elif kind == 'action': grant['Action'].append('amplify:DeleteApp')
+                elif kind == 'resource': grant['Resource'] = '*'
+                else: grant.pop('Condition')
+                with self.assertRaisesRegex(ValueError, 'frontend binding'):
+                    bundle.validate_frontend_binding_scope(changed)
+
+    def test_game_default_route_permission_is_exact_and_legacy_permission_is_preserved(self):
+        template = json.loads(bundle.full_template_section((ROOT / 'nce/core-onboarding.patch').read_bytes(), bundle.GAME_TEMPLATE_PATH))
+        for kind in ['wildcard-arn', 'other-function', 'principal', 'account', 'legacy', 'stage', 'extra']:
+            with self.subTest(kind=kind):
+                changed = copy.deepcopy(template); resources = changed['Resources']; grant = resources['ApiDefaultInvoke']['Properties']
+                if kind == 'wildcard-arn': grant['SourceArn']['Fn::Sub'] = 'arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${Api}/*/*'
+                elif kind == 'other-function': grant['FunctionName'] = {'Ref': 'OtherFunction'}
+                elif kind == 'principal': grant['Principal'] = '*'
+                elif kind == 'account': grant.pop('SourceAccount')
+                elif kind == 'legacy': resources['ApiInvoke']['Properties']['SourceArn']['Fn::Sub'] = '*'
+                elif kind == 'stage': resources['ApiDefaultStage']['Properties']['StageName'] = 'preview'
+                else: resources['OtherInvoke'] = copy.deepcopy(resources['ApiDefaultInvoke'])
+                with self.assertRaisesRegex(ValueError, 'game recipe'):
+                    bundle.validate_game_recipe_scope(changed)
 
     def test_changed_file_set_and_false_template_hash_are_rejected(self):
         for kind in ['file-set', 'template-hash']:

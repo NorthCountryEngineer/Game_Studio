@@ -10,14 +10,20 @@ import re
 
 BASELINE = 'c27e6a03ff47adf4acc8e670ec2f240127744172'  # pragma: allowlist secret
 RECIPE_SOURCE = '52d8ad1c3846a9151b482c499576e5fe964290ec'  # pragma: allowlist secret
-TEMPLATE_SOURCE = '588d02b5eb4a6a91b0422f28463ebb1bac514194'  # pragma: allowlist secret
+TEMPLATE_SOURCE = '1e7e89d3caaafc182ab97268c87cb39b5a3a58ea'  # pragma: allowlist secret
 TEMPLATE_PATH = 'deployment/aws-platform/platform.template.json'
 # Public SHA256 of reviewed Core template bytes, not a credential.
-TEMPLATE_SHA256 = '05ec54a6a50ab4d58e19a99722f300f5bf9dea20294543665815ba6c028dc72b'  # pragma: allowlist secret
-TEMPLATE_BYTES = 51175
+TEMPLATE_SHA256 = '575eed28292790ae55ee68145ef90c20a71df467585a25dfe44d56e6729b51a9'  # pragma: allowlist secret
+TEMPLATE_BYTES = 51129
+GAME_TEMPLATE_PATH = 'deployment/aws-apps/game-studio.template.json'
+GAME_TEMPLATE_SHA256 = '1870dc194150f3383228733f971e16a6629f5cfa45befb8ec65c4fbaf665db57'  # pragma: allowlist secret
+GAME_TEMPLATE_BYTES = 30349
+CONTEXT_PATH = 'deployment/aws-platform/README.md'
+CONTEXT_SHA256 = 'e31788fdbcb5306bce78ca1411e1adb19ebe1ce2d9f2c9f43bd4040a441af6ec'  # pragma: allowlist secret
+CONTEXT_BYTES = 13139
 # Public digests of the locally apply-verified patch and all post-patch hashes.
-PATCH_SHA256 = '1aa176ab82ec6f5362b84d9d7d258040bb30856a7b5593974fa112efae5cd172'  # pragma: allowlist secret
-FILES_SHA256 = 'f4539949d4dffebb33f264350dd962fbc200a858a4f3ff81653a9801d12062e1'  # pragma: allowlist secret
+PATCH_SHA256 = 'f0ba4c0c87b0dd6a4e555dffc48f8a4a08eafa533d5242917202b0f7cda47252'  # pragma: allowlist secret
+FILES_SHA256 = 'f5f4562bfbe84b74e0eb75113a3de73a5f171a31722662201969b7ab9697c1e9'  # pragma: allowlist secret
 
 
 def require(value, message):
@@ -25,9 +31,9 @@ def require(value, message):
         raise ValueError(message)
 
 
-def full_template_section(patch):
+def full_template_section(patch, path=TEMPLATE_PATH):
     sections = re.split(rb'(?m)(?=^diff --git )', patch)
-    prefix = ('diff --git a/' + TEMPLATE_PATH + ' b/' + TEMPLATE_PATH + '\n').encode()
+    prefix = ('diff --git a/' + path + ' b/' + path + '\n').encode()
     matches = [section for section in sections if section.startswith(prefix)]
     require(len(matches) == 1, 'The bundle needs exactly one full platform template section.')
     section = matches[0]
@@ -77,6 +83,49 @@ def validate_template_scope(template):
     require(template['Parameters']['GameStudioModelArns']['Default'] == '', 'Model authority must remain default-empty.')
     create = next(entry for entry in entries if entry.get('Sid') == 'CreateBoundedRoles')
     require(create['Condition']['ArnEquals']['iam:PermissionsBoundary'] == {'Ref': 'AppBoundary'}, 'App roles must retain their boundary.')
+    validate_frontend_binding_scope(template)
+
+
+def validate_frontend_binding_scope(template):
+    parameters, resources = template['Parameters'], template['Resources']
+    for name, default, pattern in [
+        ('GameStudioFrontendAppId', '', '^$|^d[a-z0-9]{1,40}$'),
+        ('GameStudioFrontendBranch', 'production', '^[A-Za-z0-9._-]{1,255}$'),
+    ]:
+        value = parameters[name]
+        require(value['Type'] == 'String' and value['Default'] == default and value['AllowedPattern'] == pattern,
+                'The frontend binding must default disabled with literal app and branch inputs.')
+    require(template['Conditions']['HasBoundGameStudioFrontend'] == {'Fn::Not': [{'Fn::Equals': [{'Ref': 'GameStudioFrontendAppId'}, '']}]},
+            'The frontend binding must require an explicit owner-selected app.')
+    policy = resources['GameStudioFrontendPublishPolicy']
+    require(policy['Type'] == 'AWS::IAM::ManagedPolicy' and policy['Condition'] == 'HasBoundGameStudioFrontend',
+            'The frontend binding must remain a separate conditional policy.')
+    require(policy['Properties'] == {
+        'Roles': [{'Ref': 'RunnerRole'}],
+        'PolicyDocument': {'Version': '2012-10-17', 'Statement': [{
+            'Effect': 'Allow', 'Action': ['amplify:CreateDeployment', 'amplify:StartDeployment'],
+            'Resource': [{'Fn::Sub': 'arn:${AWS::Partition}:amplify:${AWS::Region}:${AWS::AccountId}:apps/${GameStudioFrontendAppId}/branches/${GameStudioFrontendBranch}' + suffix}
+                         for suffix in ['', '/deployments/*', '/jobs/*']],
+            'Condition': {'StringEquals': {'aws:RequestedRegion': {'Ref': 'AWS::Region'}}},
+        }]},
+    }, 'The frontend binding escaped its exact runner, app, branch, account, region or two publish actions.')
+
+
+def validate_game_recipe_scope(template):
+    resources = template['Resources']
+    properties = {'Action': 'lambda:InvokeFunction', 'FunctionName': {'Ref': 'Function'},
+        'Principal': 'apigateway.amazonaws.com', 'SourceAccount': {'Ref': 'AWS::AccountId'},
+        'SourceArn': {'Fn::Sub': 'arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${Api}/$default/$default'}}
+    exact = resources['ApiDefaultInvoke']
+    require(exact['Type'] == 'AWS::Lambda::Permission' and exact['Condition'] == 'Serverless' and exact['Properties'] == properties,
+            'The game recipe default-route invocation permission escaped its reviewed scope.')
+    require(resources['ApiInvoke']['Properties'] == {**properties, 'SourceArn': {'Fn::Sub':
+        'arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${Api}/*/*/*'}},
+        'The game recipe must preserve its legacy permission without replacement.')
+    require(resources['ApiDefaultRoute']['Properties']['RouteKey'] == resources['ApiDefaultStage']['Properties']['StageName'] == '$default',
+            'The game recipe route and stage must match the exact invocation permission.')
+    require({name for name, resource in resources.items() if resource['Type'] == 'AWS::Lambda::Permission'} == {'ApiInvoke', 'ApiDefaultInvoke'},
+            'The game recipe gained an unreviewed invocation grant.')
 
 
 def validate_bundle(root):
@@ -96,17 +145,36 @@ def validate_bundle(root):
     require(len(paths) == len(set(paths)) and set(paths) == set(metadata['files']), 'Core patch paths and full-file hash manifest differ.')
     require(all(re.fullmatch(r'[a-f0-9]{64}', value) for value in metadata['files'].values()), 'Invalid Core file hash.')
     require(hashlib.sha256(json.dumps(metadata['files'], sort_keys=True, separators=(',', ':')).encode()).hexdigest() == FILES_SHA256, 'The complete post-patch manifest differs from its apply-verified source.')
-    raw = full_template_section(patch)
-    require(len(raw) == TEMPLATE_BYTES == metadata['checks']['onboarding_template_bytes'], 'The bundled template byte count changed.')
-    require(hashlib.sha256(raw).hexdigest() == TEMPLATE_SHA256 == metadata['files'][TEMPLATE_PATH], 'The bundled template is not the exact reviewed source.')
+    templates = [(TEMPLATE_PATH, TEMPLATE_SHA256, TEMPLATE_BYTES, 'onboarding_template_bytes'),
+                 (GAME_TEMPLATE_PATH, GAME_TEMPLATE_SHA256, GAME_TEMPLATE_BYTES, 'game_recipe_bytes')]
+    documents = {}
+    for path, sha256, size, check in templates:
+        raw = full_template_section(patch, path)
+        require(len(raw) == size == metadata['checks'][check], 'The bundled template byte count changed.')
+        require(hashlib.sha256(raw).hexdigest() == sha256 == metadata['files'][path], 'The bundled template is not the exact reviewed source.')
+        documents[path] = json.loads(raw)
+    context = full_template_section(patch, CONTEXT_PATH)
+    require(len(context) == CONTEXT_BYTES == metadata['checks']['platform_context_bytes']
+            and hashlib.sha256(context).hexdigest() == CONTEXT_SHA256 == metadata['files'][CONTEXT_PATH],
+            'The architecture context sidecar is not the exact reviewed source.')
+    for resource in documents[TEMPLATE_PATH]['Resources'].values():
+        for reference in resource.get('Metadata', {}).get('com.aws.cloudformation.Context', {}).get('ref', []):
+            if reference.get('at') == CONTEXT_PATH:
+                require(reference['has'].encode() in context, 'A platform architecture context reference is unresolved.')
     overrides = metadata.get('per_file_overrides')
-    require(isinstance(overrides, list) and len(overrides) == 1, 'The bundle must identify its one template-only override.')
-    override = overrides[0]
-    require(override.get('repository') == 'NorthCountryEngineer/NCE_Core' and override.get('commit') == TEMPLATE_SOURCE
-            and override.get('path') == TEMPLATE_PATH and override.get('sha256') == TEMPLATE_SHA256
-            and override.get('pull_request') == 'https://github.com/NorthCountryEngineer/NCE_Core/pull/9', 'Template override provenance differs from reviewed Core source.')
-    validate_template_scope(json.loads(raw))
-    return {'files': len(paths), 'templateBytes': len(raw), 'templateSource': TEMPLATE_SOURCE}
+    require(isinstance(overrides, list) and len(overrides) == 3 and all(isinstance(row, dict) and isinstance(row.get('path'), str) for row in overrides),
+            'The bundle must identify its two templates and required context override.')
+    expected = {path: sha256 for path, sha256, _, _ in templates}
+    expected[CONTEXT_PATH] = CONTEXT_SHA256
+    require({row.get('path') for row in overrides} == set(expected), 'Template override provenance differs from reviewed Core source.')
+    for override in overrides:
+        require(override.get('repository') == 'NorthCountryEngineer/NCE_Core' and override.get('commit') == TEMPLATE_SOURCE
+                and override.get('sha256') == expected[override['path']]
+                and override.get('pull_request') == 'https://github.com/NorthCountryEngineer/NCE_Core/pull/6', 'Template override provenance differs from reviewed Core source.')
+    validate_template_scope(documents[TEMPLATE_PATH])
+    validate_game_recipe_scope(documents[GAME_TEMPLATE_PATH])
+    return {'files': len(paths), 'templateBytes': TEMPLATE_BYTES, 'templateSource': TEMPLATE_SOURCE,
+            'gameRecipeBytes': GAME_TEMPLATE_BYTES, 'gameRecipeSource': TEMPLATE_SOURCE, 'contextBytes': CONTEXT_BYTES}
 
 
 if __name__ == '__main__':

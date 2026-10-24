@@ -1,15 +1,15 @@
 {
   "baseline": "c27e6a03ff47adf4acc8e670ec2f240127744172",
   "branch": "codex/game-studio-onboarding",
-  "patch_sha256": "1aa176ab82ec6f5362b84d9d7d258040bb30856a7b5593974fa112efae5cd172",
+  "patch_sha256": "f0ba4c0c87b0dd6a4e555dffc48f8a4a08eafa533d5242917202b0f7cda47252",
   "files": {
     "ci/tests/test_github_gate.py": "e867b0fcba42a72fd6afff9fbe99cfa4465809f1eaaa088d52107c2c0c1855ea",
     "deployment/aws-apps/README.md": "288100d2b53b46d3f56c39a6f33f9b0fa1093d7e3bd6fa5f391d5b29ca738363",
     "deployment/aws-apps/build_source.py": "7056a97ef05cfc9888a603b171d688954ad0b73fd006a0da9a6e4e571fb81b55",
-    "deployment/aws-apps/game-studio.template.json": "a140e0b4e39edbaf855b953e2855d8b0837c57f228304d6d2fbeb66b7b13dcc8",
+    "deployment/aws-apps/game-studio.template.json": "1870dc194150f3383228733f971e16a6629f5cfa45befb8ec65c4fbaf665db57",
     "deployment/aws-apps/runner.py": "90708ed1a03d2befc107ef50206914413105f136fb48177827b8de0daa7a3e74",
     "deployment/aws-platform/check_template.py": "d472f7740f3a0312ea0ae2360d9e30b86ca7eff65108da37ad1b8238e4c34e94",
-    "deployment/aws-platform/platform.template.json": "05ec54a6a50ab4d58e19a99722f300f5bf9dea20294543665815ba6c028dc72b",
+    "deployment/aws-platform/platform.template.json": "575eed28292790ae55ee68145ef90c20a71df467585a25dfe44d56e6729b51a9",
     "docs/cloud-deployments.md": "5bd936bee2beb2eced7e6fb9c5a6e078bfa56f9d89579f1462d18244f9bd9b6d",
     "examples/game-studio-package.json": "8c5573bc595bf52f23b7c393895272dd91d01cffc1a5d7d510569ff8b4df3bbd",
     "platform_services/cloud_aws.py": "a88741bd5f05ac393734869288f501cee4154cc4a7ac1f7138284eb69aa2b11f",
@@ -20,35 +20,54 @@
     "platform_services/github_ci.py": "b8e32227677812315fc4fbe3b5291429fd728e5f68c41474b6db38732f6b620b",
     "platform_services/migrations/0042_game_studio_archetype.py": "077c2f937b3209336461cb7a6f346319d2ba0756f7d08b76c43dcf3d3d3aa6e3",
     "platform_services/tests/test_game_studio_cloud.py": "dac8b0151ec1fe1e686e52d9ce56b0691ace5c16303d91c550df7d3b1ca9b4a1",
-    "templates/platform_services/cloud_application_form.html": "9806d993e822858aff90d55fa145d911147b7035b967abd2865197efc3280683"
+    "templates/platform_services/cloud_application_form.html": "9806d993e822858aff90d55fa145d911147b7035b967abd2865197efc3280683",
+    "deployment/aws-platform/README.md": "e31788fdbcb5306bce78ca1411e1adb19ebe1ce2d9f2c9f43bd4040a441af6ec"
   },
   "checks": {
     "backend_python_tests": 174,
     "onboarding_security_invariants": "PASS",
-    "onboarding_template_bytes": 51175,
+    "onboarding_template_bytes": 51129,
     "formal_cfn_schema_compliance": "not available; not run",
     "cloud_or_provider_calls": false,
     "core_broad_tests": 132,
     "system_check": "PASS",
     "migration_drift": "No changes detected",
-    "prior_production_source_files_verified": 459
+    "prior_production_source_files_verified": 459,
+    "game_recipe_bytes": 30349,
+    "platform_context_bytes": 13139
   },
   "notes": [
     "Original Axolotl and active Core checkouts untouched.",
     "Optional model authority requires both exact platform model ARNs and exact per-app model ARNs/enablement; guided default invokes no provider.",
     "Rekognition permissions excluded from first Core recipe.",
     "The local checks above did not make cloud calls. See docs/VALIDATION.md for the separately authorized live rollout and recovery status.",
-    "Only the platform template is refreshed from the explicit per-file override. This does not import subsequent Core CI policies or make the complete historical bundle equivalent to that newer commit. Existing managed Core installations must use the current Core release process, not reapply this old patch."
+    "Only the two reviewed templates and their required platform architecture-context README are refreshed from explicit per-file overrides. The other 16 files remain the historical 52d8ad1 snapshot; no later adoption runtime or temporary CI policy is imported. Managed Core installations must use their current reviewed release process."
   ],
   "core_change_commit": "52d8ad1c3846a9151b482c499576e5fe964290ec",
   "per_file_overrides": [
     {
       "repository": "NorthCountryEngineer/NCE_Core",
-      "commit": "588d02b5eb4a6a91b0422f28463ebb1bac514194",
+      "commit": "1e7e89d3caaafc182ab97268c87cb39b5a3a58ea",
       "path": "deployment/aws-platform/platform.template.json",
-      "sha256": "05ec54a6a50ab4d58e19a99722f300f5bf9dea20294543665815ba6c028dc72b",
-      "pull_request": "https://github.com/NorthCountryEngineer/NCE_Core/pull/9",
-      "reason": "Scoped HTTP API tagging POST, resource-tagged child collection POST, and literal stage TagResource with existing/requested platform tags and region (Core PRs #7, #8 and #9); other recipe files remain the historical 52d8ad1 snapshot."
+      "sha256": "575eed28292790ae55ee68145ef90c20a71df467585a25dfe44d56e6729b51a9",
+      "pull_request": "https://github.com/NorthCountryEngineer/NCE_Core/pull/6",
+      "reason": "Canonical reviewed operator platform: bounded API grants and default-disabled exact Game Studio frontend binding."
+    },
+    {
+      "repository": "NorthCountryEngineer/NCE_Core",
+      "commit": "1e7e89d3caaafc182ab97268c87cb39b5a3a58ea",
+      "path": "deployment/aws-apps/game-studio.template.json",
+      "sha256": "1870dc194150f3383228733f971e16a6629f5cfa45befb8ec65c4fbaf665db57",
+      "pull_request": "https://github.com/NorthCountryEngineer/NCE_Core/pull/6",
+      "reason": "Canonical reviewed additive exact default-stage/default-route Lambda permission; legacy resource and replacement safeguards preserved."
+    },
+    {
+      "repository": "NorthCountryEngineer/NCE_Core",
+      "commit": "1e7e89d3caaafc182ab97268c87cb39b5a3a58ea",
+      "path": "deployment/aws-platform/README.md",
+      "sha256": "e31788fdbcb5306bce78ca1411e1adb19ebe1ce2d9f2c9f43bd4040a441af6ec",
+      "pull_request": "https://github.com/NorthCountryEngineer/NCE_Core/pull/6",
+      "reason": "Required documentation sidecar for the six exact architecture-context references moved out of the inline platform template."
     }
   ]
 }
