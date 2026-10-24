@@ -30,7 +30,7 @@ Public games and their arcade nicknames are publicly accessible. Approved embedd
 
 ## Branding
 
-An installation starts with its configured application name, badge, accent and optional public logo URL. An authorized Game Studio administrator can change branding in the UI using optimistic revision checks. Branding is plain text and an optional validated image URL. Host origins and return paths remain deployment settings because they must match API CORS and the CDN framing policy; a branding edit cannot change those security settings.
+An installation starts with its configured application name, badge, accent and optional public logo URL. A host keeps its own page chrome; the embedded service badge identifies the configured Game Studio installation. Hosts sharing that installation share its badge and catalog. Separate configured Core application installations can use different brands and data boundaries. An authorized Game Studio administrator can change branding in the UI using optimistic revision checks. Branding is plain text and an optional validated image URL. Host origins and return paths remain deployment settings because they must match API CORS and the CDN framing policy; a branding edit cannot change those security settings.
 
 ## Extraction and migration
 
