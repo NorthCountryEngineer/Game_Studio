@@ -26,6 +26,8 @@ Open `http://127.0.0.1:5180/game-studio`. To configure local branding and a conn
 4. An authorized game administrator creates, tests and publishes a game. Copy its player link or SDK snippet into the host's lesson/page configuration.
 5. Players use the embedded public player. Signed-in shared score submission uses Game Studio's own top-level Core login; anonymous embedded play can keep local scores. No host access token is forwarded.
 
+The companion Core recipe is reviewed in [NCE Core PR #6](https://github.com/NorthCountryEngineer/NCE_Core/pull/6); it must be released through Core before this new archetype is available in its console.
+
 See [integration contract](docs/INTEGRATION.md), [architecture and boundaries](docs/ARCHITECTURE.md), [Core onboarding](nce/README.md), and [AWS deployment](deployment/README.md). The SDK is framework-independent ES modules, served at `/sdk/game-studio.js`; no npm publication or subscription is required.
 
 ## Validate

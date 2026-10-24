@@ -1,7 +1,7 @@
 {
   "baseline": "cf8cd458d5d3b4747bf959b0ce496767a5fb8f5d",
   "branch": "codex/game-studio-onboarding",
-  "patch_sha256": "6b3ac2479e14ee39c828eb7f200859ce6156c17847de725b6cf5970436469efe",
+  "patch_sha256": "0d621f04b78ada1e4e92eb498d7b30e4caedcd4b5cda1cf71f3586518d228b53",
   "files": {
     "ci/tests/test_github_gate.py": "e867b0fcba42a72fd6afff9fbe99cfa4465809f1eaaa088d52107c2c0c1855ea",
     "deployment/aws-apps/README.md": "288100d2b53b46d3f56c39a6f33f9b0fa1093d7e3bd6fa5f391d5b29ca738363",
@@ -19,7 +19,7 @@
     "platform_services/cloud_portal.py": "8f0f337c245251fb9a9a2041047b71181bb12ee85d76d1d51c6ad3e062c2dc17",
     "platform_services/github_ci.py": "b8e32227677812315fc4fbe3b5291429fd728e5f68c41474b6db38732f6b620b",
     "platform_services/migrations/0042_game_studio_archetype.py": "077c2f937b3209336461cb7a6f346319d2ba0756f7d08b76c43dcf3d3d3aa6e3",
-    "platform_services/tests/test_game_studio_cloud.py": "3b33392e62603b1e14e1699f1acf09307e9663e4b8785d7c7d29b33ad007a11a",
+    "platform_services/tests/test_game_studio_cloud.py": "dac8b0151ec1fe1e686e52d9ce56b0691ace5c16303d91c550df7d3b1ca9b4a1",
     "templates/platform_services/cloud_application_form.html": "9806d993e822858aff90d55fa145d911147b7035b967abd2865197efc3280683"
   },
   "checks": {
@@ -38,5 +38,5 @@
     "Optional model authority requires both exact platform model ARNs and exact per-app model ARNs/enablement; guided default invokes no provider.",
     "Rekognition permissions excluded from first Core recipe."
   ],
-  "core_change_commit": "bb501df"
+  "core_change_commit": "f66562564f4d040c0c1ee29c635a00eeb5d62700"
 }
