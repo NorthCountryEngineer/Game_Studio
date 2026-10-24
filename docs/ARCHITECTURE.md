@@ -1,0 +1,39 @@
+# Independent Game Studio service
+
+## Ownership and deployment
+
+Game Studio owns game definitions, private design conversations, playtest acknowledgements, publication snapshots, edition-specific high scores, agent/workflow configuration, its account invitations and branding. A host application owns its lessons, pages, course permissions, assessment policy and the association between a lesson and a Game Studio game ID. NCE Core owns identities, app membership, permissions and deployment authority.
+
+The first implementation deliberately deploys one backend/frontend per Core tenant and environment. Tenant/service identifiers are server environment values, never selectors accepted from query parameters, messages or request bodies. Data keys and live introspection bind records to that installation. Different host applications in the same installation share its published catalog and edition boards; deploy separate installations when distinct content or score boundaries are needed.
+
+AWS hosting uses Amplify for the static React frontend, API Gateway HTTP API and Lambda for the backend, on-demand DynamoDB tables for state, and private S3 for compatibility with the extracted assistant framework. Core resource credentials remain in the installation's SSM SecureString. No always-running Fargate service is needed for this workload. Model configuration stays separate from hosting and does not invoke a model.
+
+The dedicated trusted Core deployment recipe is reviewed alongside this application. The generic `amplify-serverless` recipe is insufficient: it does not carry Game Studio's complete identity contract, assistant/game tables, runtime configuration and host framing policy. A marketplace identity registration alone does not provision hosting. Follow the Core onboarding guide before exposing this application in its deployment console.
+
+## Authoring and publication
+
+The host displays its creator link only to its own administrators. That link is a navigation convenience, not a permission grant. Game Studio performs its own normal top-level Core PKCE sign-in and checks current service-specific permissions for every protected operation. This avoids third-party cookie dependence and sending authorization codes or bearer tokens through an iframe.
+
+`games-create` is delegated game creation administration. `games-publish` adds publication after playtesting. `games-manage` controls creation settings, branding and cross-content admin actions. `agents-manage` and `accounts-manage` independently control those workspaces. Ordinary authenticated players have no creation rights. Core organization administrators are not implicitly treated as Game Studio creators by the API.
+
+Drafts stay private. Playtesting runs a validated data-only game specification inside a sandboxed frame with a fixed engine, nonce-bound messages and no network access. Generated content cannot add executable JavaScript, remote assets, new tools or mechanics beyond the supported engine. Agentic level planning remains constrained by the same schema. The free guided designer is deterministic; optional configured models can propose a tailored progression. All levels must be reviewed in the saved revision before a publisher can publish a copied snapshot.
+
+Publishing updates one canonical live edition. Hosts embed that canonical game ID, so a later publication becomes visible there; a stale score submission receives a reload error. Boards reset with each edition. Unpublishing removes public play and its board everywhere using that installation, while retaining the private draft. Deletion is explicit and requires the administrative capability.
+
+## Host embedding
+
+`/embed/games/{id}` is the public player surface. Host IDs resolve only against operator-configured exact origins; the parent referrer must match. The hosting policy allows framing only by those origins. Private creation, account, settings and OAuth pages reject framing. The common SDK verifies sender origin, source window, channel, game ID, protocol version and message shape. Messages never carry identity, access tokens, roles or private drafts.
+
+The exported completion event is a client-reported gameplay observation. It is suitable for UI feedback and an instructor's activity view; it is not proof of a student's identity, learning or grade. A future NCAcademy integration must bind activity to its own trusted session and instructor-approved lesson policy. Academy students need not become Core creators. Generated educational games remain private until an instructor/administrator reviews and publishes them.
+
+Public games and their arcade nicknames are publicly accessible. Approved embedding origins are a framing and integration boundary, not content confidentiality. Do not publish sensitive student information into game titles, descriptions, level text or nicknames. This release does not add private enrollment-based game distribution or automatically modify NCAcademy's lessons/accounts.
+
+## Branding
+
+An installation starts with its configured application name, badge, accent and optional public logo URL. An authorized Game Studio administrator can change branding in the UI using optimistic revision checks. Branding is plain text and an optional validated image URL. Host origins and return paths remain deployment settings because they must match API CORS and the CDN framing policy; a branding edit cannot change those security settings.
+
+## Extraction and migration
+
+The original Axolotl deployment and data are preserved. This repository contains the engine and authoring behavior, not a copy of live records. A host can adopt the standalone service incrementally through public links and the SDK. Moving existing drafts, accounts or score boards requires an explicit, reviewed data migration; changing endpoints alone is not such a migration.
+
+References: [Amplify custom headers](https://docs.aws.amazon.com/amplify/latest/userguide/setting-custom-headers.html), [browser messaging security](https://developer.mozilla.org/en-US/docs/Web/API/Window/postMessage#security_concerns).

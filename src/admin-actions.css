@@ -1,0 +1,20 @@
+.item-actions{display:inline-block;position:relative;flex:none;margin:0;vertical-align:middle;color:var(--ink,#193e36);text-align:left}
+.item-actions>summary{display:flex;align-items:center;justify-content:center;list-style:none;width:40px;height:40px;padding:0;border:1px solid currentColor;border-radius:50%;background:var(--paper,#fffdf5);font-size:24px;font-weight:700;line-height:1;cursor:pointer;user-select:none}
+.item-actions>summary::-webkit-details-marker{display:none}
+.item-actions>summary:hover,.item-actions[open]>summary{background:var(--pink,#efd6df)}
+.item-actions>summary:focus-visible,.item-actions-panel button:focus-visible{outline:3px solid var(--ink,#193e36);outline-offset:3px}
+.item-actions>summary[aria-disabled=true]{cursor:not-allowed;opacity:.45}
+.item-actions-panel{position:fixed;z-index:1000;left:12px;top:12px;width:min(220px,calc(100vw - 24px));padding:6px;border:1px solid var(--ink,#193e36);border-radius:10px;background:var(--paper,#fffdf5);box-shadow:0 8px 24px #173d3526;overflow-y:auto}
+.item-actions-panel>button{display:block;width:100%;min-height:44px;padding:10px 14px;border:0;border-radius:5px;background:transparent;color:inherit;font:inherit;font-size:14px;font-weight:650;text-align:left;cursor:pointer}
+.item-actions-panel>button:hover{background:var(--pink,#efd6df)}
+.item-actions-panel>button:disabled{opacity:.45;cursor:not-allowed}
+.item-actions-panel>.item-action-delete{color:#922c33;border-top:1px solid #193e3633;margin-top:4px;border-radius:0 0 5px 5px}
+.draft-row{display:flex;align-items:center;gap:8px;min-width:0;padding-right:12px}
+.draft-row>.draft-item{flex:1;min-width:0;padding-right:8px}
+.draft-row>.item-actions{margin-right:1px}
+.block-controls>div{display:flex;align-items:center;gap:4px}
+.block-controls .item-actions>summary{width:32px;height:32px;font-size:22px}
+.block-controls .item-actions-panel>button{width:100%;height:auto;padding:10px 14px;border-radius:5px;font-size:14px}
+.admin-content-heading{display:flex;align-items:center;justify-content:space-between;gap:16px}
+.admin-content-heading>:first-child{min-width:0}
+@media(max-width:640px){.item-actions>summary,.block-controls .item-actions>summary{width:44px;height:44px}.draft-row{padding-right:8px;gap:4px}}

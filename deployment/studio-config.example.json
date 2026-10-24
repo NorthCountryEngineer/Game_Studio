@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "branding": {
+    "appName": "Game Studio",
+    "badgeText": "Game Studio",
+    "accentColor": "#245f57"
+  },
+  "hosts": []
+}

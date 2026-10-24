@@ -1,0 +1,19 @@
+version: 1
+frontend:
+  phases:
+    preBuild:
+      commands:
+        - 'test "$GAME_STUDIO_ENABLE_AWS_DEPLOYMENT" = "true" || { echo "Deployment is disabled. Read deployment/README.md."; exit 1; }'
+        - npm ci --no-audit --no-fund
+    build:
+      commands:
+        - node scripts/write-hosting-headers.mjs
+        - npm run build
+        - cp customHttp.yml dist/customHttp.yml
+  artifacts:
+    baseDirectory: dist
+    files:
+      - '**/*'
+  cache:
+    paths:
+      - node_modules/**/*

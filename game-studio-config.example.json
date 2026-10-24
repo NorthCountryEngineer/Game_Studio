@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "branding": {
+    "appName": "Game Studio",
+    "badgeText": "Powered by Game Studio",
+    "accentColor": "#176a63"
+  },
+  "hosts": [
+    {
+      "id": "example-school",
+      "name": "Example School",
+      "origin": "https://school.example.invalid",
+      "returnPath": "/admin/games"
+    }
+  ]
+}

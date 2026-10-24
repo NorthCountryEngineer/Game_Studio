@@ -1,0 +1,42 @@
+{
+  "baseline": "cf8cd458d5d3b4747bf959b0ce496767a5fb8f5d",
+  "branch": "codex/game-studio-onboarding",
+  "patch_sha256": "6b3ac2479e14ee39c828eb7f200859ce6156c17847de725b6cf5970436469efe",
+  "files": {
+    "ci/tests/test_github_gate.py": "e867b0fcba42a72fd6afff9fbe99cfa4465809f1eaaa088d52107c2c0c1855ea",
+    "deployment/aws-apps/README.md": "288100d2b53b46d3f56c39a6f33f9b0fa1093d7e3bd6fa5f391d5b29ca738363",
+    "deployment/aws-apps/build_source.py": "7056a97ef05cfc9888a603b171d688954ad0b73fd006a0da9a6e4e571fb81b55",
+    "deployment/aws-apps/game-studio.template.json": "a140e0b4e39edbaf855b953e2855d8b0837c57f228304d6d2fbeb66b7b13dcc8",
+    "deployment/aws-apps/runner.py": "90708ed1a03d2befc107ef50206914413105f136fb48177827b8de0daa7a3e74",
+    "deployment/aws-platform/check_template.py": "d472f7740f3a0312ea0ae2360d9e30b86ca7eff65108da37ad1b8238e4c34e94",
+    "deployment/aws-platform/platform.template.json": "d3c3a02d1434848a424395371a64302a135d0d313b6a691123d0e629d65126e2",
+    "docs/cloud-deployments.md": "5bd936bee2beb2eced7e6fb9c5a6e078bfa56f9d89579f1462d18244f9bd9b6d",
+    "examples/game-studio-package.json": "8c5573bc595bf52f23b7c393895272dd91d01cffc1a5d7d510569ff8b4df3bbd",
+    "platform_services/cloud_aws.py": "a88741bd5f05ac393734869288f501cee4154cc4a7ac1f7138284eb69aa2b11f",
+    "platform_services/cloud_contract.py": "9f7de4afd38e10999b1590b1511eadba80f39fcdb05d2023ae4beae5d9469168",
+    "platform_services/cloud_deployments.py": "3c4619d2b1bc6d0a593b157a76d379ff1ac6fd12813ba223acdcb2bab4bb7236",
+    "platform_services/cloud_models.py": "91862b5c0026626a72884b4e637990b3c51b652352c3e8b8f0d98a2aaeb13824",
+    "platform_services/cloud_portal.py": "8f0f337c245251fb9a9a2041047b71181bb12ee85d76d1d51c6ad3e062c2dc17",
+    "platform_services/github_ci.py": "b8e32227677812315fc4fbe3b5291429fd728e5f68c41474b6db38732f6b620b",
+    "platform_services/migrations/0042_game_studio_archetype.py": "077c2f937b3209336461cb7a6f346319d2ba0756f7d08b76c43dcf3d3d3aa6e3",
+    "platform_services/tests/test_game_studio_cloud.py": "3b33392e62603b1e14e1699f1acf09307e9663e4b8785d7c7d29b33ad007a11a",
+    "templates/platform_services/cloud_application_form.html": "9806d993e822858aff90d55fa145d911147b7035b967abd2865197efc3280683"
+  },
+  "checks": {
+    "backend_python_tests": 174,
+    "onboarding_security_invariants": "PASS",
+    "onboarding_template_bytes": 50179,
+    "formal_cfn_schema_compliance": "not available; not run",
+    "cloud_or_provider_calls": false,
+    "core_broad_tests": 132,
+    "system_check": "PASS",
+    "migration_drift": "No changes detected"
+  },
+  "notes": [
+    "No commits, pushes, Core live changes or AWS operations performed by this agent.",
+    "Original Axolotl and active Core checkouts untouched.",
+    "Optional model authority requires both exact platform model ARNs and exact per-app model ARNs/enablement; guided default invokes no provider.",
+    "Rekognition permissions excluded from first Core recipe."
+  ],
+  "core_change_commit": "bb501df"
+}

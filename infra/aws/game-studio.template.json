@@ -1,0 +1,927 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Independent tenant-scoped Game Studio API, private declarative game creation/playtests, public snapshots, edition high scores, assistant registry and exact Core authorization.",
+  "Parameters": {
+    "ApplicationOrigin": {
+      "Type": "String",
+      "AllowedPattern": "^https://[a-zA-Z0-9.-]+$"
+    },
+    "CoreIssuer": {
+      "Type": "String",
+      "AllowedPattern": "^https://[a-zA-Z0-9.-]+$"
+    },
+    "CoreOrganizationId": {
+      "Type": "String",
+      "AllowedPattern": "^[a-f0-9-]{36}$"
+    },
+    "CoreServiceId": {
+      "Type": "String",
+      "AllowedPattern": "^[a-f0-9-]{36}$"
+    },
+    "CoreCredentialsParameter": {
+      "Type": "String",
+      "AllowedPattern": "^/game-studio/[a-zA-Z0-9/_-]+$",
+      "Description": "Dedicated existing Core resource-client SecureString path for this installation only. Never reuse another application client."
+    },
+    "LambdaCodeBucket": {
+      "Type": "String",
+      "AllowedPattern": "^[a-z0-9.-]+$"
+    },
+    "LambdaCodeKey": {
+      "Type": "String",
+      "AllowedPattern": "^[a-zA-Z0-9/_.-]+$",
+      "Default": "game-studio-api.zip"
+    },
+    "LambdaReservedConcurrency": {
+      "Type": "Number",
+      "Default": 0,
+      "AllowedValues": [
+        0,
+        1,
+        2
+      ],
+      "Description": "2 for bounded concurrency; 0 omits a reservation if the account quota cannot preserve 100 unreserved executions. Not a bill cap."
+    },
+    "GameStudioConfigJson": {
+      "Type": "String",
+      "MaxLength": 2048,
+      "Default": "{\"version\":1,\"branding\":{\"appName\":\"Game Studio\",\"badgeText\":\"Game Studio\",\"accentColor\":\"#245f57\"},\"hosts\":[]}",
+      "Description": "Nonsecret branding and exact embedding host allowlist. Validated by backend; no tenant/role/secret fields. Maximum 2048 UTF-8 bytes."
+    },
+    "AllowedOrigins": {
+      "Type": "CommaDelimitedList",
+      "AllowedPattern": "^https://[a-zA-Z0-9.-]+(:[0-9]{1,5})?$",
+      "Description": "Exact Game Studio frontend origin followed by configured host HTTPS origins. No wildcard, credentials, path, query or fragment."
+    }
+  },
+  "Resources": {
+    "CompatibilityPrivate": {
+      "Type": "AWS::DynamoDB::Table",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "BillingMode": "PAY_PER_REQUEST",
+        "AttributeDefinitions": [
+          {
+            "AttributeName": "id",
+            "AttributeType": "S"
+          }
+        ],
+        "KeySchema": [
+          {
+            "AttributeName": "id",
+            "KeyType": "HASH"
+          }
+        ],
+        "PointInTimeRecoverySpecification": {
+          "PointInTimeRecoveryEnabled": false
+        },
+        "SSESpecification": {
+          "SSEEnabled": true
+        }
+      },
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "Private compatibility/media workflow metadata; contains no Axolotl data.",
+          "must": [
+            "New independent table for this installation; never reference or import an Axolotl table.",
+            "Retain data on deletion or replacement; private routes remain server-authorized."
+          ]
+        }
+      }
+    },
+    "CompatibilityPublic": {
+      "Type": "AWS::DynamoDB::Table",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "BillingMode": "PAY_PER_REQUEST",
+        "AttributeDefinitions": [
+          {
+            "AttributeName": "id",
+            "AttributeType": "S"
+          }
+        ],
+        "KeySchema": [
+          {
+            "AttributeName": "id",
+            "KeyType": "HASH"
+          }
+        ],
+        "PointInTimeRecoverySpecification": {
+          "PointInTimeRecoveryEnabled": false
+        },
+        "SSESpecification": {
+          "SSEEnabled": true
+        }
+      },
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "Published compatibility/media workflow metadata; contains no Axolotl data.",
+          "must": [
+            "New independent table for this installation; never reference or import an Axolotl table.",
+            "Retain data on deletion or replacement; private routes remain server-authorized."
+          ]
+        }
+      }
+    },
+    "Media": {
+      "Type": "AWS::S3::Bucket",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "PublicAccessBlockConfiguration": {
+          "BlockPublicAcls": true,
+          "IgnorePublicAcls": true,
+          "BlockPublicPolicy": true,
+          "RestrictPublicBuckets": true
+        },
+        "BucketEncryption": {
+          "ServerSideEncryptionConfiguration": [
+            {
+              "ServerSideEncryptionByDefault": {
+                "SSEAlgorithm": "AES256"
+              }
+            }
+          ]
+        },
+        "CorsConfiguration": {
+          "CorsRules": [
+            {
+              "AllowedOrigins": [
+                {
+                  "Ref": "ApplicationOrigin"
+                }
+              ],
+              "AllowedHeaders": [
+                "*"
+              ],
+              "AllowedMethods": [
+                "GET",
+                "HEAD",
+                "POST"
+              ],
+              "ExposedHeaders": [
+                "ETag"
+              ],
+              "MaxAge": 300
+            }
+          ]
+        },
+        "LifecycleConfiguration": {
+          "Rules": [
+            {
+              "Id": "AbortIncompleteUploads",
+              "Status": "Enabled",
+              "AbortIncompleteMultipartUpload": {
+                "DaysAfterInitiation": 1
+              }
+            }
+          ]
+        },
+        "VersioningConfiguration": {
+          "Status": "Enabled"
+        }
+      },
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "Independent Game Studio Media resource.",
+          "must": [
+            "Scope to this tenant installation and preserve state; no cross-application resource imports."
+          ]
+        }
+      }
+    },
+    "MediaTLS": {
+      "Type": "AWS::S3::BucketPolicy",
+      "Properties": {
+        "Bucket": {
+          "Ref": "Media"
+        },
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Deny",
+              "Principal": "*",
+              "Action": "s3:*",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "Media",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Sub": "${Media.Arn}/*"
+                }
+              ],
+              "Condition": {
+                "Bool": {
+                  "aws:SecureTransport": "false"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "Independent Game Studio MediaTLS resource.",
+          "must": [
+            "Scope to this tenant installation and preserve state; no cross-application resource imports."
+          ]
+        }
+      }
+    },
+    "ApiRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "Policies": [
+          {
+            "PolicyName": "GameStudioRuntimeOnly",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "dynamodb:GetItem",
+                    "dynamodb:PutItem",
+                    "dynamodb:UpdateItem",
+                    "dynamodb:DeleteItem",
+                    "dynamodb:Scan",
+                    "dynamodb:ConditionCheckItem"
+                  ],
+                  "Resource": [
+                    {
+                      "Fn::GetAtt": [
+                        "CompatibilityPrivate",
+                        "Arn"
+                      ]
+                    },
+                    {
+                      "Fn::GetAtt": [
+                        "CompatibilityPublic",
+                        "Arn"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:GetObject",
+                    "s3:PutObject",
+                    "s3:DeleteObject"
+                  ],
+                  "Resource": {
+                    "Fn::Sub": "${Media.Arn}/*"
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": "s3:ListBucket",
+                  "Resource": {
+                    "Fn::GetAtt": [
+                      "Media",
+                      "Arn"
+                    ]
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": "ssm:GetParameter",
+                  "Resource": {
+                    "Fn::Sub": "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${CoreCredentialsParameter}"
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "logs:CreateLogStream",
+                    "logs:PutLogEvents"
+                  ],
+                  "Resource": {
+                    "Fn::Sub": "${ApiLogGroup.Arn}"
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": "kms:Decrypt",
+                  "Resource": {
+                    "Fn::Sub": "arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:key/*"
+                  },
+                  "Condition": {
+                    "StringEquals": {
+                      "kms:ViaService": {
+                        "Fn::Sub": "ssm.${AWS::Region}.amazonaws.com"
+                      },
+                      "kms:EncryptionContext:PARAMETER_ARN": {
+                        "Fn::Sub": "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${CoreCredentialsParameter}"
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "PolicyName": "AssistantStateOnly",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "dynamodb:GetItem",
+                    "dynamodb:PutItem"
+                  ],
+                  "Resource": {
+                    "Fn::GetAtt": [
+                      "AssistantState",
+                      "Arn"
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "PolicyName": "AdminConfiguredBedrockModels",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "bedrock:InvokeModel"
+                  ],
+                  "Resource": [
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:application-inference-profile/*"
+                    },
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/*"
+                    },
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/*"
+                    },
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:bedrock:us-east-2::foundation-model/*"
+                    },
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:bedrock:us-west-2::foundation-model/*"
+                    }
+                  ]
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "bedrock:GetInferenceProfile"
+                  ],
+                  "Resource": [
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:application-inference-profile/*"
+                    },
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/*"
+                    }
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "PolicyName": "AdminConfiguredMediaLabels",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "rekognition:DetectLabels",
+                    "rekognition:StartLabelDetection",
+                    "rekognition:GetLabelDetection"
+                  ],
+                  "Resource": "*",
+                  "Condition": {
+                    "StringEquals": {
+                      "aws:RequestedRegion": {
+                        "Ref": "AWS::Region"
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "PolicyName": "GameDraftsAndSnapshots",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "dynamodb:GetItem",
+                    "dynamodb:PutItem",
+                    "dynamodb:UpdateItem",
+                    "dynamodb:DeleteItem",
+                    "dynamodb:Scan",
+                    "dynamodb:ConditionCheckItem"
+                  ],
+                  "Resource": [
+                    {
+                      "Fn::GetAtt": [
+                        "GameDrafts",
+                        "Arn"
+                      ]
+                    },
+                    {
+                      "Fn::GetAtt": [
+                        "PublishedGames",
+                        "Arn"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "dynamodb:ConditionCheckItem"
+                  ],
+                  "Resource": {
+                    "Fn::GetAtt": [
+                      "AssistantState",
+                      "Arn"
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "Independent Game Studio runtime permissions; retain the established scoped game and assistant policies, separate from Core operator authority.",
+          "must": [
+            "Assistant persistence is limited to its separate state table.",
+            "Bedrock grants InvokeModel on regional foundation models, own-account regional profiles, and domestic US profile targets; profile metadata reads stay within own-account regional profiles.",
+            "Media recognition is limited to regional label detection; no IAM, subscription, training, face, project or model deployment permissions.",
+            "Game data operations are scoped to the two dedicated game tables; additional assistant-table authority is condition-check only for registry revocation guards.",
+            "No access to another application tables, bucket, SSM parameter or credentials.",
+            "No IAM, CloudFormation, Amplify, identity grant or deployment authority."
+          ],
+          "mutable": "change-with-constraints"
+        }
+      }
+    },
+    "ApiLogGroup": {
+      "Type": "AWS::Logs::LogGroup",
+      "Properties": {
+        "LogGroupName": {
+          "Fn::Sub": "/aws/lambda/${AWS::StackName}-api"
+        },
+        "RetentionInDays": 7
+      },
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "Independent Game Studio ApiLogGroup resource.",
+          "must": [
+            "Scope to this tenant installation and preserve state; no cross-application resource imports."
+          ]
+        }
+      }
+    },
+    "ApiFunction": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "FunctionName": {
+          "Fn::Sub": "${AWS::StackName}-api"
+        },
+        "Runtime": "python3.12",
+        "Architectures": [
+          "arm64"
+        ],
+        "Handler": "handler.handler",
+        "MemorySize": 256,
+        "Timeout": 30,
+        "ReservedConcurrentExecutions": {
+          "Fn::If": [
+            "ReserveConcurrency",
+            {
+              "Ref": "LambdaReservedConcurrency"
+            },
+            {
+              "Ref": "AWS::NoValue"
+            }
+          ]
+        },
+        "Role": {
+          "Fn::GetAtt": [
+            "ApiRole",
+            "Arn"
+          ]
+        },
+        "Code": {
+          "S3Bucket": {
+            "Ref": "LambdaCodeBucket"
+          },
+          "S3Key": {
+            "Ref": "LambdaCodeKey"
+          }
+        },
+        "Environment": {
+          "Variables": {
+            "PRIVATE_TABLE": {
+              "Ref": "CompatibilityPrivate"
+            },
+            "PUBLIC_TABLE": {
+              "Ref": "CompatibilityPublic"
+            },
+            "MEDIA_BUCKET": {
+              "Ref": "Media"
+            },
+            "CORE_ISSUER": {
+              "Ref": "CoreIssuer"
+            },
+            "CORE_ORGANIZATION_ID": {
+              "Ref": "CoreOrganizationId"
+            },
+            "CORE_SERVICE_ID": {
+              "Ref": "CoreServiceId"
+            },
+            "CORE_CREDENTIALS_PARAMETER": {
+              "Ref": "CoreCredentialsParameter"
+            },
+            "ASSISTANT_TABLE": {
+              "Ref": "AssistantState"
+            },
+            "GAME_DRAFT_TABLE": {
+              "Ref": "GameDrafts"
+            },
+            "GAME_PUBLIC_TABLE": {
+              "Ref": "PublishedGames"
+            },
+            "GAME_STUDIO_CONFIG_JSON": {
+              "Ref": "GameStudioConfigJson"
+            }
+          }
+        }
+      },
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "Independent per-tenant API with exact registered Core audience and dedicated data; declarative games execute only in browser isolation.",
+          "must": [
+            "Require this installation Core issuer, organization, service and private resource-client parameter; browser host hints never confer authority.",
+            "Default assistant configuration prohibits paid execution until an administrator saves permission.",
+            "No provider operation starts during configuration or outlives its request without a persisted checkpoint.",
+            "Creation settings and draft revisions are checked atomically before game creation, editing or publication; an off switch leaves published games playable."
+          ],
+          "mutable": "change-with-constraints"
+        }
+      }
+    },
+    "HttpApi": {
+      "Type": "AWS::ApiGatewayV2::Api",
+      "Properties": {
+        "Name": {
+          "Fn::Sub": "${AWS::StackName}-api"
+        },
+        "ProtocolType": "HTTP",
+        "CorsConfiguration": {
+          "AllowOrigins": {
+            "Ref": "AllowedOrigins"
+          },
+          "AllowHeaders": [
+            "authorization",
+            "content-type"
+          ],
+          "AllowMethods": [
+            "GET",
+            "POST",
+            "PUT",
+            "DELETE",
+            "OPTIONS"
+          ],
+          "MaxAge": 300
+        }
+      },
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "Independent Game Studio HttpApi resource.",
+          "must": [
+            "Scope to this tenant installation and preserve state; no cross-application resource imports."
+          ]
+        }
+      }
+    },
+    "ApiIntegration": {
+      "Type": "AWS::ApiGatewayV2::Integration",
+      "Properties": {
+        "ApiId": {
+          "Ref": "HttpApi"
+        },
+        "IntegrationType": "AWS_PROXY",
+        "IntegrationUri": {
+          "Fn::GetAtt": [
+            "ApiFunction",
+            "Arn"
+          ]
+        },
+        "PayloadFormatVersion": "2.0",
+        "TimeoutInMillis": 30000
+      },
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "Independent Game Studio ApiIntegration resource.",
+          "must": [
+            "Scope to this tenant installation and preserve state; no cross-application resource imports."
+          ]
+        }
+      }
+    },
+    "ApiRoute": {
+      "Type": "AWS::ApiGatewayV2::Route",
+      "Properties": {
+        "ApiId": {
+          "Ref": "HttpApi"
+        },
+        "RouteKey": "$default",
+        "Target": {
+          "Fn::Sub": "integrations/${ApiIntegration}"
+        }
+      },
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "Independent Game Studio ApiRoute resource.",
+          "must": [
+            "Scope to this tenant installation and preserve state; no cross-application resource imports."
+          ]
+        }
+      }
+    },
+    "ApiStage": {
+      "Type": "AWS::ApiGatewayV2::Stage",
+      "Properties": {
+        "ApiId": {
+          "Ref": "HttpApi"
+        },
+        "StageName": "$default",
+        "AutoDeploy": true,
+        "DefaultRouteSettings": {
+          "ThrottlingBurstLimit": 10,
+          "ThrottlingRateLimit": 5
+        }
+      },
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "Independent Game Studio ApiStage resource.",
+          "must": [
+            "Scope to this tenant installation and preserve state; no cross-application resource imports."
+          ]
+        }
+      }
+    },
+    "ApiPermission": {
+      "Type": "AWS::Lambda::Permission",
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Ref": "ApiFunction"
+        },
+        "Principal": "apigateway.amazonaws.com",
+        "SourceArn": {
+          "Fn::Sub": "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*/*"
+        },
+        "SourceAccount": {
+          "Ref": "AWS::AccountId"
+        }
+      },
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "Independent Game Studio ApiPermission resource.",
+          "must": [
+            "Scope to this tenant installation and preserve state; no cross-application resource imports."
+          ]
+        }
+      }
+    },
+    "AssistantState": {
+      "Type": "AWS::DynamoDB::Table",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "Separate private assistant configuration and owner-bound sessions from content/public projections.",
+          "must": [
+            "Never expose through public posts scans or public media.",
+            "Retain state on stack deletion or replacement."
+          ],
+          "mutable": "change-with-constraints"
+        }
+      },
+      "Properties": {
+        "BillingMode": "PAY_PER_REQUEST",
+        "AttributeDefinitions": [
+          {
+            "AttributeName": "id",
+            "AttributeType": "S"
+          }
+        ],
+        "KeySchema": [
+          {
+            "AttributeName": "id",
+            "KeyType": "HASH"
+          }
+        ],
+        "PointInTimeRecoverySpecification": {
+          "PointInTimeRecoveryEnabled": false
+        },
+        "SSESpecification": {
+          "SSEEnabled": true
+        }
+      }
+    },
+    "GameDrafts": {
+      "Type": "AWS::DynamoDB::Table",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "Private game definitions, owner-bound conversations, playtest receipts and versioned creation settings.",
+          "must": [
+            "Retain state on stack deletion or replacement.",
+            "Do not add anonymous table or browser credential access; all reads pass through the API."
+          ],
+          "mutable": "change-with-constraints"
+        }
+      },
+      "Properties": {
+        "BillingMode": "PAY_PER_REQUEST",
+        "AttributeDefinitions": [
+          {
+            "AttributeName": "id",
+            "AttributeType": "S"
+          }
+        ],
+        "KeySchema": [
+          {
+            "AttributeName": "id",
+            "KeyType": "HASH"
+          }
+        ],
+        "PointInTimeRecoverySpecification": {
+          "PointInTimeRecoveryEnabled": false
+        },
+        "SSESpecification": {
+          "SSEEnabled": true
+        }
+      }
+    },
+    "PublishedGames": {
+      "Type": "AWS::DynamoDB::Table",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "Published game definitions and bounded arcade boards. The API exposes allowlisted game fields and score nicknames, points and dates; player keys and submission receipts stay private.",
+          "must": [
+            "Retain state on stack deletion or replacement.",
+            "Do not add anonymous table or browser credential access; all reads pass through the API."
+          ],
+          "mutable": "change-with-constraints"
+        }
+      },
+      "Properties": {
+        "BillingMode": "PAY_PER_REQUEST",
+        "AttributeDefinitions": [
+          {
+            "AttributeName": "id",
+            "AttributeType": "S"
+          }
+        ],
+        "KeySchema": [
+          {
+            "AttributeName": "id",
+            "KeyType": "HASH"
+          }
+        ],
+        "PointInTimeRecoverySpecification": {
+          "PointInTimeRecoveryEnabled": false
+        },
+        "SSESpecification": {
+          "SSEEnabled": true
+        }
+      }
+    }
+  },
+  "Outputs": {
+    "ApiUrl": {
+      "Value": {
+        "Fn::GetAtt": [
+          "HttpApi",
+          "ApiEndpoint"
+        ]
+      },
+      "Description": "Game Studio ApiUrl; scoped to this installation."
+    },
+    "MediaBucket": {
+      "Value": {
+        "Ref": "Media"
+      },
+      "Description": "Game Studio MediaBucket; scoped to this installation."
+    },
+    "PrivateTable": {
+      "Value": {
+        "Ref": "CompatibilityPrivate"
+      },
+      "Description": "Game Studio PrivateTable; scoped to this installation."
+    },
+    "PublishedTable": {
+      "Value": {
+        "Ref": "CompatibilityPublic"
+      },
+      "Description": "Game Studio PublishedTable; scoped to this installation."
+    },
+    "FunctionName": {
+      "Value": {
+        "Ref": "ApiFunction"
+      },
+      "Description": "Game Studio FunctionName; scoped to this installation."
+    },
+    "AssistantTable": {
+      "Value": {
+        "Ref": "AssistantState"
+      },
+      "Description": "Game Studio AssistantTable; scoped to this installation."
+    },
+    "GameDraftTable": {
+      "Value": {
+        "Ref": "GameDrafts"
+      },
+      "Description": "Game Studio GameDraftTable; scoped to this installation."
+    },
+    "PublishedGameTable": {
+      "Value": {
+        "Ref": "PublishedGames"
+      },
+      "Description": "Game Studio PublishedGameTable; scoped to this installation."
+    }
+  },
+  "Conditions": {
+    "ReserveConcurrency": {
+      "Fn::Not": [
+        {
+          "Fn::Equals": [
+            {
+              "Ref": "LambdaReservedConcurrency"
+            },
+            0
+          ]
+        }
+      ]
+    }
+  },
+  "Metadata": {
+    "AWSToolsMetrics": {
+      "AWSAgentToolkit": "aws-cloudformation@3"
+    },
+    "com.aws.cloudformation.Context": {
+      "arch": "Amplify frontend -> independent Core-authorized HTTP API/Lambda -> retained private/public game, assistant and compatibility tables; public declarative game snapshots run in sandboxed browser iframes.",
+      "must": [
+        "This template is for a NEW independent Game Studio stack, never an Axolotl stack update.",
+        "Each Core tenant/environment has separate registration, resources, credentials, configuration and data.",
+        "Only saved administrator model policy and current role access authorize provider operations.",
+        "Private conversations and playtests never enter public snapshots; games remain playable when creation is disabled.",
+        "Only configured exact host origins may frame public embed routes. Tenant, actor and roles never come from query strings."
+      ],
+      "ref": [
+        {
+          "at": "nce/README.md",
+          "has": "Core installation and role contract",
+          "scope": "identity"
+        },
+        {
+          "at": "deployment/README.md",
+          "has": "no-cost preparation, separate frontend/API stack release and verification",
+          "scope": "deployment"
+        }
+      ]
+    }
+  }
+}

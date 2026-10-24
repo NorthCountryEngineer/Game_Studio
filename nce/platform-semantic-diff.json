@@ -1,0 +1,9 @@
+[
+  "/Conditions/HasGameStudioModels",
+  "/Description",
+  "/Parameters/GameStudioModelArns",
+  "/Resources/AppBoundary/Metadata/com.aws.cloudformation.Context/must/3",
+  "/Resources/AppBoundary/Metadata/com.aws.cloudformation.Context/why",
+  "/Resources/AppBoundary/Properties/PolicyDocument/Statement/1/Action/7",
+  "/Resources/AppBoundary/Properties/PolicyDocument/Statement/11"
+]

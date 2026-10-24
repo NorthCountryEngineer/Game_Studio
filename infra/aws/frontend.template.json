@@ -1,0 +1,197 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Independent retained manual Amplify frontend for one Game Studio tenant/environment. No repository token, autobuild, domain mutation or paid model is configured.",
+  "Parameters": {
+    "ApplicationName": {
+      "Type": "String",
+      "AllowedPattern": "^[A-Za-z][A-Za-z0-9-]{2,60}$"
+    },
+    "BranchName": {
+      "Type": "String",
+      "Default": "production",
+      "AllowedPattern": "^[a-z][a-z0-9-]{0,30}$"
+    }
+  },
+  "Resources": {
+    "Frontend": {
+      "Type": "AWS::Amplify::App",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "Name": {
+          "Ref": "ApplicationName"
+        },
+        "Platform": "WEB",
+        "EnableBranchAutoDeletion": false,
+        "CustomRules": [
+          {
+            "Source": "/<*>",
+            "Target": "/index.html",
+            "Status": "404-200"
+          }
+        ],
+        "CustomHeaders": "customHeaders:\n  - pattern: \"**\"\n    headers:\n      - key: \"Strict-Transport-Security\"\n        value: \"max-age=31536000\"\n      - key: \"X-Content-Type-Options\"\n        value: \"nosniff\"\n      - key: \"Referrer-Policy\"\n        value: \"no-referrer\"\n      - key: \"Permissions-Policy\"\n        value: \"camera=(), microphone=(), geolocation=(), payment=()\"\n  - pattern: \"/\"\n    headers:\n      - key: \"X-Frame-Options\"\n        value: \"DENY\"\n      - key: \"Content-Security-Policy\"\n        value: \"frame-ancestors 'none'; object-src 'none'; base-uri 'self'\"\n      - key: \"Cache-Control\"\n        value: \"no-store\"\n  - pattern: \"/index.html\"\n    headers:\n      - key: \"X-Frame-Options\"\n        value: \"DENY\"\n      - key: \"Content-Security-Policy\"\n        value: \"frame-ancestors 'none'; object-src 'none'; base-uri 'self'\"\n      - key: \"Cache-Control\"\n        value: \"no-store\"\n  - pattern: \"/games\"\n    headers:\n      - key: \"X-Frame-Options\"\n        value: \"DENY\"\n      - key: \"Content-Security-Policy\"\n        value: \"frame-ancestors 'none'; object-src 'none'; base-uri 'self'\"\n      - key: \"Cache-Control\"\n        value: \"no-store\"\n  - pattern: \"/games/**\"\n    headers:\n      - key: \"X-Frame-Options\"\n        value: \"DENY\"\n      - key: \"Content-Security-Policy\"\n        value: \"frame-ancestors 'none'; object-src 'none'; base-uri 'self'\"\n      - key: \"Cache-Control\"\n        value: \"no-store\"\n  - pattern: \"/game-studio\"\n    headers:\n      - key: \"X-Frame-Options\"\n        value: \"DENY\"\n      - key: \"Content-Security-Policy\"\n        value: \"frame-ancestors 'none'; object-src 'none'; base-uri 'self'\"\n      - key: \"Cache-Control\"\n        value: \"no-store\"\n  - pattern: \"/game-studio/**\"\n    headers:\n      - key: \"X-Frame-Options\"\n        value: \"DENY\"\n      - key: \"Content-Security-Policy\"\n        value: \"frame-ancestors 'none'; object-src 'none'; base-uri 'self'\"\n      - key: \"Cache-Control\"\n        value: \"no-store\"\n  - pattern: \"/studio\"\n    headers:\n      - key: \"X-Frame-Options\"\n        value: \"DENY\"\n      - key: \"Content-Security-Policy\"\n        value: \"frame-ancestors 'none'; object-src 'none'; base-uri 'self'\"\n      - key: \"Cache-Control\"\n        value: \"no-store\"\n  - pattern: \"/studio/**\"\n    headers:\n      - key: \"X-Frame-Options\"\n        value: \"DENY\"\n      - key: \"Content-Security-Policy\"\n        value: \"frame-ancestors 'none'; object-src 'none'; base-uri 'self'\"\n      - key: \"Cache-Control\"\n        value: \"no-store\"\n  - pattern: \"/oauth/**\"\n    headers:\n      - key: \"X-Frame-Options\"\n        value: \"DENY\"\n      - key: \"Content-Security-Policy\"\n        value: \"frame-ancestors 'none'; object-src 'none'; base-uri 'self'\"\n      - key: \"Cache-Control\"\n        value: \"no-store\"\n  - pattern: \"/settings\"\n    headers:\n      - key: \"X-Frame-Options\"\n        value: \"DENY\"\n      - key: \"Content-Security-Policy\"\n        value: \"frame-ancestors 'none'; object-src 'none'; base-uri 'self'\"\n      - key: \"Cache-Control\"\n        value: \"no-store\"\n  - pattern: \"/settings/**\"\n    headers:\n      - key: \"X-Frame-Options\"\n        value: \"DENY\"\n      - key: \"Content-Security-Policy\"\n        value: \"frame-ancestors 'none'; object-src 'none'; base-uri 'self'\"\n      - key: \"Cache-Control\"\n        value: \"no-store\"\n  - pattern: \"/accounts\"\n    headers:\n      - key: \"X-Frame-Options\"\n        value: \"DENY\"\n      - key: \"Content-Security-Policy\"\n        value: \"frame-ancestors 'none'; object-src 'none'; base-uri 'self'\"\n      - key: \"Cache-Control\"\n        value: \"no-store\"\n  - pattern: \"/accounts/**\"\n    headers:\n      - key: \"X-Frame-Options\"\n        value: \"DENY\"\n      - key: \"Content-Security-Policy\"\n        value: \"frame-ancestors 'none'; object-src 'none'; base-uri 'self'\"\n      - key: \"Cache-Control\"\n        value: \"no-store\"\n  - pattern: \"/agents\"\n    headers:\n      - key: \"X-Frame-Options\"\n        value: \"DENY\"\n      - key: \"Content-Security-Policy\"\n        value: \"frame-ancestors 'none'; object-src 'none'; base-uri 'self'\"\n      - key: \"Cache-Control\"\n        value: \"no-store\"\n  - pattern: \"/agents/**\"\n    headers:\n      - key: \"X-Frame-Options\"\n        value: \"DENY\"\n      - key: \"Content-Security-Policy\"\n        value: \"frame-ancestors 'none'; object-src 'none'; base-uri 'self'\"\n      - key: \"Cache-Control\"\n        value: \"no-store\"\n  - pattern: \"/feedback\"\n    headers:\n      - key: \"X-Frame-Options\"\n        value: \"DENY\"\n      - key: \"Content-Security-Policy\"\n        value: \"frame-ancestors 'none'; object-src 'none'; base-uri 'self'\"\n      - key: \"Cache-Control\"\n        value: \"no-store\"\n  - pattern: \"/feedback/**\"\n    headers:\n      - key: \"X-Frame-Options\"\n        value: \"DENY\"\n      - key: \"Content-Security-Policy\"\n        value: \"frame-ancestors 'none'; object-src 'none'; base-uri 'self'\"\n      - key: \"Cache-Control\"\n        value: \"no-store\"\n  - pattern: \"/sdk/**\"\n    headers:\n      - key: \"Access-Control-Allow-Origin\"\n        value: \"*\"\n      - key: \"Cross-Origin-Resource-Policy\"\n        value: \"cross-origin\"\n  - pattern: \"/embed/games/**\"\n    headers:\n      - key: \"Content-Security-Policy\"\n        value: \"frame-ancestors 'none'; object-src 'none'; base-uri 'self'\"\n      - key: \"Cache-Control\"\n        value: \"no-store\"\n"
+      },
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "Manual artifact hosting with independent tenant origin and no source credentials.",
+          "must": [
+            "Autobuild and preview creation stay disabled; publish only reviewed source.",
+            "Initial embed ancestor list is empty; release artifacts contain generated exact-host headers.",
+            "Keep creator, OAuth and settings paths non-frameable."
+          ]
+        }
+      }
+    },
+    "FrontendBranch": {
+      "Type": "AWS::Amplify::Branch",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "AppId": {
+          "Fn::GetAtt": [
+            "Frontend",
+            "AppId"
+          ]
+        },
+        "BranchName": {
+          "Ref": "BranchName"
+        },
+        "EnableAutoBuild": false,
+        "EnablePullRequestPreview": false,
+        "Stage": "PRODUCTION"
+      },
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "Stable manual release branch whose origin is registered once in Core.",
+          "must": [
+            "Do not delete or rename an origin already registered in Core.",
+            "No automatic build or pull-request preview deployment."
+          ]
+        }
+      }
+    },
+    "Artifacts": {
+      "Type": "AWS::S3::Bucket",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "PublicAccessBlockConfiguration": {
+          "BlockPublicAcls": true,
+          "IgnorePublicAcls": true,
+          "BlockPublicPolicy": true,
+          "RestrictPublicBuckets": true
+        },
+        "BucketEncryption": {
+          "ServerSideEncryptionConfiguration": [
+            {
+              "ServerSideEncryptionByDefault": {
+                "SSEAlgorithm": "AES256"
+              }
+            }
+          ]
+        },
+        "VersioningConfiguration": {
+          "Status": "Enabled"
+        },
+        "LifecycleConfiguration": {
+          "Rules": [
+            {
+              "Id": "AbortIncompleteUploads",
+              "Status": "Enabled",
+              "AbortIncompleteMultipartUpload": {
+                "DaysAfterInitiation": 1
+              }
+            }
+          ]
+        }
+      },
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "Private immutable source archives for this installation releases only.",
+          "must": [
+            "Do not reuse another application artifact bucket or store runtime client secrets.",
+            "Encrypt, block public access, require TLS, retain artifacts for explicit rollback."
+          ]
+        }
+      }
+    },
+    "ArtifactPolicy": {
+      "Type": "AWS::S3::BucketPolicy",
+      "Properties": {
+        "Bucket": {
+          "Ref": "Artifacts"
+        },
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "DenyUnencryptedTransport",
+              "Effect": "Deny",
+              "Principal": "*",
+              "Action": "s3:*",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "Artifacts",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Sub": "${Artifacts.Arn}/*"
+                }
+              ],
+              "Condition": {
+                "Bool": {
+                  "aws:SecureTransport": "false"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "TLS-only access to the private release bucket.",
+          "must": [
+            "This deny does not create anonymous read access."
+          ]
+        }
+      }
+    }
+  },
+  "Outputs": {
+    "AmplifyAppId": {
+      "Description": "Independent manual Amplify app ID.",
+      "Value": {
+        "Fn::GetAtt": [
+          "Frontend",
+          "AppId"
+        ]
+      }
+    },
+    "BranchName": {
+      "Description": "Release branch.",
+      "Value": {
+        "Ref": "BranchName"
+      }
+    },
+    "Origin": {
+      "Description": "Exact generated origin to register in Core before API release.",
+      "Value": {
+        "Fn::Sub": "https://${BranchName}.${Frontend.DefaultDomain}"
+      }
+    },
+    "ArtifactBucket": {
+      "Description": "Dedicated private code artifact bucket for the API release.",
+      "Value": {
+        "Ref": "Artifacts"
+      }
+    }
+  },
+  "Metadata": {
+    "AWSToolsMetrics": {
+      "AWSAgentToolkit": "aws-cloudformation@3"
+    }
+  }
+}

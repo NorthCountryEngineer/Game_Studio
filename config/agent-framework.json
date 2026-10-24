@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "revision": 0,
+  "enabled": true,
+  "allowPaidExecution": false,
+  "limits": {"maxTurns": 24, "maxSteps": 24, "maxInputChars": 6000, "maxModelCalls": 8},
+  "models": [
+    {"id": "local-coach", "name": "Local media coach", "kind": "local", "provider": "local", "target": "media-coach-v1", "enabled": true, "maxOutputTokens": 512},
+    {"id": "bedrock-writer", "name": "Amazon Bedrock writer", "kind": "generative", "provider": "bedrock", "target": "", "enabled": false, "maxOutputTokens": 1024},
+    {"id": "image-labels", "name": "Rekognition image labels", "kind": "ml", "provider": "rekognition", "target": "detect-labels", "enabled": true, "maxOutputTokens": 512},
+    {"id": "video-labels", "name": "Rekognition video labels", "kind": "ml", "provider": "rekognition", "target": "video-labels", "enabled": true, "maxOutputTokens": 512}
+  ],
+  "agents": [
+    {"id": "media-coach", "name": "Media coach", "description": "Plan a story and review selected media captions.", "instructions": "Help a young editor describe their own media. Ask what is visible instead of pretending to see pixels. Keep suggestions concise and age appropriate. Never publish or change a post.", "modelId": "local-coach", "enabled": true},
+    {"id": "image-analyst", "name": "Image analyst", "description": "Machine generated subject labels for one selected image.", "instructions": "Treat image labels as uncertain observations, not verified facts.", "modelId": "image-labels", "enabled": true},
+    {"id": "video-analyst", "name": "Video analyst", "description": "An asynchronous label analysis of one selected MP4.", "instructions": "Treat video labels as uncertain observations. A person reviews all captions.", "modelId": "video-labels", "enabled": true}
+  ],
+  "workflows": [
+    {"id": "media-review", "name": "Media and caption review", "description": "Inventory selected media, discuss captions, and prepare a reviewed suggestion without paid inference.", "enabled": true, "graph": {"version": 1, "inputs": [], "nodes": [
+      {"id": "inventory", "skill": "media.inventory", "name": "Review media details", "depends_on": [], "inputs": {"media": {"$context": "media"}}, "agent_id": "media-coach"},
+      {"id": "coach", "skill": "agent.respond", "name": "Discuss the story", "depends_on": ["inventory"], "inputs": {"media": {"$node": "inventory"}, "message": {"$context": "message"}}, "agent_id": "media-coach"},
+      {"id": "review", "skill": "review.draft", "name": "Prepare suggestions for review", "depends_on": ["coach"], "inputs": {"response": {"$node": "coach"}, "media": {"$node": "inventory"}}, "agent_id": "media-coach"}
+    ], "outputs": [{"name": "suggestion", "node_id": "review"}]}},
+    {"id": "image-analysis", "name": "Analyze an image", "description": "Review one selected JPEG or PNG using optional paid machine learning, then prepare captions for human review.", "enabled": true, "graph": {"version": 1, "inputs": [], "nodes": [
+      {"id": "inventory", "skill": "media.inventory", "name": "Review image details", "depends_on": [], "inputs": {"media": {"$context": "media"}}, "agent_id": "media-coach"},
+      {"id": "labels", "skill": "ml.image_labels", "name": "Analyze selected image", "depends_on": ["inventory"], "inputs": {"media": {"$context": "media"}}, "agent_id": "image-analyst"},
+      {"id": "review", "skill": "review.draft", "name": "Review machine observations", "depends_on": ["labels"], "inputs": {"labels": {"$node": "labels"}}, "agent_id": "media-coach"}
+    ], "outputs": [{"name": "suggestion", "node_id": "review"}]}},
+    {"id": "video-analysis", "name": "Analyze a video", "description": "Start one selected MP4 analysis and check its progress explicitly. Every action performs at most one provider operation.", "enabled": true, "graph": {"version": 1, "inputs": [], "nodes": [
+      {"id": "inventory", "skill": "media.inventory", "name": "Review video details", "depends_on": [], "inputs": {"media": {"$context": "media"}}, "agent_id": "media-coach"},
+      {"id": "labels", "skill": "ml.video_labels", "name": "Analyze selected video", "depends_on": ["inventory"], "inputs": {"media": {"$context": "media"}}, "agent_id": "video-analyst"},
+      {"id": "review", "skill": "review.draft", "name": "Review machine observations", "depends_on": ["labels"], "inputs": {"labels": {"$node": "labels"}}, "agent_id": "media-coach"}
+    ], "outputs": [{"name": "suggestion", "node_id": "review"}]}}
+  ],
+  "modes": [
+    {"id": "media-coach", "name": "Media coach", "description": "Discuss your pictures, video, and captions. Local mode does not inspect pixels.", "welcome": "Tell me what is happening in your media. I can help plan a story and review captions. Select only the files you want to discuss.", "agentId": "media-coach", "workflowId": "media-review", "enabled": true, "audience": {"allEditors": true, "userIds": []}},
+    {"id": "image-analysis", "name": "Image analysis", "description": "Optional paid image subject detection. Authorized in administrator settings.", "welcome": "Select one JPEG or PNG. Machine observations are suggestions that you should check before using.", "agentId": "media-coach", "workflowId": "image-analysis", "enabled": true, "audience": {"allEditors": true, "userIds": []}},
+    {"id": "video-analysis", "name": "Video analysis", "description": "Optional paid MP4 analysis with progress checkpoints.", "welcome": "Select one MP4. You control when analysis starts and when to check its progress; no background polling runs.", "agentId": "media-coach", "workflowId": "video-analysis", "enabled": true, "audience": {"allEditors": true, "userIds": []}}
+  ]
+}

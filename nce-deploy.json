@@ -1,0 +1,6 @@
+{
+  "schema": 1,
+  "archetype": "amplify-game-studio",
+  "frontend": {"directory": ".", "output": "dist"},
+  "backend": {"directory": "backend/nce_api", "handler": "handler.handler"}
+}
