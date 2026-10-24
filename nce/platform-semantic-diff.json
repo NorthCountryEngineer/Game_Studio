@@ -5,5 +5,11 @@
   "/Resources/AppBoundary/Metadata/com.aws.cloudformation.Context/must/3",
   "/Resources/AppBoundary/Metadata/com.aws.cloudformation.Context/why",
   "/Resources/AppBoundary/Properties/PolicyDocument/Statement/1/Action/7",
-  "/Resources/AppBoundary/Properties/PolicyDocument/Statement/11"
+  "/Resources/AppBoundary/Properties/PolicyDocument/Statement/11",
+  "/Resources/CloudFormationRole/Metadata/com.aws.cloudformation.Context/must/0",
+  "/Resources/CloudFormationRole/Metadata/com.aws.cloudformation.Context/must/1",
+  "/Resources/CloudFormationRole/Metadata/com.aws.cloudformation.Context/why",
+  "/Resources/CloudFormationRole/Properties/Policies/0/PolicyDocument/Statement/14",
+  "/Resources/CloudFormationRole/Properties/Policies/0/PolicyDocument/Statement/15",
+  "/Resources/CloudFormationRole/Properties/Policies/0/PolicyDocument/Statement/17"
 ]

@@ -1,14 +1,20 @@
 # Validation and release boundary
 
-The standalone application passes 136 TypeScript tests, 174 Python backend tests and seven deployment guard tests. Typechecking, preview/production builds, deterministic Lambda packaging, registry parity and infrastructure structure/security invariants pass. A fresh offline npm installation also succeeded in an isolated temporary directory.
+The standalone application passes 136 TypeScript tests, 174 Python backend tests and 15 deployment guard tests. Typechecking, preview/production builds, deterministic Lambda packaging, registry parity and infrastructure structure/security invariants pass. A fresh offline npm installation also succeeded in an isolated temporary directory.
 
-The companion Core recipe passes 132 offline tests, system checks, migration drift checks and its onboarding security invariants. Its corrected production-source baseline is c27e6a03, verified against all 459 included files of the existing Core image. The proposed recipe source is 52d8ad1; its exact-commit CI is still pending. The Core PR is https://github.com/NorthCountryEngineer/NCE_Core/pull/6.
+The following are recorded local checks for the historical companion recipe snapshot. The companion Core recipe passes 132 offline tests, system checks, migration drift checks and its onboarding security invariants. Its corrected production-source baseline is c27e6a03, verified against all 459 included files of the existing Core image. The historical recipe source is `52d8ad1`; its original Core PR is https://github.com/NorthCountryEngineer/NCE_Core/pull/6.
+
+The packaged platform template now has one explicit per-file override from reviewed Core `588d02b5eb4a6a91b0422f28463ebb1bac514194` ([PR #9](https://github.com/NorthCountryEngineer/NCE_Core/pull/9), including [PR #8](https://github.com/NorthCountryEngineer/NCE_Core/pull/8) and [PR #7](https://github.com/NorthCountryEngineer/NCE_Core/pull/7)). It supplies scoped HTTP API tagging, exact integration/route/stage collection creation and the current Stage provider schema's literal `apigateway:TagResource` permission. That stage grant requires existing and requested platform tags plus the region, without `PUT`, `UntagResource` or missing-tag fallback. No other recipe source or newer transient CI policy is imported. The full bundle hash, template provenance and IAM scope are checked offline; applying the patch and matching every post-patch manifest hash is separately verified against its stated `c27e6a03` base. These checks do not establish live provider acceptance or current managed Core release state.
+
+A separately authorized platform canary using that exact template has now passed creation, reads and deletion of an HTTP API, integration, route and stage under Core's actual CloudFormation role. All four resources were confirmed absent afterward. This establishes the bounded provider permission path; it does not establish a completed Game Studio installation, sign-in or gameplay acceptance.
 
 Browser checks covered local draft creation, a completed private playtest, publication, custom branding, the creation switch, a named local score and a second-origin embedded player ready event. The public game remained playable while creation was paused. The creator's public game/edition handoff returned to the configured host. Nested-frame input could not be completed through the browser automation tool; completion-event isolation is covered by synthetic SDK tests, not a claimed full embedded-round acceptance.
 
 GitHub verification workflow 40098905211 passed the application checks and both build modes at source 6d94a22. Later documentation-only commits must receive their own exact-source push CI before Core admits a deployment.
 
-## Authorized rollout checkpoint — October 24, 2026
+## Earlier rollout checkpoint — October 24, 2026
+
+The following records an earlier recovery checkpoint, before the later platform permission canary above. It is historical evidence rather than the current managed Core or Game Studio release state.
 
 The owner authorized the AWS/Core rollout. The platform now includes the new repository and main branch, scoped DynamoDB ConditionCheckItem permission, and an empty model-ARN parameter. Existing repositories, branch permissions and resources were retained. Its runner pins were restored to their prior values while the application release is pending, matching the existing Core platform configuration.
 

@@ -60,7 +60,11 @@ NCAcademy students and parents currently have platform-local identities rather t
 
 ## Reviewed source and console setup
 
-The companion patch is [core-onboarding.patch](core-onboarding.patch), with the exact production-source baseline and validation in [core-patch-baseline.json](core-patch-baseline.json). It applies to Core `c27e6a03ff47adf4acc8e670ec2f240127744172`; do not apply it blindly to another revision or a dirty checkout. The patch includes the new console choice, trusted runner/template, exact repository CI admission, app identity and role registration, scoped storage permissions, optional exact-ARN model admission and regression tests. It makes no live changes by itself.
+The companion patch is [core-onboarding.patch](core-onboarding.patch), with the exact production-source baseline and validation in [core-patch-baseline.json](core-patch-baseline.json).
+
+It is a historical `52d8ad1` recipe snapshot with one explicitly recorded platform-template override from Core `588d02b5eb4a6a91b0422f28463ebb1bac514194` ([Core PR #9](https://github.com/NorthCountryEngineer/NCE_Core/pull/9), including [PR #8](https://github.com/NorthCountryEngineer/NCE_Core/pull/8) and [PR #7](https://github.com/NorthCountryEngineer/NCE_Core/pull/7)). That override supplies scoped HTTP API tagging POST, exact integration/route/stage collection POST and the Stage provider's literal `apigateway:TagResource` action. The stage-tagging grant requires existing and requested platform tags plus the region; it adds no `PUT`, `UntagResource` or missing-tag fallback. The complete template bytes and entire patch are hash-checked. All other recipe file hashes remain the historical snapshot, so this is not a complete checkout of the newer Core commit and does not import its later CI policies. Existing managed Core installations must use their current Core release and reviewed platform-template update; do not reapply this old patch to a modern installation.
+
+The historical patch applies to Core `c27e6a03ff47adf4acc8e670ec2f240127744172`; do not apply it blindly to another revision or a dirty checkout. The patch includes the new console choice, trusted runner/template, exact repository CI admission, app identity and role registration, scoped storage permissions, optional exact-ARN model admission and regression tests. It makes no live changes by itself.
 
 After the Core maintainer has reviewed, released and pinned that source:
 

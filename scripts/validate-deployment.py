@@ -6,6 +6,8 @@ pre-deployment validation. It makes no AWS or network requests.
 import json
 from pathlib import Path
 
+from core_bundle import validate_bundle
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -60,6 +62,7 @@ def main():
     assert permissions == {'games-play', 'games-create', 'games-publish', 'games-manage', 'agents-manage', 'accounts-manage'}
     assert package['slug'] == 'game-studio'
     assert package['manifest']['external_runtime'] == 'aws-amplify'
+    validate_bundle(ROOT)
     print('Offline structure/security invariants passed. Formal cfn-lint/cfn-guard and account-aware checks are separate and have not run.')
 
 
