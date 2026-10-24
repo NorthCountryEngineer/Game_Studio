@@ -4,6 +4,7 @@ Hosts are configured only in deployment configuration. A public request never
 chooses its tenant, Core service, credentials, CORS policy, or iframe authority.
 """
 from copy import deepcopy
+from decimal import Decimal
 import json
 import os
 import re
@@ -94,7 +95,12 @@ def stored_configuration(api):
     item = table(api).get_item(Key={'id': scoped_key()}, ConsistentRead=True).get('Item')
     if item:
         require(item.get('organization_id') == os.environ['CORE_ORGANIZATION_ID'] and item.get('service_id') == os.environ['CORE_SERVICE_ID'])
-        require(type(item.get('revision')) is int and 1 <= item['revision'] <= 1000000000)
+        revision = item.get('revision')
+        require(type(revision) is int or isinstance(revision, Decimal))
+        require(not isinstance(revision, Decimal) or revision.is_finite())
+        require(1 <= revision <= 1000000000)
+        require(not isinstance(revision, Decimal) or revision == revision.to_integral_value())
+        item = {**item, 'revision': int(revision)}
         require(isinstance(item.get('branding'), dict))
         branding(item['branding'])
     return item

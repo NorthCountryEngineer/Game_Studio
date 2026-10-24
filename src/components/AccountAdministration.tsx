@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { getAccounts, inviteAccount, revokeAccountInvitation } from '../lib/account-api';
 import { accountInvitationInput, safeInvitationUrl, type AccountDirectory, type AccountInvitationResult } from '../lib/account-types';
 import { coreConfig } from '../lib/core';
+import { useBranding } from '../lib/branding';
 import '../accounts.css';
 
 function expiry(value: string | undefined) {
@@ -11,6 +12,7 @@ function expiry(value: string | undefined) {
 }
 
 export function AccountAdministration({ onClose }: { onClose: () => void }) {
+  const brand = useBranding();
   const dialog = useRef<HTMLDialogElement>(null), headingId = useId(), operation = useRef(false);
   const [directory, setDirectory] = useState<AccountDirectory>(), [loading, setLoading] = useState(true), [busy, setBusy] = useState('');
   const [email, setEmail] = useState(''), [name, setName] = useState(''), [roleId, setRoleId] = useState('');
@@ -55,7 +57,7 @@ export function AccountAdministration({ onClose }: { onClose: () => void }) {
   const roles = (ids: string[]) => ids.map(id => directory?.roles.find(role => role.id === id)?.name || 'Unlisted role').join(', ') || 'No Game Studio role';
   function close() { if (!busy) { dialog.current?.close(); onClose(); } }
   return <dialog ref={dialog} className="account-admin-dialog" aria-labelledby={headingId} onCancel={event => { event.preventDefault(); close(); }}>
-    <header className="account-admin-heading"><div><span className="eyebrow">NEWSROOM SETTINGS</span><h2 id={headingId}>Accounts</h2><p>Create invitations and manage access to Axolotl News.</p></div><button type="button" className="account-close" disabled={!!busy} onClick={close} aria-label="Close account settings">×</button></header>
+    <header className="account-admin-heading"><div><span className="eyebrow">SERVICE SETTINGS</span><h2 id={headingId}>Accounts</h2><p>Create invitations and manage access to {brand.appName}.</p></div><button type="button" className="account-close" disabled={!!busy} onClick={close} aria-label="Close account settings">×</button></header>
     <div className="account-admin-body">
       {error && <div className="account-alert" role="alert">{error}</div>}{notice && <p className="account-success" role="status">{notice}</p>}
       {loading ? <p role="status">Loading Game Studio accounts…</p> : directory && <>

@@ -1,6 +1,7 @@
 """Offline security/contract tests. No SDK install, network or AWS calls."""
 import importlib.util
 from copy import deepcopy
+from decimal import Decimal
 import json
 import os
 from pathlib import Path
@@ -90,11 +91,23 @@ class MemoryTable:
     def scan(self, **options): return {'Items': deepcopy(list(self.database.rows[self.name].values()))}
 
 
+class DynamoResourceTable(MemoryTable):
+    """DynamoDB resource reads deserialize numeric attributes into Decimal."""
+    def get_item(self, Key, **kwargs):
+        def deserialize(value):
+            if type(value) is int: return Decimal(value)
+            if isinstance(value, dict): return {key: deserialize(item) for key, item in value.items()}
+            if isinstance(value, list): return [deserialize(item) for item in value]
+            return value
+        return deserialize(super().get_item(Key, **kwargs))
+
+
 class MemoryDatabase:
+    table_class = MemoryTable
     def __init__(self, private=None, public=None):
         self.rows = {'private': deepcopy(private or {}), 'public': deepcopy(public or {})}
         self.meta = types.SimpleNamespace(client=types.SimpleNamespace(transact_write_items=Mock(side_effect=self.transact)))
-    def Table(self, name): return MemoryTable(self, name)
+    def Table(self, name): return self.table_class(self, name)
     def transact(self, TransactItems):
         previous = deepcopy(self.rows)
         try:
@@ -263,6 +276,67 @@ class SecurityTests(unittest.TestCase):
         self.assertEqual(json.loads(self.request('/integration', token=False)['body'])['branding'], body['branding'])
         self.assertEqual(self.request('/integration', 'PUT', body)['statusCode'], 409)
         self.assertEqual(len(self.database.rows['games']), 1)
+
+    def test_branding_roundtrip_accepts_dynamodb_decimal_revisions_and_rejects_stale_updates(self):
+        self.database.table_class = DynamoResourceTable
+        body = {'branding': self.config()['branding'], 'expectedRevision': 0}
+        response = self.request('/integration', 'PUT', body)
+        self.assertEqual(response['statusCode'], 200, response)
+        self.assertEqual(json.loads(response['body'])['revision'], 1)
+        key = next(iter(self.database.rows['games']))
+        read = self.database.Table('games').get_item(Key={'id': key})['Item']
+        self.assertIsInstance(read['revision'], Decimal)
+        reloaded = json.loads(self.request('/integration', token=False)['body'])
+        self.assertEqual(reloaded['branding'], body['branding'])
+        self.assertIs(type(reloaded['revision']), int)
+        updated = {'branding': {**body['branding'], 'badgeText': 'Created with curiosity'}, 'expectedRevision': 1}
+        response = self.request('/integration', 'PUT', updated)
+        self.assertEqual(response['statusCode'], 200, response)
+        self.assertEqual(json.loads(response['body'])['revision'], 2)
+        self.assertEqual(json.loads(self.request('/integration', token=False)['body'])['branding'], updated['branding'])
+        before = deepcopy(self.database.rows)
+        self.assertEqual(self.request('/integration', 'PUT', updated)['statusCode'], 409)
+        self.assertEqual(self.database.rows, before)
+
+    def test_stored_branding_revision_accepts_only_bounded_integral_numbers(self):
+        body = {'branding': self.config()['branding'], 'expectedRevision': 0}
+        self.assertEqual(self.request('/integration', 'PUT', body)['statusCode'], 200)
+        record = next(iter(self.database.rows['games'].values()))
+        for revision in [1, 1000000000, Decimal('1'), Decimal('1.000'), Decimal('1E+9')]:
+            with self.subTest(revision=revision):
+                record['revision'] = revision
+                response = self.request('/integration', token=False)
+                self.assertEqual(response['statusCode'], 200, response)
+                value = json.loads(response['body'])['revision']
+                self.assertIs(type(value), int)
+                self.assertEqual(value, int(revision))
+        for revision in [True, False, None, '1', 1.0, 0, -1, 1000000001, Decimal('0'),
+                         Decimal('-1'), Decimal('1000000001'), Decimal('1.5'), Decimal('999999999.999'),
+                         Decimal('NaN'), Decimal('sNaN'), Decimal('Infinity'), Decimal('-Infinity')]:
+            with self.subTest(revision=revision):
+                record['revision'] = revision
+                self.assertEqual(self.request('/integration', token=False)['statusCode'], 503)
+                self.assertEqual(self.request('/integration', 'PUT', {**body, 'expectedRevision': 1})['statusCode'], 503)
+                self.assertIs(record['revision'], revision)
+
+    def test_decimal_branding_revision_keeps_conditional_write_conflict_protection(self):
+        self.database.table_class = DynamoResourceTable
+        body = {'branding': self.config()['branding'], 'expectedRevision': 0}
+        self.assertEqual(self.request('/integration', 'PUT', body)['statusCode'], 200)
+        key = next(iter(self.database.rows['games']))
+        winner = {**self.database.rows['games'][key], 'revision': Decimal('2'),
+                  'branding': {**body['branding'], 'badgeText': 'Another administrator saved first'}}
+        original_put = MemoryTable.put_item
+        def concurrent_write(table, Item, **options):
+            self.database.rows['games'][key] = deepcopy(winner)
+            return original_put(table, Item, **options)
+        with patch.object(MemoryTable, 'put_item', concurrent_write):
+            response = self.request('/integration', 'PUT', {**body, 'expectedRevision': 1})
+        self.assertEqual(response['statusCode'], 409, response)
+        self.assertEqual(self.database.rows['games'][key], winner)
+        reloaded = json.loads(self.request('/integration', token=False)['body'])
+        self.assertEqual(reloaded['revision'], 2)
+        self.assertEqual(reloaded['branding'], winner['branding'])
 
     def test_branding_updates_cannot_change_hosts_roles_or_tenant(self):
         body = {'branding': self.config()['branding'], 'expectedRevision': 0}
