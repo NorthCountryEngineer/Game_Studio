@@ -1,5 +1,5 @@
 diff --git a/ci/tests/test_github_gate.py b/ci/tests/test_github_gate.py
-index cf5b1f6..ea452c3 100644
+index cf5b1f64ee1bad6dab6f42748618732a5548d4e8..ea452c398fb1519560be471831871e14f9ff7599 100644
 --- a/ci/tests/test_github_gate.py
 +++ b/ci/tests/test_github_gate.py
 @@ -68,6 +68,19 @@ class GitHubGateTests(unittest.TestCase):
@@ -23,7 +23,7 @@ index cf5b1f6..ea452c3 100644
          get = Mock(side_effect=values or documents())
          result = gate.verify_repository(REPOSITORY, SHA, read_json=get)
 diff --git a/deployment/aws-apps/README.md b/deployment/aws-apps/README.md
-index 98edf91..7621ac1 100644
+index 98edf9156e5d34509ddaf2e7e3b0f8753b145e52..7621ac1378e7210fecf2eff55a1da1cdaf3589e9 100644
 --- a/deployment/aws-apps/README.md
 +++ b/deployment/aws-apps/README.md
 @@ -126,3 +126,15 @@ Official references: [CodeBuild start_build](https://docs.aws.amazon.com/boto3/l
@@ -43,7 +43,7 @@ index 98edf91..7621ac1 100644
 +player/creator/admin roles, default-free guided design, optional exact-ARN
 +Bedrock policies, and the top-level creator/public-player embedding boundary.
 diff --git a/deployment/aws-apps/build_source.py b/deployment/aws-apps/build_source.py
-index 1a142d7..97fe14e 100644
+index 1a142d7cf80866c302ff072d117b23ec5e2af296..97fe14e19d5b40176bb0d438819d2e4e3c7f22b4 100644
 --- a/deployment/aws-apps/build_source.py
 +++ b/deployment/aws-apps/build_source.py
 @@ -34,6 +34,10 @@ def main():
@@ -59,7 +59,7 @@ index 1a142d7..97fe14e 100644
      output = safe_directory(source, config["frontend"]["output"])
 diff --git a/deployment/aws-apps/game-studio.template.json b/deployment/aws-apps/game-studio.template.json
 new file mode 100644
-index 0000000..4bb2866
+index 0000000000000000000000000000000000000000..4bb28664d3ad6c758175274a25b6567f4f48fa63
 --- /dev/null
 +++ b/deployment/aws-apps/game-studio.template.json
 @@ -0,0 +1,1089 @@
@@ -1153,7 +1153,7 @@ index 0000000..4bb2866
 +  }
 +}
 diff --git a/deployment/aws-apps/runner.py b/deployment/aws-apps/runner.py
-index 5817d8c..71f8d25 100644
+index 5817d8cef77a8d5ffcd377b0f2ae0551a3a4988f..71f8d25504f1d9cdf886987962d3bf7297ccdc5b 100644
 --- a/deployment/aws-apps/runner.py
 +++ b/deployment/aws-apps/runner.py
 @@ -65,13 +65,19 @@ def read_manifest(root, archetype):
@@ -1236,7 +1236,7 @@ index 5817d8c..71f8d25 100644
          app_id = self.outputs["amplify_app_id"]
          branch = self.snapshot["environment"]
 diff --git a/deployment/aws-platform/check_template.py b/deployment/aws-platform/check_template.py
-index d46e269..16dd8ec 100644
+index d46e269ebc48f7e3108998fdf8082e6ba2ab2017..16dd8ec3e160955ca632f437bf06cac513de479f 100644
 --- a/deployment/aws-platform/check_template.py
 +++ b/deployment/aws-platform/check_template.py
 @@ -56,6 +56,16 @@ for name, entry in [('Runner', 'runner.py'), ('SourceBuilder', 'build_source.py'
@@ -1257,7 +1257,7 @@ index d46e269..16dd8ec 100644
  require(not any(action.startswith(('iam:', 'ssm:', 'cloudformation:', 'amplify:', 'lambda:', 'sts:')) for action in source_actions), 'source builder received deployment/secret permissions')
  require(not any(action.startswith(('ecs:', 'ecr:', 'rds:', 'secretsmanager:', 'ec2:', 'servicediscovery:')) for action in source_actions), 'source builder received container or runtime-secret permissions')
 diff --git a/deployment/aws-platform/platform.template.json b/deployment/aws-platform/platform.template.json
-index e836a17..10841f7 100644
+index e836a17fca53710e91ec3312783fdc0dcaf66cab..10841f76efe19860f35cfe4f57f8a8f5a8429d17 100644
 --- a/deployment/aws-platform/platform.template.json
 +++ b/deployment/aws-platform/platform.template.json
 @@ -1,282 +1,27 @@
@@ -1566,7 +1566,7 @@ index e836a17..10841f7 100644
   "Outputs":{"ControlRoleArn":{"Value":{"Fn::GetAtt":["ControlRole","Arn"]}},"RunnerProjectName":{"Value":{"Ref":"Runner"}},"BuildProjectName":{"Value":{"Ref":"SourceBuilder"}},"ArtifactBucket":{"Value":{"Ref":"Artifacts"}},"CloudFormationExecutionRoleArn":{"Value":{"Fn::GetAtt":["CloudFormationRole","Arn"]}},"AppRoleBoundaryArn":{"Value":{"Ref":"AppBoundary"}},"CodeConnectionArn":{"Value":{"Ref":"CodeConnectionArn"}},"Prefix":{"Value":{"Ref":"Prefix"}},"RunnerCommit":{"Value":{"Ref":"RunnerCommit"}},"CoreExternalId":{"Value":{"Ref":"CoreExternalId"}},"AccountId":{"Value":{"Ref":"AWS::AccountId"}},"Region":{"Value":{"Ref":"AWS::Region"}},"FargateCloudFormationExecutionRoleArn":{"Condition":"EnableFargate","Value":{"Fn::GetAtt":["FargateCloudFormationRole","Arn"]}}}
  }
 diff --git a/docs/cloud-deployments.md b/docs/cloud-deployments.md
-index 5894bfa..68c6e37 100644
+index 5894bfa1a9ced62d411eac081509422f584f189c..68c6e375cfe7ba6c36abf12953b8d3ba26cee836 100644
 --- a/docs/cloud-deployments.md
 +++ b/docs/cloud-deployments.md
 @@ -709,3 +709,156 @@ and workload-compatible tags in Core, plus the exact local school/class placemen
@@ -1728,7 +1728,7 @@ index 5894bfa..68c6e37 100644
 +retention, recovery and charge-approval boundaries remain unchanged.
 diff --git a/examples/game-studio-package.json b/examples/game-studio-package.json
 new file mode 100644
-index 0000000..0545826
+index 0000000000000000000000000000000000000000..0545826638f262eceb6b6c520860a8ea00277a41
 --- /dev/null
 +++ b/examples/game-studio-package.json
 @@ -0,0 +1,80 @@
@@ -1813,7 +1813,7 @@ index 0000000..0545826
 +  }
 +}
 diff --git a/platform_services/cloud_aws.py b/platform_services/cloud_aws.py
-index 0f76b96..00105cf 100644
+index 0f76b9666d178f19c26e9271e0914dcd8b4f9fe0..00105cf8cd9f598caef7df0ee508a8586c61a914 100644
 --- a/platform_services/cloud_aws.py
 +++ b/platform_services/cloud_aws.py
 @@ -11,7 +11,7 @@ import hashlib
@@ -1866,7 +1866,7 @@ index 0f76b96..00105cf 100644
          raise AWSAdapterError("Invalid deployment phase.")
      public = snapshot.get("public_config", {})
 diff --git a/platform_services/cloud_contract.py b/platform_services/cloud_contract.py
-index f2f3f80..b150bd1 100644
+index f2f3f80c6d76d8e8735191d4910499d80ec81fb4..b150bd19a84de8dc182c297c640bc54e2160b864 100644
 --- a/platform_services/cloud_contract.py
 +++ b/platform_services/cloud_contract.py
 @@ -103,3 +103,106 @@ def academy_fargate_backend(backend, approved=None):
@@ -1977,7 +1977,7 @@ index f2f3f80..b150bd1 100644
 +    return 'customHeaders:\n' + ''.join('  - pattern: ' + json.dumps(pattern) + '\n    headers:\n' + ''.join(
 +        '      - key: ' + json.dumps(key) + '\n        value: ' + json.dumps(item) + '\n' for key, item in headers) for pattern, headers in rules)
 diff --git a/platform_services/cloud_deployments.py b/platform_services/cloud_deployments.py
-index 710918c..3d07f52 100644
+index 710918c94a3e0d1c83dd5e70748cb76b92458e03..3d07f52e49f8d112cd0d38d6a8549020d97fef4d 100644
 --- a/platform_services/cloud_deployments.py
 +++ b/platform_services/cloud_deployments.py
 @@ -163,6 +163,7 @@ def prepare_release(app, principal):
@@ -2031,7 +2031,7 @@ index 710918c..3d07f52 100644
                                  return True
                              store_credentials(platform, working['secret_parameter'], credentials)
 diff --git a/platform_services/cloud_models.py b/platform_services/cloud_models.py
-index 347f83b..821ada4 100644
+index 347f83b6dc731354bbb7a2ac565c9a0258e88533..821ada4d30bde3df8a018a507fa8776e58b82fba 100644
 --- a/platform_services/cloud_models.py
 +++ b/platform_services/cloud_models.py
 @@ -12,7 +12,8 @@ from .secrets import decrypt_bundle, encrypt_bundle
@@ -2066,7 +2066,7 @@ index 347f83b..821ada4 100644
              value = urlsplit(self.public_origin)
              if value.scheme != 'https' or not value.netloc or value.username or value.password or value.path or value.query or value.fragment:
 diff --git a/platform_services/cloud_portal.py b/platform_services/cloud_portal.py
-index f049f04..e4c76e6 100644
+index f049f04c5d37a5803eb66e71e1a54555c187e98e..e4c76e62490bda8e3e0074a86d780880ca05a5f2 100644
 --- a/platform_services/cloud_portal.py
 +++ b/platform_services/cloud_portal.py
 @@ -21,6 +21,7 @@ ARCHETYPES = [
@@ -2106,7 +2106,7 @@ index f049f04..e4c76e6 100644
          if approved:
              platform.config['fargate_apps'] = approved
 diff --git a/platform_services/github_ci.py b/platform_services/github_ci.py
-index c4b17b8..86f3b0f 100644
+index c4b17b856a1cface988f6cfe239166f4a2e386ad..86f3b0ffe30ab9bbb3c36d4f3443cadb33036e42 100644
 --- a/platform_services/github_ci.py
 +++ b/platform_services/github_ci.py
 @@ -31,6 +31,7 @@ class Policy:
@@ -2119,7 +2119,7 @@ index c4b17b8..86f3b0f 100644
      Policy('NorthCountryEngineer/NCE_Core', '.github/workflows/verify.yml', 'Core required checks'),
 diff --git a/platform_services/migrations/0042_game_studio_archetype.py b/platform_services/migrations/0042_game_studio_archetype.py
 new file mode 100644
-index 0000000..2ed6406
+index 0000000000000000000000000000000000000000..2ed6406e91f84c4da0e534862c4e25c648b0ef41
 --- /dev/null
 +++ b/platform_services/migrations/0042_game_studio_archetype.py
 @@ -0,0 +1,12 @@
@@ -2137,7 +2137,7 @@ index 0000000..2ed6406
 +            ('amplify-game-studio', 'Game Studio website and serverless API')]))]
 diff --git a/platform_services/tests/test_game_studio_cloud.py b/platform_services/tests/test_game_studio_cloud.py
 new file mode 100644
-index 0000000..d2b6107
+index 0000000000000000000000000000000000000000..d2b6107fa323e41c7c5725aaef823c913d6ed03e
 --- /dev/null
 +++ b/platform_services/tests/test_game_studio_cloud.py
 @@ -0,0 +1,278 @@
@@ -2420,7 +2420,7 @@ index 0000000..d2b6107
 +            self.assertTrue(process_one())
 +        release.refresh_from_db(); self.assertEqual(release.status, 'succeeded', release.error)
 diff --git a/templates/platform_services/cloud_application_form.html b/templates/platform_services/cloud_application_form.html
-index c822ee6..20c1e3b 100644
+index c822ee675068b07fd684e6334019c8917a5acf2e..20c1e3ba52ef18e14d91849f9d21427bc12edb00 100644
 --- a/templates/platform_services/cloud_application_form.html
 +++ b/templates/platform_services/cloud_application_form.html
 @@ -8,6 +8,6 @@

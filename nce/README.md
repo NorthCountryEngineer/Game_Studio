@@ -60,7 +60,7 @@ NCAcademy students and parents currently have platform-local identities rather t
 
 ## Reviewed source and console setup
 
-The companion patch is [core-onboarding.patch](core-onboarding.patch), with the exact production-source baseline and validation in [core-patch-baseline.json](core-patch-baseline.json). It applies to Core `cf8cd458d5d3b4747bf959b0ce496767a5fb8f5d`; do not apply it blindly to another revision or a dirty checkout. The patch includes the new console choice, trusted runner/template, exact repository CI admission, app identity and role registration, scoped storage permissions, optional exact-ARN model admission and regression tests. It makes no live changes by itself.
+The companion patch is [core-onboarding.patch](core-onboarding.patch), with the exact production-source baseline and validation in [core-patch-baseline.json](core-patch-baseline.json). It applies to Core `c27e6a03ff47adf4acc8e670ec2f240127744172`; do not apply it blindly to another revision or a dirty checkout. The patch includes the new console choice, trusted runner/template, exact repository CI admission, app identity and role registration, scoped storage permissions, optional exact-ARN model admission and regression tests. It makes no live changes by itself.
 
 After the Core maintainer has reviewed, released and pinned that source:
 
