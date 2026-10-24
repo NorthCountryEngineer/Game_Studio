@@ -10,20 +10,20 @@ import re
 
 BASELINE = 'c27e6a03ff47adf4acc8e670ec2f240127744172'  # pragma: allowlist secret
 RECIPE_SOURCE = '52d8ad1c3846a9151b482c499576e5fe964290ec'  # pragma: allowlist secret
-TEMPLATE_SOURCE = '1e7e89d3caaafc182ab97268c87cb39b5a3a58ea'  # pragma: allowlist secret
+TEMPLATE_SOURCE = '083617a9f282db8cb55edba2bbd1da8165396bd1'  # pragma: allowlist secret
 TEMPLATE_PATH = 'deployment/aws-platform/platform.template.json'
 # Public SHA256 of reviewed Core template bytes, not a credential.
 TEMPLATE_SHA256 = '575eed28292790ae55ee68145ef90c20a71df467585a25dfe44d56e6729b51a9'  # pragma: allowlist secret
 TEMPLATE_BYTES = 51129
 GAME_TEMPLATE_PATH = 'deployment/aws-apps/game-studio.template.json'
-GAME_TEMPLATE_SHA256 = '1870dc194150f3383228733f971e16a6629f5cfa45befb8ec65c4fbaf665db57'  # pragma: allowlist secret
-GAME_TEMPLATE_BYTES = 30349
+GAME_TEMPLATE_SHA256 = 'f171d5c4662040e070b87493cf53ef96d36db3a0e30c4c1dcf4b1164cc864751'  # pragma: allowlist secret
+GAME_TEMPLATE_BYTES = 30629
 CONTEXT_PATH = 'deployment/aws-platform/README.md'
 CONTEXT_SHA256 = 'e31788fdbcb5306bce78ca1411e1adb19ebe1ce2d9f2c9f43bd4040a441af6ec'  # pragma: allowlist secret
 CONTEXT_BYTES = 13139
 # Public digests of the locally apply-verified patch and all post-patch hashes.
-PATCH_SHA256 = 'f0ba4c0c87b0dd6a4e555dffc48f8a4a08eafa533d5242917202b0f7cda47252'  # pragma: allowlist secret
-FILES_SHA256 = 'f5f4562bfbe84b74e0eb75113a3de73a5f171a31722662201969b7ab9697c1e9'  # pragma: allowlist secret
+PATCH_SHA256 = '58fb35c7c70c125174c678ba39807ad23540f8850cac259cdb66f84dee71b3c5'  # pragma: allowlist secret
+FILES_SHA256 = 'e01c4a74d9a061770a824ef7d5f155ef77924cf7a202214cab3a4c3f8473ede0'  # pragma: allowlist secret
 
 
 def require(value, message):
@@ -126,6 +126,9 @@ def validate_game_recipe_scope(template):
             'The game recipe route and stage must match the exact invocation permission.')
     require({name for name, resource in resources.items() if resource['Type'] == 'AWS::Lambda::Permission'} == {'ApiInvoke', 'ApiDefaultInvoke'},
             'The game recipe gained an unreviewed invocation grant.')
+    require(resources['Frontend']['Properties']['CustomRules'] == [
+        {'Source': '</^[^.]+$/>', 'Target': '/index.html', 'Status': '200'}],
+        'The game recipe SPA rewrite must return 200 only for extensionless application routes.')
 
 
 def validate_bundle(root):

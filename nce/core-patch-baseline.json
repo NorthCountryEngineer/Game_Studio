@@ -1,12 +1,12 @@
 {
   "baseline": "c27e6a03ff47adf4acc8e670ec2f240127744172",
   "branch": "codex/game-studio-onboarding",
-  "patch_sha256": "f0ba4c0c87b0dd6a4e555dffc48f8a4a08eafa533d5242917202b0f7cda47252",
+  "patch_sha256": "58fb35c7c70c125174c678ba39807ad23540f8850cac259cdb66f84dee71b3c5",
   "files": {
     "ci/tests/test_github_gate.py": "e867b0fcba42a72fd6afff9fbe99cfa4465809f1eaaa088d52107c2c0c1855ea",
     "deployment/aws-apps/README.md": "288100d2b53b46d3f56c39a6f33f9b0fa1093d7e3bd6fa5f391d5b29ca738363",
     "deployment/aws-apps/build_source.py": "7056a97ef05cfc9888a603b171d688954ad0b73fd006a0da9a6e4e571fb81b55",
-    "deployment/aws-apps/game-studio.template.json": "1870dc194150f3383228733f971e16a6629f5cfa45befb8ec65c4fbaf665db57",
+    "deployment/aws-apps/game-studio.template.json": "f171d5c4662040e070b87493cf53ef96d36db3a0e30c4c1dcf4b1164cc864751",
     "deployment/aws-apps/runner.py": "90708ed1a03d2befc107ef50206914413105f136fb48177827b8de0daa7a3e74",
     "deployment/aws-platform/check_template.py": "d472f7740f3a0312ea0ae2360d9e30b86ca7eff65108da37ad1b8238e4c34e94",
     "deployment/aws-platform/platform.template.json": "575eed28292790ae55ee68145ef90c20a71df467585a25dfe44d56e6729b51a9",
@@ -33,7 +33,7 @@
     "system_check": "PASS",
     "migration_drift": "No changes detected",
     "prior_production_source_files_verified": 459,
-    "game_recipe_bytes": 30349,
+    "game_recipe_bytes": 30629,
     "platform_context_bytes": 13139
   },
   "notes": [
@@ -47,7 +47,7 @@
   "per_file_overrides": [
     {
       "repository": "NorthCountryEngineer/NCE_Core",
-      "commit": "1e7e89d3caaafc182ab97268c87cb39b5a3a58ea",
+      "commit": "083617a9f282db8cb55edba2bbd1da8165396bd1",
       "path": "deployment/aws-platform/platform.template.json",
       "sha256": "575eed28292790ae55ee68145ef90c20a71df467585a25dfe44d56e6729b51a9",
       "pull_request": "https://github.com/NorthCountryEngineer/NCE_Core/pull/6",
@@ -55,15 +55,15 @@
     },
     {
       "repository": "NorthCountryEngineer/NCE_Core",
-      "commit": "1e7e89d3caaafc182ab97268c87cb39b5a3a58ea",
+      "commit": "083617a9f282db8cb55edba2bbd1da8165396bd1",
       "path": "deployment/aws-apps/game-studio.template.json",
-      "sha256": "1870dc194150f3383228733f971e16a6629f5cfa45befb8ec65c4fbaf665db57",
+      "sha256": "f171d5c4662040e070b87493cf53ef96d36db3a0e30c4c1dcf4b1164cc864751",
       "pull_request": "https://github.com/NorthCountryEngineer/NCE_Core/pull/6",
-      "reason": "Canonical reviewed additive exact default-stage/default-route Lambda permission; legacy resource and replacement safeguards preserved."
+      "reason": "Canonical reviewed additive exact default-route Lambda permission and explicit extensionless SPA 200 rewrite; legacy permission and destructive-change safeguards preserved."
     },
     {
       "repository": "NorthCountryEngineer/NCE_Core",
-      "commit": "1e7e89d3caaafc182ab97268c87cb39b5a3a58ea",
+      "commit": "083617a9f282db8cb55edba2bbd1da8165396bd1",
       "path": "deployment/aws-platform/README.md",
       "sha256": "e31788fdbcb5306bce78ca1411e1adb19ebe1ce2d9f2c9f43bd4040a441af6ec",
       "pull_request": "https://github.com/NorthCountryEngineer/NCE_Core/pull/6",

@@ -4,6 +4,7 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
+import re
 import tempfile
 import unittest
 
@@ -32,7 +33,7 @@ class CoreBundleTests(unittest.TestCase):
         self.assertEqual(result['files'], 19)
         self.assertEqual(result['templateBytes'], 51129)
         self.assertEqual(result['templateSource'], bundle.TEMPLATE_SOURCE)
-        self.assertEqual(result['gameRecipeBytes'], 30349)
+        self.assertEqual(result['gameRecipeBytes'], 30629)
         self.assertEqual(result['gameRecipeSource'], bundle.TEMPLATE_SOURCE)
         self.assertEqual(result['contextBytes'], 13139)
 
@@ -120,6 +121,21 @@ class CoreBundleTests(unittest.TestCase):
                 else: metadata['files'][bundle.TEMPLATE_PATH] = 'f' * 64
                 p.write_text(json.dumps(metadata))
                 with self.assertRaises(ValueError): bundle.validate_bundle(root)
+
+    def test_spa_routes_return_200_without_capturing_dotted_assets_or_sdk_files(self):
+        template = json.loads(bundle.full_template_section((ROOT / 'nce/core-onboarding.patch').read_bytes(), bundle.GAME_TEMPLATE_PATH))
+        rule = template['Resources']['Frontend']['Properties']['CustomRules'][0]
+        pattern = re.compile(rule['Source'][2:-2])
+        for route in ['/', '/games', '/game-studio', '/oauth/callback', '/settings/integration', '/embed/games/example']:
+            with self.subTest(route=route): self.assertIsNotNone(pattern.fullmatch(route))
+        for path in ['/assets/missing.js', '/assets/theme.css', '/sdk/game-studio.js', '/favicon.ico']:
+            with self.subTest(path=path): self.assertIsNone(pattern.fullmatch(path))
+        for field, value in [('Source', '/<*>'), ('Target', '/missing.html'), ('Status', '404-200')]:
+            with self.subTest(field=field):
+                changed = copy.deepcopy(template)
+                changed['Resources']['Frontend']['Properties']['CustomRules'][0][field] = value
+                with self.assertRaisesRegex(ValueError, 'SPA rewrite'):
+                    bundle.validate_game_recipe_scope(changed)
 
     def test_non_template_manifest_hashes_remain_bound_to_the_apply_verified_snapshot(self):
         with tempfile.TemporaryDirectory() as directory:
