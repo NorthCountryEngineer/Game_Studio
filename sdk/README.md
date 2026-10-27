@@ -4,7 +4,7 @@ Build with `npm run build:sdk` from the repository root. It generates the standa
 
 Exports:
 
-- `createCreatorURL(studioOrigin, {hostId?, gameId?})`: full-page administrative creator link.
+- `createCreatorURL(studioOrigin, {hostId?, gameId?, autoLogin?})`: full-page administrative creator link. `autoLogin: true` requires a configured host ID and requests one bounded Core SSO redirect, using Game Studio's own audience and permissions.
 - `createHostSelectionURL(hostOrigin, returnPath, studioOrigin, gameId, publishedRevision)` and `readGameSelection(locationURL, expectedStudioOrigin)`: public game selection handoff.
 - `createEmbedURL(studioOrigin, gameId, {hostId?, channel?})`: public player URL.
 - `mountGame(container, {studioOrigin, hostId, gameId, title?, onEvent?})`: create the frame and validated event listener; returns `{iframe, destroy()}`.

@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { webcrypto } from 'node:crypto';
 import ts from 'typescript';
+import { hostLoginLaunch } from '../src/lib/host-login.ts';
 
 function harness(initialStore?: Map<string, string>) {
   const store = initialStore || new Map<string, string>(), calls: { url: string; options: any }[] = [], redirects: string[] = [];
@@ -125,6 +126,134 @@ test('logout cancels pending refresh persistence and revokes the newly returned 
   await h.api.coreLogout(); finish(); await assert.rejects(session, /signed out/); assert.ok(!h.store.has('game-studio-core-tokens'));
   const revoked = h.calls.filter(c => c.url.endsWith('/oauth/revoke/')).map(c => c.options.body.get('token'));
   assert.deepEqual(revoked, ['old-refresh', 'new-refresh']); assert.ok(!h.calls.some(c => c.url.endsWith('/session')));
+});
+
+test('an expired own refresh can resume configured host SSO and exchange only the target PKCE code', async()=>{
+  const h=harness();
+  const hostCredentials='host-owned-credentials-stay-here';
+  h.store.set('academy-session',hostCredentials);
+  h.store.set('game-studio-core-tokens',JSON.stringify({access_token:'expired-studio-access',refresh_token:'expired-studio-refresh',expires_at:0}));
+  h.respond(async()=>({ok:false,status:400,json:async()=>({error:'invalid_grant'})}));
+  const error=await h.api.corePlayerSession().catch((error:unknown)=>error);
+  assert.equal(h.api.recoverExpiredCoreSession(error),true);
+  assert.equal(h.store.has('game-studio-core-tokens'),false);
+  assert.equal(h.store.get('academy-session'),hostCredentials);
+  assert.equal(h.api.recoverExpiredCoreSession(error),false,'An old failure cannot reset a newer session generation.');
+  assert.deepEqual(JSON.parse(JSON.stringify(await h.api.corePlayerSession())),{authenticated:false,canEdit:false});
+  const launch=hostLoginLaunch('/game-studio?host=academy&login=auto',['academy'],{configured:true,checking:false,authenticated:false,framed:false,failed:false})!;
+  assert.ok(launch);
+  await h.api.beginCoreLogin('login',launch.destination);
+  const authorize=new URL(h.redirects.at(-1)!),flow=JSON.parse(h.store.get('game-studio-core-flow')!);
+  assert.equal(authorize.searchParams.get('client_id'),h.config.browser_client_id);
+  assert.equal(authorize.searchParams.get('redirect_uri'),h.config.redirect_uri);
+  assert.equal(authorize.href.includes(hostCredentials),false);
+  h.respond(async()=>({ok:true,json:async()=>({access_token:'new-studio-access',refresh_token:'new-studio-refresh',token_type:'Bearer',expires_in:300})}));
+  h.location.search=`?code=studio-one-use-code&state=${flow.state}&iss=${encodeURIComponent(h.config.issuer)}`;
+  await h.api.completeCoreLogin();
+  const exchange=h.calls.at(-1)!;
+  assert.equal(exchange.options.body.get('grant_type'),'authorization_code');
+  assert.equal(exchange.options.body.get('code_verifier'),flow.verifier);
+  assert.equal(exchange.options.body.get('client_id'),h.config.browser_client_id);
+  assert.equal(exchange.options.credentials,'omit');
+  assert.equal(JSON.parse(h.store.get('game-studio-core-tokens')!).access_token,'new-studio-access');
+  assert.equal(h.redirects.at(-1),'/game-studio');
+  assert.equal(hostLoginLaunch(launch.consumedPath,['academy'],{configured:true,checking:false,authenticated:false,framed:false,failed:false}),undefined);
+});
+
+test('only own session-check 401 or known refresh expiry allow recovery; outages and permission errors fail closed',async()=>{
+  for(const failure of ['network','unavailable','forbidden','bad-client','unavailable-invalid-grant','code-invalid-grant']){
+    const h=harness(),stored=JSON.stringify({access_token:'own-access',refresh_token:'own-refresh',expires_at:0});
+    h.store.set('game-studio-core-tokens',stored);
+    h.respond(async()=>{
+      if(failure==='network')throw new TypeError('Offline');
+      return {ok:false,status:failure.startsWith('unavailable')?503:failure==='forbidden'?403:401,
+        json:async()=>({error:failure==='bad-client'?'invalid_client':failure==='unavailable-invalid-grant'?'invalid_grant':'access_denied'})};
+    });
+    let error:unknown;
+    if(failure==='code-invalid-grant'){
+      await h.api.beginCoreLogin();const flow=JSON.parse(h.store.get('game-studio-core-flow')!);
+      h.location.search=`?code=expired-code&state=${flow.state}`;
+      h.respond(async()=>({ok:false,status:400,json:async()=>({error:'invalid_grant'})}));
+      error=await h.api.completeCoreLogin().catch((error:unknown)=>error);
+    }else error=await h.api.corePlayerSession().catch((error:unknown)=>error);
+    assert.equal(h.api.recoverExpiredCoreSession(error),false,failure);
+    assert.equal(h.store.get('game-studio-core-tokens'),stored,failure);
+    assert.equal(hostLoginLaunch('/game-studio?host=academy&login=auto',['academy'],{configured:true,checking:false,authenticated:false,framed:false,failed:true}),undefined);
+    assert.equal(h.calls.length,1,'A failed session check is not automatically retried.');
+  }
+  for(const path of ['/game-scores/session','/session']){
+    const h=harness();h.store.set('game-studio-core-tokens',JSON.stringify({access_token:'stale-access',expires_at:Date.now()+300000}));
+    h.respond(async()=>({ok:false,status:401,json:async()=>({error:'Own session expired.'})}));
+    const error=await h.api.coreRequest(path).catch((error:unknown)=>error);
+    assert.equal(h.api.recoverExpiredCoreSession(error),true,path);
+    assert.equal(h.store.has('game-studio-core-tokens'),false);
+  }
+  const h=harness();h.store.set('game-studio-core-tokens',JSON.stringify({access_token:'access',expires_at:Date.now()+300000}));
+  h.respond(async()=>({ok:false,status:401,json:async()=>({error:'Unrelated operation failed.'})}));
+  const error=await h.api.coreRequest('/games').catch((error:unknown)=>error);
+  assert.equal(h.api.recoverExpiredCoreSession(error),false,'An ordinary operation failure cannot trigger host login.');
+  const previous=harness();previous.store.set('game-studio-core-tokens',JSON.stringify({access_token:'old-access',expires_at:Date.now()+300000}));
+  previous.respond(async()=>({ok:false,status:401,json:async()=>({error:'Old session expired.'})}));
+  const staleError=await previous.api.corePlayerSession().catch((error:unknown)=>error);
+  await previous.api.beginCoreLogin();
+  assert.equal(previous.api.recoverExpiredCoreSession(staleError),false,'A stale request cannot clear a newer sign-in attempt.');
+});
+
+test('explicit host entry replaces a previous target account with Core current-account authorization',async()=>{
+  const h=harness();
+  h.store.set('academy-session','unchanged-source-session');
+  h.store.set('game-studio-core-tokens',JSON.stringify({access_token:'previous-account-access',refresh_token:'previous-account-refresh',expires_at:Date.now()+300000}));
+  h.respond(async()=>({ok:true,json:async()=>({authenticated:true,canEdit:true})}));
+  const previous=await h.api.corePlayerSession();
+  assert.equal(previous.authenticated,true);
+  const launch=hostLoginLaunch('/game-studio?host=academy&login=auto',['academy'],{configured:true,checking:false,authenticated:previous.authenticated,framed:false,failed:false})!;
+  assert.ok(launch);
+  await h.api.beginCoreLogin('login',launch.destination,{replaceSession:true});
+  assert.equal(h.store.has('game-studio-core-tokens'),false,'Old target credentials cannot survive explicit account reassertion.');
+  assert.equal(h.store.get('academy-session'),'unchanged-source-session');
+  assert.equal(h.calls.some(call=>call.url.endsWith('/oauth/revoke/')),false);
+  const flow=JSON.parse(h.store.get('game-studio-core-flow')!);
+  h.respond(async(url:string,options:any)=>({ok:true,json:async()=>url.endsWith('/oauth/token/')
+    ?{access_token:'current-account-access',refresh_token:'current-account-refresh',token_type:'Bearer',expires_in:300}
+    :{subject:'current-core-account',permissions:options.headers.Authorization==='Bearer current-account-access'?[]:['games-create']}}));
+  h.location.search=`?code=current-account-code&state=${flow.state}`;
+  await h.api.completeCoreLogin();
+  const current=await h.api.coreRequest('/session');
+  assert.equal(current.subject,'current-core-account');
+  assert.deepEqual(JSON.parse(JSON.stringify(current.permissions)),[],'A newly signed-in viewer gains no authoring rights from the link.');
+  assert.equal(await h.api.coreSession(),false);
+  assert.equal(h.calls.at(-1)!.options.headers.Authorization,'Bearer current-account-access');
+  assert.equal(hostLoginLaunch(launch.consumedPath,['academy'],{configured:true,checking:false,authenticated:true,framed:false,failed:false}),undefined);
+});
+
+test('cancelled explicit identity reassertion never falls back to the previous target account',async()=>{
+  const h=harness();
+  h.store.set('game-studio-core-tokens',JSON.stringify({access_token:'previous-account-access',expires_at:Date.now()+300000}));
+  const launch=hostLoginLaunch('/game-studio?host=academy&login=auto',['academy'],{configured:true,checking:false,authenticated:true,framed:false,failed:false})!;
+  await h.api.beginCoreLogin('login',launch.destination,{replaceSession:true});
+  const flow=JSON.parse(h.store.get('game-studio-core-flow')!);
+  h.location.search=`?error=access_denied&state=${flow.state}`;
+  await assert.rejects(h.api.completeCoreLogin(),/cancelled or denied/);
+  assert.equal(h.store.has('game-studio-core-tokens'),false);
+  assert.deepEqual(JSON.parse(JSON.stringify(await h.api.corePlayerSession())),{authenticated:false,canEdit:false});
+  assert.equal(h.calls.length,0);
+  assert.equal(hostLoginLaunch(launch.consumedPath,['academy'],{configured:true,checking:false,authenticated:false,framed:false,failed:false}),undefined);
+});
+
+test('connected entry removes old target credentials before host storage can fail; reload cannot restore them',async()=>{
+  const h=harness();
+  h.store.set('academy-session','source-session-is-untouched');
+  h.store.set('game-studio-core-tokens',JSON.stringify({access_token:'previous-account-access',expires_at:Date.now()+300000}));
+  h.store.set('game-studio-core-flow','old-flow-must-not-survive');
+  const store=h.store.set.bind(h.store);
+  h.store.set=(key:string,value:string)=>{if(key==='game-studio-launch-host')throw new Error('Storage quota exceeded');return store(key,value);};
+  await assert.rejects(h.api.beginCoreLogin('login','/game-studio',{replaceSession:true,launchHostId:'academy'}),/quota/);
+  assert.equal(h.store.has('game-studio-core-tokens'),false);
+  assert.equal(h.store.has('game-studio-core-flow'),false);
+  assert.equal(h.store.get('academy-session'),'source-session-is-untouched');
+  assert.equal(h.redirects.length,0);assert.equal(h.calls.length,0);
+  const reloaded=harness(h.store);
+  assert.deepEqual(JSON.parse(JSON.stringify(await reloaded.api.corePlayerSession())),{authenticated:false,canEdit:false});
 });
 
 test('a failed publishing session is reported instead of silently looking signed out', async () => {

@@ -18,10 +18,15 @@ export function createEmbedURL(studioOrigin: string, gameId: string, options: { 
   if (options.channel !== undefined) { if (!channelId.test(options.channel)) throw new Error('Invalid integration channel.'); url.searchParams.set('channel', options.channel); }
   return url.href;
 }
-export function createCreatorURL(studioOrigin: string, options: { hostId?: string; gameId?: string } = {}): string {
+export function createCreatorURL(studioOrigin: string, options: { hostId?: string; gameId?: string; autoLogin?: boolean } = {}): string {
   const url = new URL('/game-studio', integrationOrigin(studioOrigin));
   if (host(options.hostId)) url.searchParams.set('host', options.hostId!);
   if (options.gameId) url.searchParams.set('game', id(options.gameId));
+  if (options.autoLogin !== undefined && typeof options.autoLogin !== 'boolean') throw new Error('Automatic sign-in must be a boolean.');
+  if (options.autoLogin) {
+    if (!options.hostId) throw new Error('Automatic sign-in requires a configured host identifier.');
+    url.searchParams.set('login', 'auto');
+  }
   return url.href;
 }
 export function createHostSelectionURL(hostOrigin: string, returnPath: string, studioOrigin: string, gameId: string, publishedRevision: number): string {

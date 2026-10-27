@@ -28,7 +28,7 @@ For two-session multiplayer rehearsal, run `npm run dev:multiplayer` and open `h
 
 1. Install/deploy Game Studio for the intended Core tenant and environment. Each installation has its own data, paired Core clients and origin.
 2. Approve the host's exact origin and fixed return path in deployment configuration.
-3. Add a **Create games** link to the host's administrative UI. It opens Game Studio as a full page; Game Studio independently verifies its own Core creation permissions.
+3. Add a **Create games** link to the host's administrative UI using `createCreatorURL(origin, {hostId, autoLogin: true})`. It opens Game Studio as a full page and reasserts Core's current account through its own sign-in flow. Existing Core login and remembered consent are reused; first consent or expired Core login can require a Core page. Game Studio independently requires its explicit `games-create` administrative capability; publication also requires `games-publish`. Existing delegated creation/publishing administrators retain their permissions.
 4. An authorized game administrator creates, tests and publishes a game. Copy its player link or SDK snippet into the host's lesson/page configuration.
 5. Players use the embedded public player. Signed-in shared score submission uses Game Studio's own top-level Core login; anonymous embedded play can keep local scores. No host access token is forwarded.
 

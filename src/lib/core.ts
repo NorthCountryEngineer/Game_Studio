@@ -9,6 +9,17 @@ const tokenKey = 'game-studio-core-tokens', flowKey = 'game-studio-core-flow';
 let refresh: Promise<Tokens> | undefined;
 let callback: Promise<void> | undefined;
 let sessionGeneration = 0;
+class CoreSessionExpiredError extends Error {
+  readonly status = 401;
+  constructor(message: string, readonly generation = sessionGeneration) { super(message); }
+}
+/** Only a confirmed expiry of this app's session permits a new host SSO attempt. */
+export function recoverExpiredCoreSession(error: unknown): boolean {
+  if (!(error instanceof CoreSessionExpiredError) || error.generation !== sessionGeneration) return false;
+  sessionGeneration++;
+  sessionStorage.removeItem(tokenKey);
+  return true;
+}
 const config = () => { if (!coreConfig) throw new Error('Core is not configured.'); return coreConfig; };
 const b64 = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 function readTokens(): Tokens | undefined { try { return JSON.parse(sessionStorage.getItem(tokenKey) || 'null') || undefined; } catch { sessionStorage.removeItem(tokenKey); } }
@@ -35,7 +46,12 @@ async function exchange(fields: Record<string, string>, generation = sessionGene
   } catch { throw new Error('The browser could not reach Core’s token endpoint. Check the connection and Core’s allowed browser origin.'); }
   let t;
   try { t = await r.json(); } catch { throw new Error('Core’s token endpoint returned an unexpected response. Check the Core proxy deployment.'); }
-  if (!r.ok) throw new Error(authorizationError(t?.error));
+  if (!r.ok) {
+    if (fields.grant_type === 'refresh_token' && [400, 401].includes(r.status) && t?.error === 'invalid_grant') {
+      throw new CoreSessionExpiredError('This Game Studio session expired. Sign in through Core again.', generation);
+    }
+    throw new Error(authorizationError(t?.error));
+  }
   if (!t || typeof t.access_token !== 'string' || t.token_type?.toLowerCase() !== 'bearer' || !Number.isFinite(t.expires_in)) throw new Error('Core’s token endpoint returned an invalid session.');
   // ID tokens are never used to authorize API requests. The backend checks the
   // opaque access token with live, service-bound Core introspection every time.
@@ -50,9 +66,17 @@ function loginReturnPath(value: unknown = '/game-studio'): string {
   if (typeof value === 'string' && (value === '/game-studio' || value === '/settings' || /^\/game-studio\?game=[0-9a-f-]{36}$/i.test(value) || value === '/games' || /^\/games\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value))) return value;
   throw new Error('Choose a Game Studio or game page before starting sign-in.');
 }
-export async function beginCoreLogin(action: 'login' | 'signup' = 'login', returnTo = '/game-studio') {
+export async function beginCoreLogin(action: 'login' | 'signup' = 'login', returnTo = '/game-studio', options: { replaceSession?: boolean; launchHostId?: string } = {}) {
   if (typeof window !== 'undefined' && window.top !== window.self) throw new Error('Open Game Studio in a new tab to sign in.');
   const destination = loginReturnPath(returnTo);
+  if (options.launchHostId !== undefined && (!options.replaceSession || !/^[a-z][a-z0-9_-]{0,63}$/.test(options.launchHostId))) throw new Error('Use a configured host before starting connected sign-in.');
+  // An older session check must not clear credentials for this new attempt.
+  sessionGeneration++;
+  if (options.replaceSession) { sessionStorage.removeItem(tokenKey);sessionStorage.removeItem(flowKey); }
+  callback = undefined;
+  // Replacement credentials are gone before a quota/storage failure can stop
+  // host persistence or the PKCE setup. Reload cannot restore the old account.
+  if (options.launchHostId !== undefined) sessionStorage.setItem('game-studio-launch-host',options.launchHostId);
   const c = config(), verifier = b64(crypto.getRandomValues(new Uint8Array(48))), state = b64(crypto.getRandomValues(new Uint8Array(32)));
   const challenge = b64(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier))));
   sessionStorage.setItem(flowKey, JSON.stringify({ verifier, state, at: Date.now(), returnTo: destination }));
@@ -83,20 +107,27 @@ export function completeCoreLogin(): Promise<void> {
 async function accessToken(): Promise<string> {
   const t = readTokens(); if (!t) throw new Error('Sign in through Core to continue.');
   if (t.expires_at > Date.now() + 15000) return t.access_token;
-  if (!t.refresh_token) { sessionStorage.removeItem(tokenKey); throw new Error('Sign in through Core again.'); }
+  if (!t.refresh_token) throw new CoreSessionExpiredError('This Game Studio session expired. Sign in through Core again.');
   if (!refresh) {
     const generation = sessionGeneration;
-    refresh = exchange({ grant_type: 'refresh_token', refresh_token: t.refresh_token }, generation).catch(e => { if (generation === sessionGeneration) sessionStorage.removeItem(tokenKey); throw e; }).finally(() => { refresh = undefined; });
+    // An outage or permission/configuration error must remain visible; it is
+    // not evidence that the user's credentials expired.
+    refresh = exchange({ grant_type: 'refresh_token', refresh_token: t.refresh_token }, generation).finally(() => { refresh = undefined; });
   }
   return (await refresh).access_token;
 }
 export async function coreRequest<T>(path: string, method = 'GET', body?: unknown, protectedRequest = true): Promise<T> {
   const c = config(), headers: Record<string, string> = {};
   if (protectedRequest) headers.Authorization = `Bearer ${await accessToken()}`;
+  const generation = sessionGeneration;
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   const r = await fetch(`${c.api_url.replace(/\/$/, '')}${path}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body), credentials: 'omit', redirect: 'error' });
   const data = await r.json();
-  if (!r.ok) throw Object.assign(new Error(data.error || 'The publishing service could not complete the request.'), { status: r.status });
+  if (!r.ok) {
+    const message = data.error || 'The publishing service could not complete the request.';
+    if (protectedRequest && method === 'GET' && ['/session', '/game-scores/session'].includes(path) && r.status === 401) throw new CoreSessionExpiredError(message, generation);
+    throw Object.assign(new Error(message), { status: r.status });
+  }
   return data as T;
 }
 export async function coreSession(): Promise<boolean> {

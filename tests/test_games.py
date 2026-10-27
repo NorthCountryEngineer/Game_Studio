@@ -97,6 +97,26 @@ class GameTests(unittest.TestCase):
         self.assertFalse(settings['canPublish']); self.assertFalse(settings['canManage'])
         self.assertFalse(settings['canAdminContent'])
 
+    def test_host_navigation_cannot_grant_creation_and_delegated_creation_admin_remains_valid(self):
+        event = {**self.event(), 'queryStringParameters': {'host': 'academy', 'login': 'auto', 'role': 'administrator'}}
+        before = deepcopy(self.database.rows)
+        for permissions in [[], ['games-play'], ['games-publish'], ['games-manage'], ['admin']]:
+            self.claims['permissions'] = permissions
+            self.error(403, lambda: games.dispatch(self.api, event, 'POST', '/games', {'id': GAME, 'prompt': 'A private pond game'}))
+        self.assertEqual(self.database.rows, before)
+        self.claims['permissions'] = ['games-create']
+        created = games.dispatch(self.api, event, 'POST', '/games', {'id': GAME, 'prompt': 'A private pond game'})
+        self.assertEqual(created['id'], GAME)
+        self.assertTrue(games.settings(self.api, self.claims)['canCreate'])
+        self.assertFalse(games.settings(self.api, self.claims)['canPublish'])
+        tested = self.finish_test(created)
+        self.error(403, lambda: games.dispatch(self.api, event, 'POST', '/games/' + GAME + '/publish', {'revision': tested['revision']}))
+        self.claims['permissions'].append('games-publish')
+        published = games.dispatch(self.api, event, 'POST', '/games/' + GAME + '/publish', {'revision': tested['revision']})
+        self.assertEqual(published['status'], 'Published')
+        self.assertNotIn('games-manage', self.claims['permissions'])
+        self.provider.converse.assert_not_called()
+
     def test_guided_creation_has_private_chat_and_no_provider(self):
         state = self.create(prompt='a space platformer, collect 12, 90 seconds, 3 lives')
         self.assertEqual(state['spec']['genre'], 'platformer'); self.assertEqual(state['spec']['theme'], 'space')

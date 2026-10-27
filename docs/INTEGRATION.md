@@ -10,13 +10,18 @@ import { createCreatorURL } from 'https://YOUR_STUDIO_ORIGIN/sdk/game-studio.js'
 // Render only in the host application's authorized administrative UI.
 creatorLink.href = createCreatorURL('https://YOUR_STUDIO_ORIGIN', {
   hostId: 'academy',
+  autoLogin: true,
   // gameId: 'EXISTING_PRIVATE_GAME_UUID' // optional: edit an existing game
 });
 creatorLink.target = '_blank';
 creatorLink.rel = 'noopener noreferrer';
 ```
 
-The creator opens as a full page, uses its own Core service audience and provides a configured **Return to application** link. The host's role is never trusted as Game Studio authority. Ask a Game Studio administrator for the delegated creation/publishing role. There is no automatic account or role provisioning.
+The creator opens as a full page, uses its own Core service audience and provides a configured **Return to application** link. `autoLogin: true` adds `login=auto` and requires a host ID. Game Studio hides previous-account authority while a syntactically valid connected entry waits for host configuration; syntax cannot authorize navigation or clear credentials. It accepts the sign-in request only for an operator-configured host on the top-level creator route, after loading configuration and checking its own session. Every valid explicit host entry reasserts Core's current browser account, including when Game Studio still has a session for a previously selected user. It consumes the flag and clears its own prior local credentials before persisting host metadata or starting PKCE. A storage failure cannot restore the previous target account on reload. It does not sign out Core or the host application. Cancellation, callback errors and reloads cannot restart the flow or restore the previous target account. Ordinary visits without `login=auto` reuse Game Studio's existing session.
+
+The callback rechecks the current account's Game Studio permissions; a player without creation authority remains denied and receives no retry or extra grant. A confirmed expired Game Studio session (its own session-check 401 or rejected refresh grant) also permits the one requested sign-in attempt. Network, configuration, service-unavailable and permission failures remain visible and require an explicit retry.
+
+Core already federates the identity: an active Core browser session and remembered Game Studio consent complete this redirect without entering credentials again. First-time Game Studio consent or an expired Core browser session can still require a Core page, even when the host's separate session remains valid. No host token, identity claim or role crosses the application boundary. The host's role is never trusted as Game Studio authority. Creation requires the explicit `games-create` permission, supplied by Game Studio's delegated Game creation administrator, Game publishing administrator or full administrator roles. Publication additionally requires `games-publish`; broad settings/deletion authority in `games-manage` is not required to create. Assign the intended people an explicit Game Studio role through Core's normal account administration. There is no automatic account or role provisioning, and local Academy student/parent accounts gain no Core identity or creator access.
 
 After publication, **Use this game in APPLICATION** returns to the configured host path with `gameStudioOrigin`, `gameStudioGameId` and `gameStudioRevision` query values. `readGameSelection(location.href, expectedStudioOrigin)` validates this public selection envelope. The host must check the game is currently published through the public API and ask its administrator to attach it to the intended lesson/page. This navigation never saves host content, changes permissions or proves who made the selection.
 
