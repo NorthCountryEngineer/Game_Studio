@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { connectMultiplayer, createMultiplayerInvitation, loadMultiplayerAPI, multiplayerRequest, parseMultiplayerInvitation, sameMultiplayerPublication, watchMultiplayerInvitations, validateMultiplayerAPIConfig, validateMultiplayerRoom, validateMultiplayerLobby, validateMultiplayerServerMessage, validateMultiplayerSocketURL, type MultiplayerRoom, type MultiplayerSocket } from '../src/lib/game-multiplayer.ts';
+import { connectMultiplayer, createMultiplayerInvitation, loadMultiplayerAPI, multiplayerRequest, parseMultiplayerInvitation, sameMultiplayerPublication, watchMultiplayerInvitations, validateMultiplayerAPIConfig, validateMultiplayerRoom, validateMultiplayerLobby, validateMultiplayerServerMessage, isTransientMultiplayerServiceError, validateMultiplayerSocketURL, type MultiplayerRoom, type MultiplayerSocket } from '../src/lib/game-multiplayer.ts';
 import { setCooperativeMode, updateArcadeLevelPlan } from '../src/lib/game-multiplayer-design.ts';
 import { defaultGameSpec, planGameLevels, validateGameSpec } from '../src/lib/game-design.ts';
 import { defaultWordGameSpec } from '../src/lib/word-game-design.ts';
@@ -80,7 +80,7 @@ test('the relay is explicitly configured independently of the Core API', () => {
 test('host authenticates in the first body and accepts only monotonic guest controls', () => {
   const t = connection();
   try {
-    t.ready(); assert.equal(t.socket.url.includes(token), false); assert.deepEqual(t.socket.sent[0], { type: 'join', roomId: id, token, leaseVersion: 1 });
+    t.ready(); assert.equal(t.socket.url.includes(token), false); assert.deepEqual(t.socket.sent[0], { type: 'join', roomId: id, token, leaseVersion: 1, flowVersion: 1 });
     assert.equal(t.statuses.at(-1), 'connected');
     const beforeHeartbeat = t.peers.length; t.socket.message({ type: 'peer', connected: true }); assert.equal(t.peers.length, beforeHeartbeat, 'heartbeat must not clear held controls');
     t.socket.message({ type: 'input', seq: 2, mask: 32 }); t.socket.message({ type: 'input', seq: 1, mask: 1 }); t.socket.message({ type: 'input', seq: 2, mask: 2 });
@@ -161,7 +161,7 @@ test('reconnect reuses the in-memory seat and capability, preserving sequence or
   try {
     c.ready(); c.socket.message({ type: 'state', seq: 5, state: { tick: 1 } }); c.socket.disconnect();
     assert.equal(c.statuses.at(-1), 'reconnecting'); t.mock.timers.tick(500); assert.equal(c.sockets.length, 2);
-    const resumed = c.sockets[1]; resumed.open(); assert.deepEqual(resumed.sent[0], { type: 'join', roomId: id, token, leaseVersion: 1 }); assert.equal(resumed.url.includes(token), false);
+    const resumed = c.sockets[1]; resumed.open(); assert.deepEqual(resumed.sent[0], { type: 'join', roomId: id, token, leaseVersion: 1, flowVersion: 1 }); assert.equal(resumed.url.includes(token), false);
     resumed.message({ type: 'ready', ...publication, roomId: id, seat: 1, expiresAt: room.expiresAt }); resumed.message({ type: 'peer', connected: true });
     resumed.message({ type: 'state', seq: 4, state: { tick: 1 } }); resumed.message({ type: 'state', seq: 6, state: { tick: 1 } });
     assert.deepEqual(c.states, [{ seq: 5, state: { tick: 1 } }, { seq: 6, state: { tick: 1 } }]);
@@ -229,7 +229,7 @@ test('authoritative rolling leases keep the same room connected for two hours an
     c.socket.disconnect(); t.mock.timers.tick(500);
     assert.equal(c.sockets.length, 2);
     const resumed = c.sockets[1]; resumed.open();
-    assert.deepEqual(resumed.sent[0], { type: 'join', roomId: id, token, leaseVersion: 1 });
+    assert.deepEqual(resumed.sent[0], { type: 'join', roomId: id, token, leaseVersion: 1, flowVersion: 1 });
     // A ready message can reflect a slightly earlier admitted lease without rolling back the timer.
     resumed.message({ type: 'ready', ...publication, roomId: id, seat: 1, expiresAt: Math.floor(Date.now() / 1000) + 1790 });
     resumed.message({ type: 'lease', expiresAt: Math.floor(Date.now() / 1000) + 1800 });
@@ -332,5 +332,136 @@ test('a stale reconnect ready preserves the newer accepted lease without admitti
     assert.equal(Date.now() - now, 1800500);
     assert.equal(c.statuses.at(-1), 'connected', 'the descriptor/ready deadline cannot replace an accepted newer lease');
     t.mock.timers.tick(9500); assert.equal(c.statuses.at(-1), 'expired', 'pongs cannot further extend the newest lease');
+  } finally { c.client.close(); }
+});
+
+test('flow control keeps one packet in flight and coalesces a thousand updates to the latest immutable snapshot', () => {
+  const c = connection();
+  try {
+    c.ready(); c.client.sendState(1, { tick: 1 });
+    const snapshot = { tick: 1 };
+    for (let seq = 2; seq <= 1000; seq++) c.client.sendState(seq, snapshot);
+    snapshot.tick = 2;
+    assert.equal(c.socket.sent.length, 2, 'the join and one unacknowledged state are the only writes');
+    for (const invalid of [{ type: 'ack', kind: 'input', seq: 1 }, { type: 'ack', kind: 'state', seq: 999 }]) c.socket.message(invalid);
+    assert.equal(c.socket.sent.length, 2, 'an unrelated ACK cannot release backpressure');
+    c.socket.message({ type: 'ack', kind: 'state', seq: 1 });
+    assert.deepEqual(c.socket.sent.slice(1), [{ type: 'state', seq: 1, state: { tick: 1 } }, { type: 'state', seq: 1000, state: { tick: 1 } }]);
+    c.socket.message({ type: 'ack', kind: 'state', seq: 1 });
+    assert.equal(c.socket.sent.length, 3, 'a duplicate ACK cannot resend queued history');
+    c.socket.message({ type: 'ack', kind: 'state', seq: 1000 });
+    c.client.sendState(1001, { tick: 1 });
+    assert.deepEqual(c.socket.sent.at(-1), { type: 'state', seq: 1001, state: { tick: 1 } }, 'new input remains responsive after ACK');
+  } finally { c.client.close(); }
+});
+
+test('guest controls coalesce without replaying intermediate masks and a synchronous ACK is safe', () => {
+  const c = connection(1);
+  try {
+    c.ready(); c.client.sendInput(1, 1);
+    for (let seq = 2; seq <= 1000; seq++) c.client.sendInput(seq, seq === 1000 ? 0 : 32);
+    assert.deepEqual(c.socket.sent.slice(1), [{ type: 'input', seq: 1, mask: 1 }]);
+    c.socket.message({ type: 'ack', kind: 'input', seq: 1 });
+    assert.deepEqual(c.socket.sent.at(-1), { type: 'input', seq: 1000, mask: 0 });
+    c.socket.message({ type: 'ack', kind: 'input', seq: 1000 });
+    c.socket.onSend = value => { if (value.type === 'input') c.socket.message({ type: 'ack', kind: 'input', seq: value.seq }); };
+    c.client.sendInput(1001, 4); c.client.sendInput(1002, 0);
+    assert.deepEqual(c.socket.sent.slice(-2), [{ type: 'input', seq: 1001, mask: 4 }, { type: 'input', seq: 1002, mask: 0 }]);
+  } finally { c.client.close(); }
+});
+
+test('ACK timeout reconnects the same host seat and sends only its latest paused state after fresh admission', t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'], now });
+  const c = connection(0, 45000, () => Date.now());
+  try {
+    c.ready(); c.client.sendState(1, { tick: 1 }); c.client.sendState(2, { tick: 1 });
+    t.mock.timers.tick(4999); c.socket.message({ type: 'pong' });
+    assert.equal(c.sockets.length, 1);
+    t.mock.timers.tick(1); assert.equal(c.statuses.at(-1), 'reconnecting'); assert.equal(c.peers.at(-1), false); assert.equal(c.socket.closes, 1);
+    c.client.sendState(3, { tick: 1 });
+    t.mock.timers.tick(500); const resumed = c.sockets[1]; resumed.open();
+    resumed.message({ type: 'ready', ...publication, roomId: id, seat: 0, expiresAt: room.expiresAt });
+    assert.equal(resumed.sent.length, 1, 'data must wait for both fresh admission and the peer');
+    resumed.message({ type: 'peer', connected: true });
+    assert.deepEqual(resumed.sent.slice(1), [{ type: 'state', seq: 3, state: { tick: 1 } }]);
+    c.client.sendState(4, { tick: 1 }); c.socket.message({ type: 'ack', kind: 'state', seq: 3 });
+    assert.equal(resumed.sent.length, 2, 'old socket callbacks cannot acknowledge a new flight');
+    resumed.message({ type: 'ack', kind: 'state', seq: 3 });
+    assert.deepEqual(resumed.sent.at(-1), { type: 'state', seq: 4, state: { tick: 1 } });
+  } finally { c.client.close(); }
+});
+
+test('guest reconnect drops held and queued controls until the frame supplies fresh input', t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'], now });
+  const c = connection(1, 45000, () => Date.now());
+  try {
+    c.ready(); c.client.sendInput(1, 63); c.client.sendInput(2, 32); c.socket.disconnect();
+    c.client.sendInput(3, 32); // A disconnected frame cannot enqueue controls.
+    t.mock.timers.tick(500); const resumed = c.sockets[1]; resumed.open();
+    resumed.message({ type: 'ready', ...publication, roomId: id, seat: 1, expiresAt: room.expiresAt }); resumed.message({ type: 'peer', connected: true });
+    assert.equal(resumed.sent.length, 1, 'cached nonzero masks must never be replayed');
+    c.client.sendInput(4, 0); assert.deepEqual(resumed.sent.at(-1), { type: 'input', seq: 4, mask: 0 });
+    c.socket.message({ type: 'ack', kind: 'input', seq: 4 }); c.client.sendInput(5, 1);
+    assert.equal(resumed.sent.length, 2, 'an old socket ACK cannot release fresh controls');
+    resumed.message({ type: 'ack', kind: 'input', seq: 4 }); assert.deepEqual(resumed.sent.at(-1), { type: 'input', seq: 5, mask: 1 });
+  } finally { c.client.close(); }
+});
+
+test('Gateway failures are a separate exact bounded transport classification, never permissive game messages', () => {
+  const base = { message: 'Internal server error', connectionId: 'syntheticConnection=', requestId: 'syntheticRequest=' };
+  for (const message of ['Internal server error', 'Internal Server Error', 'Endpoint request timed out', 'Endpoint request timed out.', 'Too Many Requests', 'Limit Exceeded']) {
+    const raw = JSON.stringify({ ...base, message }); assert.equal(isTransientMultiplayerServiceError(raw), true); assert.equal(validateMultiplayerServerMessage(raw, strictState), undefined);
+  }
+  for (const invalid of [null, [], { message: base.message }, { ...base, type: 'state' }, { ...base, state: { tick: 1 } }, { ...base, token }, { ...base, message: 'anything' }, { ...base, connectionId: '<script>' }, { ...base, requestId: 'x'.repeat(129) }, { ...base, requestId: '\nprivate' }]) assert.equal(isTransientMultiplayerServiceError(JSON.stringify(invalid)), false);
+  for (const invalid of ['{', 'x'.repeat(1025), new Blob()]) assert.equal(isTransientMultiplayerServiceError(invalid), false);
+  for (const invalid of [{ type: 'ack', kind: 'input', seq: 0 }, { type: 'ack', kind: 'other', seq: 1 }, { type: 'ack', kind: 'state', seq: 1, token }, { type: 'ack', kind: 'input', seq: 1.2 }]) assert.equal(validateMultiplayerServerMessage(JSON.stringify(invalid), strictState), undefined);
+  assert.deepEqual(validateMultiplayerServerMessage(JSON.stringify({ type: 'ack', kind: 'state', seq: 1 }), strictState), { type: 'ack', kind: 'state', seq: 1 });
+});
+
+test('known Gateway errors reconnect without granting a lease while unknown frames still terminate', t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'], now });
+  const c = connection(0, 45000, () => Date.now());
+  try {
+    c.ready(); c.socket.message({ message: 'Internal server error', connectionId: 'safe=', requestId: 'safe=' });
+    assert.equal(c.statuses.at(-1), 'reconnecting'); assert.equal(c.socket.closes, 1);
+    t.mock.timers.tick(500); const resumed = c.sockets[1]; resumed.open();
+    resumed.message({ type: 'ready', ...publication, roomId: id, seat: 0, expiresAt: room.expiresAt }); resumed.message({ type: 'peer', connected: true });
+    assert.equal(c.statuses.at(-1), 'connected');
+    resumed.message({ message: 'new untrusted protocol', connectionId: 'safe=', requestId: 'safe=' });
+    assert.equal(c.statuses.at(-1), 'ended:invalid-message');
+  } finally { c.client.close(); }
+});
+
+test('repeated service failures cannot reset the recovery budget through successful ready handshakes', t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'], now });
+  const c = connection(0, 45000, () => Date.now());
+  const failed = new Set<FakeSocket>();
+  try {
+    c.ready();
+    for (let tick = 0; tick < 45; tick++) {
+      const socket = c.sockets.at(-1)!;
+      if (!failed.has(socket)) {
+        if (socket.readyState !== 1) { socket.open(); socket.message({ type: 'ready', ...publication, roomId: id, seat: 0, expiresAt: room.expiresAt }); socket.message({ type: 'peer', connected: true }); }
+        socket.message({ message: 'Internal server error', connectionId: 'safe=', requestId: 'safe=' }); failed.add(socket);
+      }
+      t.mock.timers.tick(1000);
+    }
+    assert.equal(c.statuses.at(-1), 'ended:connection-lost'); assert.ok(c.sockets.length > 2 && c.sockets.length < 20);
+    const attempts = c.sockets.length; t.mock.timers.tick(120000); assert.equal(c.sockets.length, attempts);
+  } finally { c.client.close(); }
+});
+
+test('thirty healthy seconds of real pongs reset an outage budget rather than imposing a room age cap', t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'], now });
+  const c = connection(0, 45000, () => Date.now());
+  try {
+    c.ready(); c.socket.message({ message: 'Internal server error', connectionId: 'safe=', requestId: 'safe=' });
+    t.mock.timers.tick(500); const resumed = c.sockets[1]; resumed.open();
+    resumed.message({ type: 'ready', ...publication, roomId: id, seat: 0, expiresAt: room.expiresAt }); resumed.message({ type: 'peer', connected: true });
+    resumed.onSend = value => { if (value.type === 'ping') resumed.message({ type: 'pong' }); };
+    for (let tick = 0; tick < 6; tick++) t.mock.timers.tick(10000);
+    assert.equal(c.statuses.at(-1), 'connected'); assert.equal(resumed.closes, 0);
+    resumed.message({ message: 'Too Many Requests', connectionId: 'safe=', requestId: 'safe=' });
+    assert.equal(c.statuses.at(-1), 'reconnecting', 'a recovered room has a new bounded outage episode');
   } finally { c.client.close(); }
 });

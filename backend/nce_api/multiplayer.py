@@ -641,9 +641,11 @@ def connect(api, event):
 
 
 def admit(api, connection, body):
-    fields(body, ('type', 'roomId', 'token'), ('leaseVersion',))
+    fields(body, ('type', 'roomId', 'token'), ('leaseVersion', 'flowVersion'))
     if 'leaseVersion' in body and (type(body['leaseVersion']) is not int or body['leaseVersion'] != 1):
         fail('Unsupported multiplayer lease protocol.')
+    if 'flowVersion' in body and (type(body['flowVersion']) is not int or body['flowVersion'] != 1):
+        fail('Unsupported multiplayer flow protocol.')
     renewable = body.get('leaseVersion') == 1
     identifier(body['roomId'])
     supplied = digest(body['token'])
@@ -675,7 +677,8 @@ def admit(api, connection, body):
             legacyExpiresAt1=int(room.get('legacyExpiresAt1', room['expiresAt'])),
             **({'hostConnected': True} if seat == 0 else {'guestAdmitted': True}))
         changed_connection = revision(connection, roomId=room['roomId'], seat=seat, generation=generation,
-            lastSeen=now, expiresAt=connection_expiry, seq=-1, **({'leaseVersion': 1} if renewable else {}))
+            lastSeen=now, expiresAt=connection_expiry, seq=-1, **({'leaseVersion': 1} if renewable else {}),
+            **({'flowVersion': 1} if body.get('flowVersion') == 1 else {}))
         lobby_operations = lobby_advertise(api, changed_room, expires_at) if seat == 0 else lobby_remove(api, changed_room)
         if transaction(api, [check, put(changed_room, room), put(changed_connection, connection), *lobby_operations]):
             if old_id and old_id != connection['connectionId']:
@@ -707,6 +710,13 @@ def disconnect(api, value):
         if transaction(api, [put(changed, room)]):
             post(api, room.get('connection' + str(1 - seat)), {'type': 'peer', 'connected': False})
             return
+
+
+def acknowledge(api, connection, kind, seq):
+    if connection.get('flowVersion') == 1 and not post(api, connection['connectionId'], {'type': 'ack', 'kind': kind, 'seq': seq}):
+        # Gone is definitive. An undeliverable acknowledgment must not leave
+        # this generation looking connected while the peer keeps simulating.
+        disconnect(api, connection['connectionId'])
 
 
 def message(api, event):
@@ -751,6 +761,7 @@ def message(api, event):
             maximum = 20
         else:
             fail('This player cannot send that multiplayer message.', 403)
+        requested_seq = seq
         duplicate = kind != 'ping' and seq <= int(connection['seq'])
         if duplicate:
             # A concurrent Lambda may finish out of order. Duplicate/older input
@@ -769,6 +780,7 @@ def message(api, event):
             *lobby_advertise(api, room, expires_at)] if renew else [room_check(room)]
         if transaction(api, [check, *lease_operations, put(changed, connection)]):
             if duplicate:
+                acknowledge(api, connection, kind, requested_seq)
                 return
             if kind == 'ping':
                 post(api, value, {'type': 'pong'})
@@ -784,6 +796,7 @@ def message(api, event):
                         # a subsequent heartbeat must not resurrect the lease.
                         disconnect(api, peer_id)
                     post(api, value, {'type': 'peer', 'connected': False})
+                acknowledge(api, connection, kind, requested_seq)
             return
     fail('The relay is busy. Reconnect shortly.', 409)
 

@@ -250,7 +250,8 @@ export function startCooperativeSandbox(engine: ReturnType<typeof createCooperat
         start.hidden = pause.hidden = seat !== 0; parent.postMessage({ type: 'game-coop-loaded', nonce }, '*');
       } catch { announce.textContent = 'This cooperative game could not be loaded safely.'; }
     } else if (data.type === 'game-coop-peer' && exact(['type', 'nonce', 'connected']) && typeof data.connected === 'boolean') {
-      connected = data.connected; clear(); if (!connected && state && seat === 0) { state.paused = true; emitState(); }
+      connected = data.connected; clear(); lastMask = -1; inputTimer = 0;
+      if (state && seat === 0) { if (!connected) state.paused = true; emitState(); }
       announce.textContent = connected ? seat === 0 ? 'Partner connected. Start or resume when ready.' : 'Connected. The host starts or resumes the game.' : 'Waiting for your partner. Play is paused.';
     } else if (spec && data.type === 'game-coop-input' && seat === 0 && exact(['type', 'nonce', 'seq', 'mask']) && Number.isInteger(data.seq) && data.seq > remoteSeq && data.seq <= 10000000 && Number.isInteger(data.mask) && data.mask >= 0 && data.mask <= 63) { remoteSeq = data.seq; remoteMask = connected ? data.mask : 0; remoteAge = 0; }
     else if (spec && data.type === 'game-coop-state' && seat === 1 && exact(['type', 'nonce', 'seq', 'state']) && Number.isInteger(data.seq) && data.seq > remoteSeq && data.seq <= 10000000) { const checked = validateState(data.state, spec); if (checked) { remoteSeq = data.seq; state = checked; } }
@@ -286,8 +287,13 @@ export function startCooperativeSandbox(engine: ReturnType<typeof createCooperat
     remoteAge += dt;
     if (seat === 0 && state && spec && connected && state.running && !state.paused && state.outcome === 'playing') { accumulator += dt; while (accumulator >= 1 / 60) { engine.step(state, spec, [mask(), remoteAge <= 0.5 ? remoteMask : 0], 1 / 60); accumulator -= 1 / 60; } } else accumulator = 0;
     broadcast += dt; inputTimer += dt;
-    if (seat === 0 && connected && broadcast >= 0.1) { broadcast = 0; emitState(); }
-    if (seat === 1 && connected && spec && (inputTimer >= 0.1 || mask() !== lastMask)) { inputTimer = 0; lastMask = mask(); parent.postMessage({ type: 'game-coop-input', nonce, seq: ++seq, mask: lastMask }, '*'); }
+    // Active worlds stay responsive; a paused world needs only an occasional
+    // resync. Changes to start, pause and connection state emit immediately.
+    const stateInterval = state?.running && !state.paused && state.outcome === 'playing' ? 0.1 : 2;
+    if (seat === 0 && connected && broadcast >= stateInterval) { broadcast = 0; emitState(); }
+    // Released controls do not need continuous zero packets. Held controls
+    // refresh before the host's existing half-second stale-input watchdog.
+    if (seat === 1 && connected && spec && (mask() !== lastMask || mask() !== 0 && inputTimer >= 0.2)) { inputTimer = 0; lastMask = mask(); parent.postMessage({ type: 'game-coop-input', nonce, seq: ++seq, mask: lastMask }, '*'); }
     draw(); requestAnimationFrame(frame);
   }
   parent.postMessage({ type: 'game-coop-ready', nonce }, '*'); requestAnimationFrame(frame);

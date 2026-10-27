@@ -171,3 +171,20 @@ test('host backgrounding immediately publishes a pause before RAF suspension and
   const guest = sandboxHarness(1); guest.send({ type: 'game-coop-peer', connected: true }); guest.key('ArrowRight'); guest.tick(2); assert.equal(guest.messages.at(-1)!.mask, 2);
   guest.visibility(true); assert.equal(guest.messages.at(-1)!.type, 'game-coop-input'); assert.equal(guest.messages.at(-1)!.mask, 0); assert.equal(guest.messages.some(m => m.state), false);
 });
+
+test('idle rooms avoid gameplay packet floods while active worlds and held controls still refresh', () => {
+  const host = sandboxHarness(0); host.send({ type: 'game-coop-peer', connected: true });
+  const initial = host.messages.filter(message => message.type === 'game-coop-state').length;
+  host.tick(600);
+  const idle = host.messages.filter(message => message.type === 'game-coop-state').length - initial;
+  assert.ok(idle >= 4 && idle <= 5, `idle state refreshes: ${idle}`);
+  host.click('start'); const running = host.messages.filter(message => message.type === 'game-coop-state').length;
+  host.tick(60); assert.ok(host.messages.filter(message => message.type === 'game-coop-state').length - running >= 8);
+  const guest = sandboxHarness(1); guest.send({ type: 'game-coop-peer', connected: true }); guest.tick(600);
+  assert.equal(guest.messages.filter(message => message.type === 'game-coop-input').length, 1, 'one initial released-control packet');
+  guest.key('ArrowRight'); guest.tick(60);
+  const held = guest.messages.filter(message => message.type === 'game-coop-input' && message.mask === 2);
+  assert.ok(held.length >= 4 && held.length <= 6, `held refreshes: ${held.length}`);
+  guest.send({ type: 'game-coop-peer', connected: false }); guest.send({ type: 'game-coop-peer', connected: true }); guest.tick();
+  assert.equal(guest.messages.at(-1)!.mask, 0, 'a reconnect sends fresh released controls');
+});
