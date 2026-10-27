@@ -94,8 +94,11 @@ def publication(api, game_id, revision):
     return spec, item
 
 
-def max_points(spec, levels):
+def max_points(spec, levels, elapsed=None):
     if not spec.get('arcade', {}).get('scoring'): return 0
+    if spec['version'] == 6:
+        duration = elapsed if elapsed is not None else 2147483647 if games().is_endless_asteroids(spec) else sum(level['rules']['timeLimit'] for level in levels)
+        return min(2147483647, math.ceil(duration * 2000) + 2000)
     return sum(level['rules']['goal'] * 10 + (math.ceil(level['rules']['timeLimit'] / 0.5) + 8) *
         (120 if spec['arcade']['splitAsteroids'] else 20) for level in levels)
 
@@ -111,6 +114,13 @@ def validate_result(value, spec):
     if not isinstance(ids, list) or not ids or any(not isinstance(item, str) for item in ids) or ids != [level['id'] for level in levels[:len(ids)]]:
         fail('The played levels do not match this published game.')
     played = levels[:len(ids)]
+    if games().is_endless_asteroids(spec):
+        if value['outcome'] != 'lost' or ids != [levels[0]['id']]: fail('Endless rounds end with lost lives on the first saved level.')
+        elapsed = value['elapsed']
+        if type(elapsed) not in {int, float} or not math.isfinite(elapsed) or not 0 < elapsed <= 2147483647: fail('The round duration is outside its allowed range.')
+        integer(value['score'], 0, min(2147483647, math.ceil(elapsed * 20) + 40), 'Collection progress')
+        integer(value['points'], 1, max_points(spec, played, elapsed), 'Points')
+        return deepcopy(value)
     maximum = sum(level['rules']['goal'] for level in played)
     score = integer(value['score'], 0, maximum, 'Collection progress')
     if score < sum(level['rules']['goal'] for level in played[:-1]): fail('Previous levels must be completed first.')
@@ -119,7 +129,7 @@ def validate_result(value, spec):
     elapsed = value['elapsed']
     if type(elapsed) not in {int, float} or not math.isfinite(elapsed) or not 0 < elapsed <= sum(level['rules']['timeLimit'] for level in played):
         fail('The round duration is outside its allowed range.')
-    integer(value['points'], 1, max_points(spec, played), 'Points')
+    integer(value['points'], 1, max_points(spec, played, elapsed), 'Points')
     return deepcopy(value)
 
 

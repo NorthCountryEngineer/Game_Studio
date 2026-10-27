@@ -3,9 +3,10 @@ import { test } from 'node:test';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import ts from 'typescript';
-import { defaultGameSpec, validateGameSpec } from '../src/lib/game-design.ts';
+import { defaultGameSpec, updateAsteroidSettings, validateGameSpec } from '../src/lib/game-design.ts';
 import { createGameEngine, validateGameResult } from '../src/lib/game-runtime.ts';
 import type { Game, GameResult } from '../src/lib/game-types.ts';
+import type { ArcadeGameSpec } from '../src/lib/game-types.ts';
 import { defaultWordGameSpec } from '../src/lib/word-game-design.ts';
 
 const id = '11111111-1111-4111-8111-111111111111';
@@ -27,6 +28,19 @@ function harness(connected = false) {
   vm.runInNewContext(js, { exports: api, require: (name: string) => name === './core' ? core : name === './game-design' ? { validateGameSpec } : name === './game-runtime' ? { createGameEngine, validateGameResult } : {}, localStorage: storage, TextEncoder, Date, JSON, Error });
   return { api, storage, values, calls, respond: (value: unknown) => { response = value; } };
 }
+
+test('endless editions retain casual boards, reject invented wins and preserve existing saved scores', () => {
+  const h = harness(), legacy = game();
+  h.api.saveLocalGameScore(legacy, report());
+  const endless: Game = { ...game(3), spec: updateAsteroidSettings(game().spec as ArcadeGameSpec, { endless: true }) };
+  const run = { requestId: request(50), name: 'Long Run', result: { outcome: 'lost', elapsed: 100000, score: 1000, points: 1500000, reviewedLevelIds: ['level-1'] } };
+  assert.equal(h.api.saveLocalGameScore(endless, run).entries[0].points, 1500000);
+  for (const invalid of [{ ...run.result, outcome: 'won' }, { ...run.result, outcome: 'level-complete' }, { ...run.result, elapsed: 1, points: 1000000 }, { ...run.result, reviewedLevelIds: ['level-2'] }]) assert.throws(() => h.api.saveLocalGameScore(endless, { ...run, requestId: request(51), result: invalid }));
+  assert.equal(h.api.getLocalGameScores(legacy).entries[0].points, 100);
+  assert.equal(h.api.getLocalGameScores(endless).entries[0].points, 1500000);
+  const cooperative = { ...endless, spec: { ...endless.spec, multiplayer: { mode: 'cooperative', maxPlayers: 2 } } };
+  assert.throws(() => h.api.getLocalGameScores(cooperative), /disabled/);
+});
 
 test('arcade names are bounded, plain ASCII nicknames with consistent normalization', () => {
   const { api } = harness();

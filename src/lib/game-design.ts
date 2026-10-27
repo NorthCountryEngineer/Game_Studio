@@ -1,4 +1,4 @@
-import type { ArcadeGameSpec, GameArcadeOptions, GameLevel, GamePowerUps, GameSpec } from './game-types';
+import type { ArcadeGameSpec, GameAsteroidEnemies, GameAsteroidSettings, GameArcadeOptions, GameLevel, GamePowerUps, GameSpec } from './game-types';
 import { createWordGameEngine } from './word-game-engine';
 import { designWordGame, wordGameGenre } from './word-game-design';
 
@@ -19,9 +19,9 @@ export function validateArcadeGameSpec(value: unknown): ArcadeGameSpec {
     return input;
   }
   const version = value && typeof value === 'object' ? (value as Record<string, unknown>).version : undefined;
-  if (version !== 1 && version !== 2 && version !== 4 && version !== 5) throw new Error('Unsupported game version.');
+  if (version !== 1 && version !== 2 && version !== 4 && version !== 5 && version !== 6) throw new Error('Unsupported game version.');
   const hasArcade = Object.prototype.hasOwnProperty.call(value, 'arcade');
-  const spec = object(value, ['version', 'title', 'description', 'genre', 'theme', 'player', 'rules', 'objects', 'instructions', ...(version !== 1 ? ['progression', 'levels'] : []), ...(version === 4 || version === 5 && Object.prototype.hasOwnProperty.call(value, 'multiplayer') ? ['multiplayer'] : []), ...(version === 5 ? ['powerUps'] : []), ...(hasArcade ? ['arcade'] : [])], 'Game');
+  const spec = object(value, ['version', 'title', 'description', 'genre', 'theme', 'player', 'rules', 'objects', 'instructions', ...(version !== 1 ? ['progression', 'levels'] : []), ...(version === 4 || (version === 5 || version === 6) && Object.prototype.hasOwnProperty.call(value, 'multiplayer') ? ['multiplayer'] : []), ...(version === 5 || version === 6 && Object.prototype.hasOwnProperty.call(value, 'powerUps') ? ['powerUps'] : []), ...(version === 6 ? ['asteroids'] : []), ...(hasArcade ? ['arcade'] : [])], 'Game');
   const player = object(spec.player, ['name', 'color', 'speed', 'jump'], 'Player');
   const rules = object(spec.rules, ['goal', 'timeLimit', 'lives', 'difficulty'], 'Rules');
   const objects = object(spec.objects, ['collectible', 'hazard'], 'Objects');
@@ -58,12 +58,21 @@ export function validateArcadeGameSpec(value: unknown): ArcadeGameSpec {
       return { id: level.id, title: text(level.title, 80, 'Level title'), brief: text(level.brief, 300, 'Level brief'), theme: level.theme as GameLevel['theme'], seed: integer(level.seed, 1, 2147483647, 'Layout seed'), rules: { goal: integer(settings.goal, 3, 40, 'Level goal'), timeLimit: integer(settings.timeLimit, 30, 180, 'Level time'), lives: integer(settings.lives, 1, 5, 'Level lives'), difficulty: integer(settings.difficulty, 1, 5, 'Level difficulty') } };
     });
   }
-  if (version === 4 || version === 5 && Object.prototype.hasOwnProperty.call(spec, 'multiplayer')) {
+  if (version === 4 || (version === 5 || version === 6) && Object.prototype.hasOwnProperty.call(spec, 'multiplayer')) {
     const multiplayer = object(spec.multiplayer, ['mode', 'maxPlayers'], 'Multiplayer');
     if (multiplayer.mode !== 'cooperative' || multiplayer.maxPlayers !== 2) throw new Error('Multiplayer supports two cooperative players.');
     clean.multiplayer = { mode: 'cooperative', maxPlayers: 2 };
   }
-  if (version === 5) {
+  if (version === 6) {
+    if (clean.genre !== 'dodge' || !clean.arcade?.shooting) throw new Error('Advanced Asteroids requires a dodge game with shooting.');
+    const settings = object(spec.asteroids, ['endless', 'difficultyInterval', 'sizes', 'enemies'], 'Asteroids');
+    const enemies = object(settings.enemies, ['enabled', 'difficulty', 'hitPoints', 'spawnInterval', 'maxShips'], 'Enemy ships');
+    if (typeof settings.endless !== 'boolean' || typeof enemies.enabled !== 'boolean') throw new Error('Asteroids flags must be true or false.');
+    if (settings.sizes !== 2 && settings.sizes !== 3) throw new Error('Choose two or three asteroid sizes.');
+    if (!['easy', 'medium', 'hard'].includes(enemies.difficulty as string)) throw new Error('Choose easy, medium, or hard enemy ships.');
+    clean.asteroids = { endless: settings.endless, difficultyInterval: integer(settings.difficultyInterval, 10, 120, 'Difficulty interval'), sizes: settings.sizes, enemies: { enabled: enemies.enabled, difficulty: enemies.difficulty as GameAsteroidEnemies['difficulty'], hitPoints: integer(enemies.hitPoints, 1, 10, 'Enemy hit points'), spawnInterval: integer(enemies.spawnInterval, 5, 60, 'Enemy spawn interval'), maxShips: integer(enemies.maxShips, 1, 6, 'Maximum enemy ships') } };
+  }
+  if (version === 5 || version === 6 && Object.prototype.hasOwnProperty.call(spec, 'powerUps')) {
     if (clean.genre !== 'dodge' || !clean.arcade?.shooting) throw new Error('Prizes require a dodge game with shooting.');
     const prizes = object(spec.powerUps, ['spawnInterval', 'duration', 'types'], 'Prizes');
     const allowed = ['triple-shot', 'rapid-fire', 'shield', 'speed-boost'];
@@ -95,7 +104,14 @@ function arcadeChallenge(spec: ArcadeGameSpec): string {
 }
 
 function arcadeInstructions(spec: ArcadeGameSpec): string {
-  const goal = spec.version !== 1 ? 'Complete each level’s collection goal.' : `Collect ${spec.rules.goal} ${spec.objects.collectible}s before time runs out.`;
+  if (spec.version === 6 && spec.asteroids) {
+    const controls = spec.arcade?.rotation ? 'Left/Right turn; Up thrust; Down reverse.' : 'Use arrows or WASD to swim.';
+    const goal = spec.asteroids.endless ? 'Survive as long as you can; difficulty rises over time.' : 'Complete each level’s collection goal.';
+    const shooting = !spec.arcade?.splitAsteroids ? 'Space fires; one shot destroys an asteroid.' : spec.asteroids.sizes === 3 ? 'Space fires. Large rocks split into two medium, then four small pieces.' : 'Space fires. Large rocks split into two small pieces.';
+    const enemy = spec.asteroids.enemies.enabled ? ` ${spec.asteroids.enemies.difficulty} enemy ships take ${spec.asteroids.enemies.hitPoints} hit${spec.asteroids.enemies.hitPoints === 1 ? '' : 's'}; ${spec.asteroids.enemies.difficulty === 'easy' ? 'they wander' : spec.asteroids.enemies.difficulty === 'medium' ? 'they track you' : 'dodge aimed shots'}.` : '';
+    return `${controls} ${goal} ${shooting}${enemy}${spec.arcade?.scoring ? ' Earn points as you play.' : ''}`;
+  }
+  const goal = spec.version === 6 && spec.asteroids?.endless ? 'Survive as long as you can; difficulty increases over time.' : spec.version !== 1 ? 'Complete each level’s collection goal.' : `Collect ${spec.rules.goal} ${spec.objects.collectible}s before time runs out.`;
   const points = spec.arcade?.scoring ? ` Points: snacks 10${spec.arcade.shooting ? ', large hits 20' : ''}${spec.arcade.splitAsteroids ? ', small pieces 50' : ''}.` : '';
   return `${arcadeControls(spec)} ${goal} ${arcadeChallenge(spec)}${points}`;
 }
@@ -142,7 +158,7 @@ export function planGameLevels(spec: ArcadeGameSpec, count: number, seedText: st
     const focus = count === 1 ? 'Explore the world at your own pace.' : index === 0 ? 'Learn the controls with a smaller collection goal and fewer obstacles.' : index === count - 1 ? 'Put your practice together with the full collection goal and the strongest challenge.' : 'Practice finding treasures while watching a more varied obstacle pattern.';
     return { id: `level-${index + 1}`, title: stage, brief: spec.arcade ? arcadeLevelBrief(spec, goal, index === 0 ? 'Learn the controls.' : index === count - 1 ? 'Combine your skills.' : 'Practice with more obstacles.') : `${focus} Collect ${goal} ${spec.objects.collectible}s and avoid ${spec.objects.hazard}s.`, theme: spec.theme, rules: { ...spec.rules, goal, difficulty }, seed: previous[index]?.seed || layoutSeed(`${seedText}|${index + 1}`) };
   });
-  return validateArcadeGameSpec({ ...spec, version: spec.version === 5 ? 5 : spec.version === 4 ? 4 : 2, progression: count === 1 ? 'One complete adventure with a saved layout. Lives and time reset when you retry.' : 'Start with the controls and a smaller goal, practice avoiding obstacles, then finish with the full goal and a greater challenge. Each level starts with fresh lives and time.', levels });
+  return validateArcadeGameSpec({ ...spec, version: spec.version === 6 ? 6 : spec.version === 5 ? 5 : spec.version === 4 ? 4 : 2, progression: count === 1 ? 'One complete adventure with a saved layout. Lives and time reset when you retry.' : 'Start with the controls and a smaller goal, practice avoiding obstacles, then finish with the full goal and a greater challenge. Each level starts with fresh lives and time.', levels });
 }
 
 export function defaultGameSpec(): ArcadeGameSpec {
@@ -151,17 +167,76 @@ export function defaultGameSpec(): ArcadeGameSpec {
 
 export function defaultPowerUps(): GamePowerUps { return { spawnInterval: 12, duration: 10, types: ['triple-shot', 'rapid-fire', 'shield', 'speed-boost'] }; }
 
+/** Explicit controls upgrade the format without rewriting authored levels. */
+export function defaultAsteroidSettings(): GameAsteroidSettings { return { endless: false, difficultyInterval: 30, sizes: 2, enemies: { enabled: false, difficulty: 'easy', hitPoints: 1, spawnInterval: 15, maxShips: 2 } }; }
+export function updateAsteroidSettings(spec: ArcadeGameSpec, patch: Partial<Omit<GameAsteroidSettings, 'enemies'>> & { enemies?: Partial<GameAsteroidEnemies> }): ArcadeGameSpec {
+  if (spec.genre !== 'dodge' || !spec.arcade?.shooting) throw new Error('Enable Asteroids shooting before changing its advanced settings.');
+  const previous = spec.asteroids ?? defaultAsteroidSettings();
+  const asteroids = { ...previous, ...patch, enemies: { ...previous.enemies, ...patch.enemies } };
+  const candidate = { ...structuredClone(spec), version: 6 as const, levels: getGameLevels(spec), progression: spec.progression ?? 'Learn the controls, build confidence, and finish your adventure one level at a time.', asteroids };
+  // Validate mechanic controls independently of unfinished author text.
+  validateArcadeGameSpec({ ...defaultGameSpec(), version: 6, genre: 'dodge', arcade: { rotation: true, shooting: true, splitAsteroids: true, scoring: true, highScores: true }, levels: getGameLevels(defaultGameSpec()), progression: 'A saved adventure.', asteroids });
+  return candidate;
+}
+export function updateAsteroidEnemies(spec: ArcadeGameSpec, patch: Partial<GameAsteroidEnemies>): ArcadeGameSpec { return updateAsteroidSettings(spec, { enemies: patch }); }
+/** Retain compatible authored data while removing mechanics unsupported by the new style. */
+export function reconcileArcadeFormat(spec: ArcadeGameSpec): ArcadeGameSpec {
+  if (spec.genre === 'dodge' && spec.arcade?.shooting) return spec;
+  if (!spec.asteroids && !spec.powerUps) return spec;
+  const { asteroids: _advanced, powerUps: _prizes, ...compatible } = spec;
+  if (compatible.genre !== 'dodge') delete compatible.arcade;
+  return { ...compatible, version: spec.multiplayer ? 4 : spec.levels ? 2 : 1 };
+}
+
+/** Recognize only explicit mechanic requests, excluding quoted names and authored text fields. */
+function advancedAsteroidRequest(controlText: string): { patch: Partial<GameAsteroidSettings>; requested: boolean; baseText: string; notes: string[] } {
+  controlText = controlText.replace(/’/gu, "'");
+  let baseText = controlText;
+  const consumed: [number, number][] = [];
+  const patch: Partial<GameAsteroidSettings> = {}, enemyPatch: Partial<GameAsteroidEnemies> = {}, notes: string[] = [];
+  let requested = false;
+  const consume = (pattern: RegExp, apply: (match: RegExpMatchArray) => void) => {
+    for (const match of controlText.matchAll(pattern)) { requested = true; apply(match); consumed.push([match.index!, match.index! + match[0].length]); }
+  };
+  consume(/\b(?:(?:no|without)\s+(?:a\s+)?time\s+limit|unlimited\s+time)\b/gu, () => { patch.endless = true; });
+  consume(/\b(?:(no|without|disable|remove|turn off|turn on|enable|add|do not want|don't want|do not add|don't add|do not enable|don't enable|not|never)\s+(?:(?:an?|the)\s+)?)?(?:endless|perpetual)(?:\s+(?:mode|play|game))?\b(?:\s*(?:is|are|should be|:|=|to)?\s*(on|off|enabled|disabled|true|false))?/gu, match => { patch.endless = match[2] ? ['on', 'enabled', 'true'].includes(match[2]) : !['no', 'without', 'disable', 'remove', 'turn off', 'do not want', "don't want", 'do not add', "don't add", 'do not enable', "don't enable", 'not', 'never'].includes(match[1]); });
+  consume(/\b(?:restore|enable|switch to|use)\s+(?:the\s+)?timed\s+(?:mode|levels?|play)\b/gu, () => { patch.endless = false; });
+  consume(/\b(?:(no|without|disable|remove)\s+)?(two|three|2|3)(?:\s+different)?\s+(?:asteroid\s+)?(?:sizes|stages)\b|\basteroid\s+sizes\s*(?::|=|to|is)?\s*(two|three|2|3)\b/gu, match => { patch.sizes = match[1] ? 2 : ['three', '3'].includes(match[2] || match[3]) ? 3 : 2; });
+  consume(/\b(?:(no|without|disable|remove|turn off|turn on|enable|add|allow|do not want|don't want|do not add|don't add|do not enable|don't enable|not|never)\s+(?:(?:an?|the|any)\s+)?)?(?:(easy|medium|hard)\s+)?(?:(?:enemy|hostile)\s+ships?|enemies)\b(?:\s*(?:is|are|should be|:|=|to)?\s*(on|off|enabled|disabled|true|false))?/gu, match => { enemyPatch.enabled = match[3] ? ['on', 'enabled', 'true'].includes(match[3]) : !['no', 'without', 'disable', 'remove', 'turn off', 'do not want', "don't want", 'do not add', "don't add", 'do not enable', "don't enable", 'not', 'never'].includes(match[1]); if (match[2]) enemyPatch.difficulty = match[2] as GameAsteroidEnemies['difficulty']; });
+  consume(/\b(?:enemy(?:\s+ships?)?|enemies)\s+difficulty\s*(?::|=|to|is)?\s*(easy|medium|hard)\b/gu, match => { enemyPatch.difficulty = match[1] as GameAsteroidEnemies['difficulty']; });
+  const numeric = (pattern: RegExp, key: 'difficultyInterval' | 'hitPoints' | 'spawnInterval' | 'maxShips', min: number, max: number) => consume(pattern, match => {
+    const value = Number(match[1] || match[2]);
+    if (!Number.isInteger(value) || value < min || value > max) notes.push(`${key} must be from ${min} to ${max}; I kept the previous value.`);
+    else if (key === 'difficultyInterval') patch.difficultyInterval = value; else enemyPatch[key] = value;
+  });
+  numeric(/\b(?:difficulty\s+(?:ramp\s+)?(?:interval|every)|ramp(?:\s+(?:the\s+)?difficulty)?(?:\s+every)?|increase\s+difficulty\s+every)\s*(?::|=|to|is)?\s*(\d+)\s*(?:seconds?|secs?)?\b/gu, 'difficultyInterval', 10, 120);
+  numeric(/\b(?:enemy(?:\s+ships?)?|enemies)\s+(?:hit\s*points?|hp)\s*(?::|=|to|is)?\s*(\d+)\b|\b(\d+)\s+enemy\s+hit\s*points?\b/gu, 'hitPoints', 1, 10);
+  // The second form keeps the natural phrase "enemy ships with 3 hit points" explicit.
+  numeric(/\b(?:enemy(?:\s+ships?)?|enemies)\s+(?:with|have|require)\s+(\d+)\s+(?:hit\s*points?|hp|hits?)\b/gu, 'hitPoints', 1, 10);
+  numeric(/\b(?:enemy(?:\s+ships?)?\s+)?spawn(?:ing)?\s+(?:interval\s*)?(?:every\s*)?(?::|=|to|is)?\s*(\d+)\s*(?:seconds?|secs?)\b/gu, 'spawnInterval', 5, 60);
+  numeric(/\b(?:enemy(?:\s+ships?)?|enemies)\s+every\s+(\d+)\s*(?:seconds?|secs?)\b/gu, 'spawnInterval', 5, 60);
+  numeric(/\b(?:max(?:imum)?|up to)\s+(\d+)\s+(?:enemy\s+)?ships?\b|\bmax(?:imum)?\s+(?:enemy\s+)?ships?\s*(?::|=|to|is)?\s*(\d+)\b/gu, 'maxShips', 1, 6);
+  if (Object.keys(enemyPatch).length) patch.enemies = enemyPatch as GameAsteroidEnemies;
+  baseText = controlText.split('').map((character, index) => consumed.some(([start, end]) => index >= start && index < end) ? ' ' : character).join('');
+  return { patch, requested, baseText, notes };
+}
+
 /** A transparent, bounded conversational builder; it does not invoke an AI model. */
 export function designArcadeGame(message: string, current?: ArcadeGameSpec): { spec: ArcadeGameSpec; reply: string } {
   if (typeof message !== 'string' || !message.trim() || message.length > 2000 || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u.test(message)) throw new Error('Describe your game in 1 to 2,000 characters.');
   let spec = current ? validateArcadeGameSpec(current) : defaultGameSpec();
   const before = structuredClone(spec);
-  const lower = message.toLowerCase();
+  let lower = message.toLowerCase();
   const changes: string[] = [], notes: string[] = [];
   const has = (regex: RegExp) => regex.test(lower);
   const prizeText = lower.split('\n').filter(line => !/^\s*(?:title|name|description|player|collectible|hazard|instructions)\s*:/u.test(line)).join('\n').replace(/\b(?:call(?:ed)?(?: it)?|title(?:d)?|name(?:d)?(?: it)?)\s+["“][^"”\n]+["”]/gu, '');
+  const advanced = advancedAsteroidRequest(prizeText);
+  if (advanced.requested) {
+    for (const line of prizeText.split('\n')) lower = lower.replace(line, advancedAsteroidRequest(line).baseText);
+    notes.push(...advanced.notes);
+  }
   const prizes = arcadeToggle(prizeText, 'power[ -]?ups?|prizes?|triple[ -]?shots?|rapid[ -]?fire|shields?|speed[ -]?boosts?');
-  const arcadeRequest = has(/\b(?:asteroids?|arcade(?:[ -]style)?(?:\s+game)?)\b/) || prizes === true;
+  const arcadeRequest = has(/\b(?:asteroids?|arcade(?:[ -]style)?(?:\s+game)?)\b/) || prizes === true || advanced.patch.endless === true || advanced.patch.sizes === 3 || advanced.patch.enemies?.enabled === true;
   const toggles = arcadeFeatures.map(([key, feature]) => [key, arcadeToggle(lower, feature)] as const);
   const hasArcadeToggle = toggles.some(([, value]) => value !== undefined);
   let explicitOtherGenre = false;
@@ -189,9 +264,9 @@ export function designArcadeGame(message: string, current?: ArcadeGameSpec): { s
     delete spec.arcade;
     if (hasArcadeToggle) notes.push('Rotation, shooting, and arcade score options are supported in dodge games.');
   }
-  if (spec.version === 5 && (spec.genre !== 'dodge' || !spec.arcade?.shooting)) {
-    delete spec.powerUps; spec.version = spec.multiplayer ? 4 : 2;
-    changes.push('prizes off');
+  if ((spec.version === 5 || spec.version === 6) && (spec.genre !== 'dodge' || !spec.arcade?.shooting)) {
+    const hadPrizes = !!spec.powerUps; spec = reconcileArcadeFormat(spec);
+    changes.push(hadPrizes ? 'prizes off' : 'advanced Asteroids off');
   }
   // Explicit settings win over incidental object words: stars can belong in a pond.
   const world = lower.match(/\b(pond|underwater|aquarium|lake|ocean|space|galaxy|garden|meadow)\b/)?.[1];
@@ -290,25 +365,29 @@ export function designArcadeGame(message: string, current?: ArcadeGameSpec): { s
     spec.instructions = spec.arcade ? arcadeInstructions(spec) : `${controls} Complete each level’s collection goal and avoid ${spec.objects.hazard}s. Each level starts with fresh lives and time. Touch controls are available below the game.`;
   }
   if (has(/\b(3d|chat|weapons?|upload|custom code|javascript|payment|purchase|soundtrack|music)\b/) || has(/\bonline\b/) && !has(/\b(?:high[ -]?scores?|leaderboards?)\b/) || /https?:\/\/|<script|javascript:/iu.test(message)) notes.push('This builder supports 2D games, optional two-player cooperation, and shared high scores for signed-in players. It cannot add custom code, external assets, music, chat, or purchases.');
+  if (advanced.requested) {
+    if (spec.genre === 'dodge' && spec.arcade?.shooting) { spec = updateAsteroidSettings(spec, advanced.patch); changes.push('advanced Asteroids settings'); if (!customInstructions) spec.instructions = arcadeInstructions(spec); }
+    else notes.push('Advanced Asteroids settings require a dodge game with shooting enabled.');
+  }
   const cooperative = arcadeToggle(lower, 'multiplayer|two[ -]player|2[ -]player|cooperative|co-op');
   if (cooperative === true) {
     if (spec.version === 1) spec = planGameLevels(spec, 1, seedText);
-    spec = validateArcadeGameSpec({ ...spec, version: spec.version === 5 ? 5 : 4, multiplayer: { mode: 'cooperative', maxPlayers: 2 } });
+    spec = validateArcadeGameSpec({ ...spec, version: spec.version === 6 ? 6 : spec.version === 5 ? 5 : 4, multiplayer: { mode: 'cooperative', maxPlayers: 2 } });
     changes.push('optional two-player cooperation');
   } else if (cooperative === false && !!spec.multiplayer) {
     const { multiplayer: _multiplayer, ...single } = spec;
-    spec = validateArcadeGameSpec({ ...single, version: spec.version === 5 ? 5 : 2 });
+    spec = validateArcadeGameSpec({ ...single, version: spec.version === 6 ? 6 : spec.version === 5 ? 5 : 2 });
     changes.push('single-player only');
   }
   if (prizes === true) {
     if (spec.genre === 'dodge' && spec.arcade?.shooting) {
       if (spec.version === 1) spec = planGameLevels(spec, 1, seedText);
-      spec = validateArcadeGameSpec({ ...spec, version: 5, powerUps: spec.powerUps ?? defaultPowerUps() });
+      spec = validateArcadeGameSpec({ ...spec, version: spec.version === 6 ? 6 : 5, powerUps: spec.powerUps ?? defaultPowerUps() });
       changes.push('periodic ship prizes');
     } else notes.push('Prizes are available in dodge games with shooting enabled.');
-  } else if (prizes === false && spec.version === 5) {
+  } else if (prizes === false && !!spec.powerUps) {
     const { powerUps: _prizes, ...without } = spec;
-    spec = validateArcadeGameSpec({ ...without, version: spec.multiplayer ? 4 : 2 });
+    spec = validateArcadeGameSpec({ ...without, version: spec.version === 6 ? 6 : spec.multiplayer ? 4 : 2 });
     changes.push('prizes off');
   }
   const summary = changes.length ? `Updated ${[...new Set(changes)].join(', ')}.` : 'I can build a collection, dodging, or platform game in a pond, space, or garden.';

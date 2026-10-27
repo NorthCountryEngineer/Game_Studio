@@ -1,5 +1,5 @@
 import { validateArcadeGameSpec } from './game-design';
-import { createGameEngine, type GameEntity, type GamePlatform, type GamePowerUpEffects, type GamePowerUpWorld } from './game-runtime';
+import { createGameEngine, type GameEntity, type GamePlatform, type GamePowerUpEffects, type GamePowerUpWorld, type GameAdvancedWorld, type AdvancedWorld } from './game-runtime';
 import type { CooperativeGameSpec } from './game-types';
 
 /** One input bit field, with no player names, chat, or executable payloads. */
@@ -13,6 +13,7 @@ export type CooperativeState = {
   levelIndex: number; elapsed: number; outcome: 'playing' | 'won' | 'lost'; running: boolean; paused: boolean;
   seed: number; nextId: number; nextSnack: number; nextHazard: number;
   powerUps?: GamePowerUpWorld;
+  advanced?: GameAdvancedWorld;
   players: [CooperativePlayer, CooperativePlayer]; entities: GameEntity[]; bullets: CooperativeBullet[]; platforms: GamePlatform[];
 };
 
@@ -21,8 +22,8 @@ export function createCooperativeEngine(base = createGameEngine()) {
   const width = 960, height = 540;
   function create(spec: CooperativeGameSpec, levelIndex = 0): CooperativeState {
     const single = base.create(spec, levelIndex);
-    const player = (seat: 0 | 1): CooperativePlayer => ({ x: spec.genre === 'platformer' ? 48 + seat * 80 : 350 + seat * 200, y: single.player.y, vy: 0, grounded: single.player.grounded, score: 0, lives: single.lives, invulnerable: 1.5, angle: -Math.PI / 2, previousJump: false, fireCooldown: 0, points: 0, ...(spec.version === 5 ? { effects: base.newEffects() } : {}) });
-    return { levelIndex, elapsed: 0, outcome: 'playing', running: false, paused: true, seed: single.seed, nextId: single.nextId, nextSnack: single.nextSnack, nextHazard: single.nextHazard, players: [player(0), player(1)], entities: single.entities, bullets: [], platforms: single.platforms, ...(spec.version === 5 && spec.powerUps ? { powerUps: { pickups: [], nextSpawn: spec.powerUps.spawnInterval } } : {}) };
+    const player = (seat: 0 | 1): CooperativePlayer => ({ x: spec.genre === 'platformer' ? 48 + seat * 80 : 350 + seat * 200, y: single.player.y, vy: 0, grounded: single.player.grounded, score: 0, lives: single.lives, invulnerable: 1.5, angle: -Math.PI / 2, previousJump: false, fireCooldown: 0, points: 0, ...(spec.version === 5 || spec.version === 6 && spec.powerUps ? { effects: base.newEffects() } : {}) });
+    return { levelIndex: single.levelIndex, elapsed: 0, outcome: 'playing', running: false, paused: true, seed: single.seed, nextId: single.nextId, nextSnack: single.nextSnack, nextHazard: single.nextHazard, players: [player(0), player(1)], entities: single.entities, bullets: [], platforms: single.platforms, ...((spec.version === 5 || spec.version === 6) && spec.powerUps ? { powerUps: { pickups: [], nextSpawn: spec.powerUps.spawnInterval } } : {}), ...(spec.version === 6 ? { advanced: single.advanced! } : {}) };
   }
   function random(state: CooperativeState) { state.seed = (Math.imul(state.seed, 1664525) + 1013904223) >>> 0; return state.seed / 4294967296; }
   function spawn(state: CooperativeState, spec: CooperativeGameSpec, kind: 'snack' | 'hazard') {
@@ -44,6 +45,11 @@ export function createCooperativeEngine(base = createGameEngine()) {
   }
   function step(state: CooperativeState, spec: CooperativeGameSpec, masks: [number, number], elapsed: number): CooperativeState {
     if (!state.running || state.paused || state.outcome !== 'playing' || !Number.isFinite(elapsed) || elapsed <= 0) return state;
+    if (spec.version === 6) {
+      const inputs = masks.map(mask => ({ left: Boolean(mask & 1), right: Boolean(mask & 2), up: Boolean(mask & 4), down: Boolean(mask & 8), jump: Boolean(mask & 16), fire: Boolean(mask & 32) }));
+      base.stepAdvanced(state as AdvancedWorld, base.forLevel(spec,state.levelIndex), state.players, inputs, elapsed);
+      return state;
+    }
     const dt = Math.min(elapsed, 1 / 20), rules = spec.levels[state.levelIndex].rules;
     const arcade = spec.genre === 'dodge' ? spec.arcade : undefined;
     state.elapsed = Math.min(rules.timeLimit, state.elapsed + dt);
@@ -131,43 +137,60 @@ export function createCooperativeEngine(base = createGameEngine()) {
   }
   /** Round snapshots without feeding network precision back into host physics. */
   function snapshot(state: CooperativeState): CooperativeState { return JSON.parse(JSON.stringify(state, (_key, value) => typeof value === 'number' && !Number.isInteger(value) ? Math.round(value * 1000) / 1000 : value)) as CooperativeState; }
-  return { create, step, snapshot, drawPrizes: base.drawPrizes, effectLabel: base.effectLabel, width, height };
+  return { create, step, snapshot, drawPrizes: base.drawPrizes, effectLabel: base.effectLabel, drawAdvanced: base.drawAdvanced, endless: base.endless, width, height };
 }
 
 /** Untrusted relay data is bounded before entering the opaque drawing frame. */
 export function validateCooperativeState(value: unknown, spec: CooperativeGameSpec): CooperativeState | undefined {
-  function record(input: unknown, required: string[], optional: string[] = []): input is Record<string, unknown> { return Boolean(input && typeof input === 'object' && !Array.isArray(input) && [Object.prototype, null].includes(Object.getPrototypeOf(input)) && required.every(key => Object.prototype.hasOwnProperty.call(input, key)) && Object.keys(input).every(key => required.includes(key) || optional.includes(key))); }
+  function record(input: unknown, required: string[], optional: string[] = []): input is Record<string, any> { return Boolean(input && typeof input === 'object' && !Array.isArray(input) && [Object.prototype, null].includes(Object.getPrototypeOf(input)) && required.every(key => Object.prototype.hasOwnProperty.call(input, key)) && Object.keys(input).every(key => required.includes(key) || optional.includes(key))); }
   function num(input: unknown, low: number, high: number, integer = false): input is number { return typeof input === 'number' && Number.isFinite(input) && input >= low && input <= high && (!integer || Number.isInteger(input)); }
   try {
-    const config = spec.version === 5 ? spec.powerUps : undefined;
-    const stateFields = ['levelIndex', 'elapsed', 'outcome', 'running', 'paused', 'seed', 'nextId', 'nextSnack', 'nextHazard', 'players', 'entities', 'bullets', 'platforms', ...(config ? ['powerUps'] : [])];
-    if (JSON.stringify(value).length > 24000 || !record(value, stateFields) || !num(value.levelIndex, 0, spec.levels.length - 1, true)) return;
+    const advanced = spec.version === 6 ? spec.asteroids! : undefined, endless = Boolean(advanced?.endless);
+    const config = spec.version === 5 || spec.version === 6 ? spec.powerUps : undefined;
+    const maxId = advanced ? 2147483647 : 10000000;
+    const stateFields = ['levelIndex', 'elapsed', 'outcome', 'running', 'paused', 'seed', 'nextId', 'nextSnack', 'nextHazard', 'players', 'entities', 'bullets', 'platforms', ...(config ? ['powerUps'] : []), ...(advanced ? ['advanced'] : [])];
+    if (JSON.stringify(value).length > 24000 || !record(value, stateFields) || !num(value.levelIndex, 0, endless ? 0 : spec.levels.length - 1, true)) return;
     const rules = spec.levels[value.levelIndex].rules;
-    if (!num(value.elapsed, 0, rules.timeLimit) || !['playing', 'won', 'lost'].includes(value.outcome as string) || typeof value.running !== 'boolean' || typeof value.paused !== 'boolean' || !num(value.seed, 0, 4294967295, true) || !num(value.nextId, 1, 10000000, true) || !num(value.nextSnack, -1, 1) || !num(value.nextHazard, -1, 2)) return;
-    if (!Array.isArray(value.players) || value.players.length !== 2 || !Array.isArray(value.entities) || value.entities.length > (config ? 64 : 96) || !Array.isArray(value.bullets) || value.bullets.length > (config ? 64 : 32) || !Array.isArray(value.platforms) || value.platforms.length > 6) return;
-    for (const p of value.players) if (!record(p, ['x', 'y', 'vy', 'grounded', 'score', 'lives', 'invulnerable', 'angle', 'previousJump', 'fireCooldown', 'points', ...(config ? ['effects'] : [])]) || !num(p.x, 0, 918) || !num(p.y, -100, 600) || !num(p.vy, -1000, 1000) || typeof p.grounded !== 'boolean' || !num(p.score, 0, rules.goal, true) || !num(p.lives, 0, rules.lives, true) || !num(p.invulnerable, 0, 2) || !num(p.angle, -7, 7) || typeof p.previousJump !== 'boolean' || !num(p.fireCooldown, 0, 1) || !num(p.points, 0, 1000000, true)) return;
+    if (!num(value.elapsed, 0, endless ? 2147483647 : rules.timeLimit) || !(endless ? ['playing', 'lost'] : ['playing', 'won', 'lost']).includes(value.outcome) || typeof value.running !== 'boolean' || typeof value.paused !== 'boolean' || !num(value.seed, 0, 4294967295, true) || !num(value.nextId, 1, maxId, true) || !num(value.nextSnack, -1, 1) || !num(value.nextHazard, -1, 2)) return;
+    if (!Array.isArray(value.players) || value.players.length !== 2 || !Array.isArray(value.entities) || value.entities.length > (config || advanced ? 64 : 96) || !Array.isArray(value.bullets) || value.bullets.length > (config || advanced ? 64 : 32) || !Array.isArray(value.platforms) || value.platforms.length > 6) return;
+    const maxPoints = advanced ? Math.min(2147483647,Math.ceil(value.elapsed * 2000)+2000) : 1000000;
+    for (const p of value.players) if (!record(p, ['x', 'y', 'vy', 'grounded', 'score', 'lives', 'invulnerable', 'angle', 'previousJump', 'fireCooldown', 'points', ...(config ? ['effects'] : [])]) || !num(p.x, 0, 918) || !num(p.y, -100, 600) || !num(p.vy, -1000, 1000) || typeof p.grounded !== 'boolean' || !num(p.score, 0, endless ? Math.min(2147483647,Math.ceil(value.elapsed*20)+40) : rules.goal, true) || !num(p.lives, 0, rules.lives, true) || !num(p.invulnerable, 0, 2) || !num(p.angle, -7, 7) || typeof p.previousJump !== 'boolean' || !num(p.fireCooldown, 0, 1) || !num(p.points, 0, maxPoints, true)) return;
     if (config) for (const p of value.players) {
       if (!record(p.effects, ['tripleShot', 'rapidFire', 'speedBoost', 'shield'])) return;
       for (const [key, type] of [['tripleShot', 'triple-shot'], ['rapidFire', 'rapid-fire'], ['speedBoost', 'speed-boost']] as const) if (!num(p.effects[key], 0, config.duration) || p.effects[key] > 0 && !config.types.includes(type)) return;
       if (!num(p.effects.shield, 0, 1, true) || p.effects.shield && !config.types.includes('shield')) return;
     }
-    if (value.outcome === 'won' && value.players.some(p => p.score !== rules.goal)) return;
+    if (value.outcome === 'won' && value.players.some((p:CooperativePlayer) => p.score !== rules.goal)) return;
     const ids = new Set<number>();
     for (const entity of value.entities) {
-      if (!record(entity, ['id', 'kind', 'x', 'y', 'w', 'h', 'vx', 'vy'], ['asteroid', 'grace']) || !num(entity.id, 1, 10000000, true) || entity.id >= value.nextId || ids.has(entity.id) || !['snack', 'hazard'].includes(entity.kind as string) || !num(entity.x, -64, 1024) || !num(entity.y, -128, 600) || !num(entity.w, 1, 64) || !num(entity.h, 1, 64) || !num(entity.vx, -1000, 1000) || !num(entity.vy, -1000, 1000) || 'asteroid' in entity && !['large', 'small'].includes(entity.asteroid as string) || 'grace' in entity && !num(entity.grace, 0, 1)) return;
+      if (!record(entity, ['id', 'kind', 'x', 'y', 'w', 'h', 'vx', 'vy'], ['asteroid', 'grace']) || !num(entity.id, 1, maxId, true) || entity.id >= value.nextId || ids.has(entity.id) || !['snack', 'hazard'].includes(entity.kind) || !num(entity.x, -64, 1024) || !num(entity.y, -128, 600) || !num(entity.w, 1, 64) || !num(entity.h, 1, 64) || !num(entity.vx, -1000, 1000) || !num(entity.vy, -1000, 1000) || 'asteroid' in entity && !(advanced?.sizes === 3 ? ['large', 'medium', 'small'] : ['large', 'small']).includes(entity.asteroid) || 'grace' in entity && !num(entity.grace, 0, 1)) return;
+      if (advanced) { const size = entity.kind === 'snack' ? 22 : entity.asteroid === 'large' ? 42 : entity.asteroid === 'medium' ? 30 : entity.asteroid === 'small' ? 18 : 0; if (entity.w !== size || entity.h !== size || entity.kind === 'snack' && ('asteroid' in entity || 'grace' in entity)) return; }
       ids.add(entity.id);
     }
-    if (config && value.entities.reduce((count, entity) => count + (entity.asteroid === 'large' && spec.arcade?.splitAsteroids ? 2 : 1), 0) > 64) return;
+    if ((config || advanced) && value.entities.reduce((count:number, entity:GameEntity) => count + (entity.kind === 'hazard' && spec.arcade?.splitAsteroids ? entity.asteroid === 'large' ? advanced?.sizes === 3 ? 4 : 2 : entity.asteroid === 'medium' ? 2 : 1 : 1), 0) > 64) return;
     for (const bullet of value.bullets) {
-      if (!record(bullet, ['id', 'owner', 'x', 'y', 'vx', 'vy', 'ttl']) || !num(bullet.id, 1, 10000000, true) || bullet.id >= value.nextId || ids.has(bullet.id) || !num(bullet.owner, 0, 1, true) || !num(bullet.x, -30, 990) || !num(bullet.y, -30, 570) || !num(bullet.vx, -1000, 1000) || !num(bullet.vy, -1000, 1000) || !num(bullet.ttl, 0, 2)) return;
+      if (!record(bullet, ['id', 'owner', 'x', 'y', 'vx', 'vy', 'ttl']) || !num(bullet.id, 1, maxId, true) || bullet.id >= value.nextId || ids.has(bullet.id) || !num(bullet.owner, 0, 1, true) || !num(bullet.x, -30, 990) || !num(bullet.y, -30, 570) || !num(bullet.vx, -1000, 1000) || !num(bullet.vy, -1000, 1000) || !num(bullet.ttl, 0, 2)) return;
       ids.add(bullet.id);
     }
+    if (config || advanced) for (const owner of [0, 1]) if (value.bullets.filter((bullet:CooperativeBullet) => bullet.owner === owner).length > 32) return;
     if (config) {
-      for (const owner of [0, 1]) if (value.bullets.filter(bullet => bullet.owner === owner).length > 32) return;
       if (!record(value.powerUps, ['pickups', 'nextSpawn']) || !num(value.powerUps.nextSpawn, 0, config.spawnInterval) || !Array.isArray(value.powerUps.pickups) || value.powerUps.pickups.length > 3) return;
       for (const pickup of value.powerUps.pickups) {
-        if (!record(pickup, ['id', 'type', 'x', 'y', 'ttl']) || !num(pickup.id, 1, 10000000, true) || pickup.id >= value.nextId || ids.has(pickup.id) || typeof pickup.type !== 'string' || !config.types.includes(pickup.type as typeof config.types[number]) || !num(pickup.x, 0, 932) || !num(pickup.y, -28, 568) || !num(pickup.ttl, 0, 12)) return;
+        if (!record(pickup, ['id', 'type', 'x', 'y', 'ttl']) || !num(pickup.id, 1, maxId, true) || pickup.id >= value.nextId || ids.has(pickup.id) || typeof pickup.type !== 'string' || !config.types.includes(pickup.type as typeof config.types[number]) || !num(pickup.x, 0, 932) || !num(pickup.y, -28, 568) || !num(pickup.ttl, 0, 12)) return;
         ids.add(pickup.id);
+      }
+    }
+    if (advanced) {
+      const current = value.advanced;
+      if (!record(current,['difficulty','nextEnemy','enemies','enemyBullets']) || !num(current.difficulty,1,214748365,true) || !num(current.nextEnemy,0,60) || !Array.isArray(current.enemies) || current.enemies.length > (advanced.enemies.enabled ? advanced.enemies.maxShips : 0) || !Array.isArray(current.enemyBullets) || current.enemyBullets.length > (advanced.enemies.enabled && advanced.enemies.difficulty === 'hard' ? 24 : 0)) return;
+      if (!endless && current.difficulty !== rules.difficulty) return;
+      for (const enemy of current.enemies) {
+        if (!record(enemy,['id','x','y','w','h','vx','vy','hp','maxHp','fireCooldown','phase']) || !num(enemy.id,1,maxId,true) || enemy.id >= value.nextId || ids.has(enemy.id) || !num(enemy.x,-64,1024) || !num(enemy.y,-64,600) || enemy.w !== 38 || enemy.h !== 28 || !num(enemy.vx,-800,800) || !num(enemy.vy,-800,800) || !num(enemy.hp,1,advanced.enemies.hitPoints,true) || enemy.maxHp !== advanced.enemies.hitPoints || !num(enemy.fireCooldown,0,3) || !num(enemy.phase,0,Math.PI*2)) return;
+        ids.add(enemy.id);
+      }
+      for (const bullet of current.enemyBullets) {
+        if (!record(bullet,['id','x','y','vx','vy','ttl']) || !num(bullet.id,1,maxId,true) || bullet.id >= value.nextId || ids.has(bullet.id) || !num(bullet.x,-30,990) || !num(bullet.y,-30,570) || !num(bullet.vx,-800,800) || !num(bullet.vy,-800,800) || !num(bullet.ttl,0,4)) return;
+        ids.add(bullet.id);
       }
     }
     for (const platform of value.platforms) if (!record(platform, ['x', 'y', 'w', 'h']) || !num(platform.x, 0, 960) || !num(platform.y, 0, 540) || !num(platform.w, 1, 960) || !num(platform.h, 1, 64)) return;
@@ -217,11 +240,13 @@ export function startCooperativeSandbox(engine: ReturnType<typeof createCooperat
     const data = event.data, exact = (fields: string[]) => Object.keys(data).length === fields.length && fields.every(key => Object.prototype.hasOwnProperty.call(data, key));
     if (data.type === 'game-coop-load' && !spec && exact(['type', 'nonce', 'spec', 'seat']) && (data.seat === 0 || data.seat === 1)) {
       try {
-        const loaded = validate(data.spec); if (loaded.version !== 4 && !(loaded.version === 5 && loaded.multiplayer)) return; spec = loaded as CooperativeGameSpec; seat = data.seat;
+        const loaded = validate(data.spec); if (loaded.version !== 4 && !((loaded.version === 5 || loaded.version === 6) && loaded.multiplayer)) return; spec = loaded as CooperativeGameSpec; seat = data.seat;
         state = engine.create(spec); title.textContent = `${spec.title} · Cooperative play`; instruction.textContent = `You are Player ${seat + 1}. Both players collect their own goal. Shared world; separate lives and points. No friendly fire. The host starts and pauses each level. If a player runs out of lives before finishing their goal, restart the level to try together again.`;
+        if (engine.endless(spec)) instruction.textContent = `You are Player ${seat + 1}. Survive together for as long as possible. Difficulty rises every ${spec.asteroids!.difficultyInterval} active seconds. The run ends when both ships lose all lives. Shared world; separate lives and points; no friendly fire. The authored treasure goal and timer do not end this run.`;
         document.getElementById('jump')!.hidden = spec.genre !== 'platformer'; document.getElementById('fire')!.hidden = !spec.arcade?.shooting;
         document.getElementById('controls-help')!.textContent = spec.arcade?.rotation ? 'Left / Right turn · Up thrusts · Down reverses · Space / Z fires' : spec.genre === 'platformer' ? 'Arrows / WASD move · Space / Up jumps' : `Arrows / WASD move${spec.arcade?.shooting ? ' · Space / Z fires' : ''}`;
-        if (spec.version === 5) instruction.textContent += ' Falling prizes: 3 triple shot, » rapid fire, S one-hit shield, ↑ speed boost. Pickups affect only the ship that collects them.';
+        if (spec.powerUps) instruction.textContent += ` Falling prizes: 3 triple shot, » rapid fire, S one-hit shield, ↑ speed boost. Pickups affect only the ship that collects them.${engine.endless(spec) ? ' Any damaging impact clears that ship’s prizes; a shield absorbs one hit and also clears every prize.' : ''}`;
+        if (spec.version === 6) instruction.textContent += `${spec.arcade?.splitAsteroids ? spec.asteroids!.sizes === 3 ? ' Asteroids split large → two medium → four small pieces.' : ' Large asteroids split into two small pieces.' : ''}${spec.asteroids!.enemies.enabled ? ` Enemy ships take ${spec.asteroids!.enemies.hitPoints} hits; ${spec.asteroids!.enemies.difficulty === 'easy' ? 'easy enemies wander' : spec.asteroids!.enemies.difficulty === 'medium' ? 'medium enemies track gradually' : 'hard enemies pursue and fire aimed shots'}.` : ''}`;
         start.hidden = pause.hidden = seat !== 0; parent.postMessage({ type: 'game-coop-loaded', nonce }, '*');
       } catch { announce.textContent = 'This cooperative game could not be loaded safely.'; }
     } else if (data.type === 'game-coop-peer' && exact(['type', 'nonce', 'connected']) && typeof data.connected === 'boolean') {
@@ -236,7 +261,8 @@ export function startCooperativeSandbox(engine: ReturnType<typeof createCooperat
     ctx.fillStyle = dark ? '#211d3e' : level.theme === 'garden' ? '#f6f1cf' : '#e4f2e8'; ctx.fillRect(0, 0, 960, 540);
     ctx.fillStyle = dark ? '#baaddb' : '#38796c'; for (let i = 0; i < 25; i++) { ctx.beginPath(); ctx.arc((i * 139 + 31) % 960, (i * 83 + 57) % 520, dark ? 2 : 3, 0, Math.PI * 2); ctx.fill(); }
     ctx.fillStyle = dark ? '#887da5' : '#6a8547'; for (const platform of state.platforms) ctx.fillRect(platform.x, platform.y, platform.w, platform.h);
-    for (const entity of state.entities) { ctx.fillStyle = entity.kind === 'snack' ? '#ecc96b' : '#9b82a7'; ctx.strokeStyle = '#4b4458'; ctx.lineWidth = 2; ctx.beginPath(); if (entity.kind === 'snack') { const x = entity.x + entity.w / 2, y = entity.y + entity.h / 2; ctx.moveTo(x, y - 12); ctx.lineTo(x + 11, y); ctx.lineTo(x, y + 12); ctx.lineTo(x - 11, y); ctx.closePath(); } else ctx.ellipse(entity.x + entity.w / 2, entity.y + entity.h / 2, entity.w / 2, entity.h / 2, 0.3, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); }
+    for (const entity of state.entities) { ctx.fillStyle = entity.kind === 'snack' ? '#ecc96b' : entity.asteroid === 'medium' ? '#bc9382' : entity.asteroid === 'small' ? '#8eabb0' : '#9b82a7'; ctx.strokeStyle = '#4b4458'; ctx.lineWidth = 2; ctx.beginPath(); if (entity.kind === 'snack') { const x = entity.x + entity.w / 2, y = entity.y + entity.h / 2; ctx.moveTo(x, y - 12); ctx.lineTo(x + 11, y); ctx.lineTo(x, y + 12); ctx.lineTo(x - 11, y); ctx.closePath(); } else ctx.ellipse(entity.x + entity.w / 2, entity.y + entity.h / 2, entity.w / 2, entity.h / 2, 0.3, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); }
+    if (state.advanced) engine.drawAdvanced(ctx,state.advanced);
     if (state.powerUps) engine.drawPrizes(ctx, state.powerUps.pickups);
     for (const bullet of state.bullets) { ctx.strokeStyle = bullet.owner === 0 ? '#f6c6de' : '#7edbed'; ctx.lineWidth = 5; ctx.beginPath(); ctx.moveTo(bullet.x - bullet.vx / 60, bullet.y - bullet.vy / 60); ctx.lineTo(bullet.x, bullet.y); ctx.stroke(); }
     state.players.forEach((player, index) => {
@@ -250,8 +276,8 @@ export function startCooperativeSandbox(engine: ReturnType<typeof createCooperat
     if (!connected || !state.running || state.paused || state.outcome !== 'playing') {
       ctx.fillStyle = dark ? '#211d3ed9' : '#fffaf0df'; ctx.fillRect(0, 0, 960, 540); ctx.fillStyle = dark ? '#fffaf0' : '#254e45'; ctx.textAlign = 'center'; ctx.font = 'bold 34px system-ui'; ctx.fillText(!connected ? 'Waiting for your partner' : !state.running ? 'Two explorers. One adventure.' : state.paused ? 'Cooperative play paused' : state.outcome === 'won' ? 'Both goals complete!' : 'Try this adventure again', 480, 245); ctx.font = '20px system-ui'; ctx.fillText(seat === 0 ? 'Use the host controls below.' : 'The host starts or resumes the level.', 480, 285);
     }
-    const labels = state.players.map((p, index) => `Player ${index + 1}${index === seat ? ' (you)' : ''}: ${p.score}/${level.rules.goal} goal · ${p.lives} lives${spec!.arcade?.scoring ? ` · ${p.points} points` : ''}${p.effects ? ` · ${engine.effectLabel(p.effects)}` : ''}`);
-    status.textContent = `Level ${state.levelIndex + 1}/${spec.levels.length} · ${Math.max(0, Math.ceil(level.rules.timeLimit - state.elapsed))}s remaining`;
+    const labels = state.players.map((p, index) => `Player ${index + 1}${index === seat ? ' (you)' : ''}: ${engine.endless(spec!) ? `${p.score} collected` : `${p.score}/${level.rules.goal} goal`} · ${p.lives} lives${spec!.arcade?.scoring ? ` · ${p.points} points` : ''}${p.effects ? ` · ${engine.effectLabel(p.effects,engine.endless(spec!))}` : ''}`);
+    status.textContent = engine.endless(spec) ? `Survival ${Math.floor(state.elapsed / 60)}:${String(Math.floor(state.elapsed%60)).padStart(2,'0')} · Difficulty ${state.advanced!.difficulty}` : `Level ${state.levelIndex + 1}/${spec.levels.length} · ${Math.max(0, Math.ceil(level.rules.timeLimit - state.elapsed))}s remaining`;
     document.getElementById('player-1')!.textContent = labels[0]; document.getElementById('player-2')!.textContent = labels[1];
     start.disabled = !connected; start.textContent = state.running ? 'Restart level' : 'Start together'; pause.disabled = !connected || !state.running || state.outcome !== 'playing'; pause.textContent = state.paused ? 'Resume together' : 'Pause together'; next.hidden = seat !== 0 || state.outcome !== 'won' || state.levelIndex + 1 >= spec.levels.length;
   }

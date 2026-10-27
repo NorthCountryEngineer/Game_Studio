@@ -159,7 +159,7 @@ def publication(api, game_id, edition, expected_hash=None):
         spec = games().validate_spec(state['spec'])
     except (games().GameError, KeyError):
         fail('This edition does not support multiplayer.', 409)
-    if spec.get('version') not in {4, 5} or spec.get('multiplayer') != {'mode': 'cooperative', 'maxPlayers': 2}:
+    if spec.get('version') not in {4, 5, 6} or spec.get('multiplayer') != {'mode': 'cooperative', 'maxPlayers': 2}:
         fail('Two-player play is not enabled for this game.', 409)
     spec_hash = hashlib.sha256(canonical(spec).encode('utf-8')).hexdigest()
     if expected_hash is not None and not hmac.compare_digest(spec_hash, expected_hash):
@@ -366,17 +366,22 @@ def dispatch(api, event, method, path, body):
 
 
 def validate_state(value, spec):
-    prizes = spec['version'] == 5
-    fields(value, ('levelIndex', 'elapsed', 'outcome', 'running', 'paused', 'seed', 'nextId', 'nextSnack', 'nextHazard', 'players', 'entities', 'bullets', 'platforms') + (('powerUps',) if prizes else ()))
-    if len(canonical(value).encode('utf-8')) > (24000 if prizes else MAX_STATE_BYTES):
+    advanced = spec['version'] == 6
+    endless = advanced and spec['asteroids']['endless']
+    prizes = spec['version'] == 5 or advanced and 'powerUps' in spec
+    maximum_id = 2147483646 if advanced else 10000000
+    fields(value, ('levelIndex', 'elapsed', 'outcome', 'running', 'paused', 'seed', 'nextId', 'nextSnack', 'nextHazard', 'players', 'entities', 'bullets', 'platforms') + (('powerUps',) if prizes else ()) + (('advanced',) if advanced else ()))
+    if len(canonical(value).encode('utf-8')) > (24000 if advanced or prizes else MAX_STATE_BYTES):
         fail('The multiplayer snapshot is too large.', 413)
     level_index = integer(value['levelIndex'], 0, len(spec['levels']) - 1)
+    if endless and level_index != 0: fail('Endless cooperation uses the first saved level.')
     rules = spec['levels'][level_index]['rules']
-    number(value['elapsed'], 0, rules['timeLimit'])
+    number(value['elapsed'], 0, 2147483647 if endless else rules['timeLimit'])
     if not isinstance(value['outcome'], str) or value['outcome'] not in {'playing', 'won', 'lost'}:
         fail('Invalid multiplayer outcome.')
+    if endless and value['outcome'] == 'won': fail('An endless game has no winning outcome.')
     boolean(value['running']); boolean(value['paused'])
-    integer(value['seed'], 0, 4294967295); integer(value['nextId'], 1, 10000000)
+    integer(value['seed'], 0, 4294967295); integer(value['nextId'], 1, 2147483647 if advanced else 10000000)
     number(value['nextSnack'], -1, 1); number(value['nextHazard'], -1, 2)
     if not isinstance(value['players'], list) or len(value['players']) != 2:
         fail('A cooperative game has exactly two players.')
@@ -384,9 +389,9 @@ def validate_state(value, spec):
         fields(player, ('x', 'y', 'vy', 'grounded', 'score', 'lives', 'invulnerable', 'angle', 'previousJump', 'fireCooldown', 'points') + (('effects',) if prizes else ()))
         number(player['x'], 0, 918); number(player['y'], -100, 600); number(player['vy'], -1000, 1000)
         boolean(player['grounded']); boolean(player['previousJump'])
-        integer(player['score'], 0, rules['goal']); integer(player['lives'], 0, rules['lives'])
+        integer(player['score'], 0, min(2147483647, math.ceil(value['elapsed'] * 20) + 40) if endless else rules['goal']); integer(player['lives'], 0, rules['lives'])
         number(player['invulnerable'], 0, 2); number(player['angle'], -7, 7); number(player['fireCooldown'], 0, 1)
-        integer(player['points'], 0, 1000000)
+        integer(player['points'], 0, min(2147483647, math.ceil(value['elapsed'] * 2000) + 2000) if advanced else 1000000)
         if prizes:
             effects = player['effects']
             fields(effects, ('tripleShot', 'rapidFire', 'speedBoost', 'shield'))
@@ -398,7 +403,7 @@ def validate_state(value, spec):
     if value['outcome'] == 'won' and any(player['score'] != rules['goal'] for player in value['players']):
         fail('Both players must complete the level before a cooperative win.')
     ids = set()
-    for collection, limit in [('entities', 64 if prizes else 96), ('bullets', 64 if prizes else 32), ('platforms', 6)]:
+    for collection, limit in [('entities', 64 if prizes or advanced else 96), ('bullets', 64 if prizes or advanced else 32), ('platforms', 6)]:
         if not isinstance(value[collection], list) or len(value[collection]) > limit:
             fail('The multiplayer snapshot exceeds its entity limit.')
         for item in value[collection]:
@@ -411,34 +416,69 @@ def validate_state(value, spec):
                 if not isinstance(item['kind'], str) or item['kind'] not in {'snack', 'hazard'}:
                     fail('Invalid multiplayer entity.')
                 number(item['x'], -64, 1024); number(item['y'], -128, 600); number(item['w'], 1, 64); number(item['h'], 1, 64)
-                if 'asteroid' in item and (not isinstance(item['asteroid'], str) or item['asteroid'] not in {'large', 'small'}):
+                if 'asteroid' in item and (not isinstance(item['asteroid'], str) or item['asteroid'] not in ({'large', 'medium', 'small'} if advanced and spec['asteroids']['sizes'] == 3 else {'large', 'small'})):
                     fail('Invalid multiplayer asteroid.')
                 if 'grace' in item:
                     number(item['grace'], 0, 1)
             else:
                 fields(item, ('id', 'owner', 'x', 'y', 'vx', 'vy', 'ttl'))
                 integer(item['owner'], 0, 1); number(item['x'], -30, 990); number(item['y'], -30, 570); number(item['ttl'], 0, 2)
-            identity = integer(item['id'], 1, 10000000)
+            identity = integer(item['id'], 1, maximum_id)
             if identity in ids or identity >= value['nextId']:
                 fail('Multiplayer entity identifiers must be unique and precede the next identifier.')
             ids.add(identity)
             number(item['vx'], -1000, 1000); number(item['vy'], -1000, 1000)
-    if prizes:
-        if sum(2 if entity.get('asteroid') == 'large' and spec.get('arcade', {}).get('splitAsteroids') else 1 for entity in value['entities']) > 64:
+    if advanced:
+        for entity in value['entities']:
+            size = {'large': 42, 'medium': 30, 'small': 18}.get(entity.get('asteroid'))
+            if entity['kind'] == 'snack':
+                if 'asteroid' in entity or 'grace' in entity or entity['w'] != 22 or entity['h'] != 22: fail('Invalid advanced snack shape.')
+            elif size is None or entity['w'] != size or entity['h'] != size: fail('Invalid advanced asteroid shape.')
+        def weight(entity):
+            if not spec['arcade']['splitAsteroids']: return 1
+            return 4 if entity.get('asteroid') == 'large' and spec['asteroids']['sizes'] == 3 else 2 if entity.get('asteroid') in {'large', 'medium'} else 1
+        if sum(weight(entity) for entity in value['entities']) > 64: fail('The multiplayer snapshot exceeds its descendant entity limit.')
+    if prizes or advanced:
+        if not advanced and sum(2 if entity.get('asteroid') == 'large' and spec.get('arcade', {}).get('splitAsteroids') else 1 for entity in value['entities']) > 64:
             fail('The multiplayer snapshot exceeds its weighted entity limit.')
         if any(sum(bullet['owner'] == owner for bullet in value['bullets']) > 32 for owner in (0, 1)):
             fail('The multiplayer snapshot exceeds its per-player projectile limit.')
+    if prizes:
         settings = value['powerUps']
         fields(settings, ('pickups', 'nextSpawn'))
         number(settings['nextSpawn'], 0, spec['powerUps']['spawnInterval'])
         if not isinstance(settings['pickups'], list) or len(settings['pickups']) > 3: fail('The multiplayer snapshot exceeds its prize limit.')
         for pickup in settings['pickups']:
             fields(pickup, ('id', 'type', 'x', 'y', 'ttl'))
-            identity = integer(pickup['id'], 1, 10000000)
+            identity = integer(pickup['id'], 1, maximum_id)
             if identity in ids or identity >= value['nextId']: fail('Multiplayer entity identifiers must be unique and precede the next identifier.')
             ids.add(identity)
             if not isinstance(pickup['type'], str) or pickup['type'] not in spec['powerUps']['types']: fail('This prize type is not enabled.')
             number(pickup['x'], 0, 932); number(pickup['y'], -28, 568); number(pickup['ttl'], 0, 12)
+    if advanced:
+        world, configured = value['advanced'], spec['asteroids']['enemies']
+        fields(world, ('difficulty', 'nextEnemy', 'enemies', 'enemyBullets'))
+        integer(world['difficulty'], 1, 214748365); number(world['nextEnemy'], 0, 60)
+        if not endless and world['difficulty'] != rules['difficulty']: fail('Finite games use the authored level difficulty.')
+        if not isinstance(world['enemies'], list) or len(world['enemies']) > configured['maxShips']: fail('The multiplayer snapshot exceeds its enemy ship limit.')
+        if not isinstance(world['enemyBullets'], list) or len(world['enemyBullets']) > 24: fail('The multiplayer snapshot exceeds its hostile projectile limit.')
+        if not configured['enabled'] and (world['enemies'] or world['enemyBullets']): fail('Enemy ships are not enabled.')
+        if configured['difficulty'] != 'hard' and world['enemyBullets']: fail('Only hard enemy ships fire hostile projectiles.')
+        for ship in world['enemies']:
+            fields(ship, ('id', 'x', 'y', 'w', 'h', 'vx', 'vy', 'hp', 'maxHp', 'fireCooldown', 'phase'))
+            if ship['w'] != 38 or ship['h'] != 28: fail('Invalid enemy ship dimensions.')
+            number(ship['x'], -64, 1024); number(ship['y'], -64, 600)
+            number(ship['vx'], -800, 800); number(ship['vy'], -800, 800)
+            integer(ship['hp'], 1, configured['hitPoints']); integer(ship['maxHp'], configured['hitPoints'], configured['hitPoints'])
+            number(ship['fireCooldown'], 0, 3); number(ship['phase'], 0, math.pi * 2)
+        for bullet in world['enemyBullets']:
+            fields(bullet, ('id', 'x', 'y', 'vx', 'vy', 'ttl'))
+            number(bullet['x'], -30, 990); number(bullet['y'], -30, 570)
+            number(bullet['vx'], -800, 800); number(bullet['vy'], -800, 800); number(bullet['ttl'], 0, 4)
+        for entity in world['enemies'] + world['enemyBullets']:
+            identity = integer(entity['id'], 1, maximum_id)
+            if identity in ids or identity >= value['nextId']: fail('Multiplayer entity identifiers must be unique and precede the next identifier.')
+            ids.add(identity)
     return value
 
 
