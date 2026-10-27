@@ -77,7 +77,7 @@ export function PublishedGame({ game, signed, embedded = false, onGameEvent }: {
   const [run, setRun] = useState<ScoreRun>();
   const enabled = game.spec.version !== 3 && game.spec.version !== 4 && Boolean(game.spec.arcade?.highScores && game.spec.arcade.scoring);
   function record(result: GameResult) {
-    if (result.outcome !== 'level-complete') onGameEvent?.({ type: 'completed', gameId: game.id, publishedRevision: game.publishedRevision ?? game.revision, result: { ...result, reviewedLevelIds: [...result.reviewedLevelIds] } });
+    if (game.spec.version !== 4 && result.outcome !== 'level-complete') onGameEvent?.({ type: 'completed', gameId: game.id, publishedRevision: game.publishedRevision ?? game.revision, result: { ...result, reviewedLevelIds: [...result.reviewedLevelIds] } });
     if (!enabled || result.outcome === 'level-complete' || !Number.isSafeInteger(result.points) || (result.points ?? 0) <= 0) return;
     setRun({ id: crypto.randomUUID(), result });
   }
