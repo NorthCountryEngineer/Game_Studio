@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { connectMultiplayer, createMultiplayerInvitation, loadMultiplayerAPI, multiplayerRequest, parseMultiplayerInvitation, sameMultiplayerPublication, watchMultiplayerInvitations, validateMultiplayerAPIConfig, validateMultiplayerRoom, validateMultiplayerServerMessage, validateMultiplayerSocketURL, type MultiplayerRoom, type MultiplayerSocket } from '../src/lib/game-multiplayer.ts';
+import { connectMultiplayer, createMultiplayerInvitation, loadMultiplayerAPI, multiplayerRequest, parseMultiplayerInvitation, sameMultiplayerPublication, watchMultiplayerInvitations, validateMultiplayerAPIConfig, validateMultiplayerRoom, validateMultiplayerLobby, validateMultiplayerServerMessage, validateMultiplayerSocketURL, type MultiplayerRoom, type MultiplayerSocket } from '../src/lib/game-multiplayer.ts';
 import { setCooperativeMode, updateArcadeLevelPlan } from '../src/lib/game-multiplayer-design.ts';
 import { defaultGameSpec, planGameLevels, validateGameSpec } from '../src/lib/game-design.ts';
 import { defaultWordGameSpec } from '../src/lib/word-game-design.ts';
@@ -12,9 +12,9 @@ const strictState = (value: unknown) => Boolean(value && typeof value === 'objec
 class FakeSocket implements MultiplayerSocket {
   readyState = 0;
   onopen: WebSocket['onopen'] = null; onmessage: WebSocket['onmessage'] = null; onclose: WebSocket['onclose'] = null; onerror: WebSocket['onerror'] = null;
-  sent: unknown[] = []; closes = 0;
+  sent: unknown[] = []; closes = 0; onSend?: (value: Record<string, unknown>) => void;
   constructor(readonly url: string) {}
-  send(value: string | ArrayBufferLike | Blob | ArrayBufferView) { this.sent.push(JSON.parse(String(value))); }
+  send(value: string | ArrayBufferLike | Blob | ArrayBufferView) { const parsed = JSON.parse(String(value)); this.sent.push(parsed); this.onSend?.(parsed); }
   close() { this.readyState = 3; this.closes++; }
   open() { this.readyState = 1; this.onopen?.call(this as unknown as WebSocket, {} as Event); }
   message(value: unknown) { this.onmessage?.call(this as unknown as WebSocket, { data: JSON.stringify(value) } as MessageEvent); }
@@ -64,9 +64,9 @@ test('room responses require exact roles, bounded expiry and secure token-free s
 });
 
 test('wire protocol rejects extra fields, executable/text payloads, oversized snapshots and invalid controls', () => {
-  const valid = [{ type: 'input', seq: 1, mask: 63 }, { type: 'state', seq: 1, state: { tick: 1 } }, { type: 'peer', connected: false }, { type: 'pong' }, { type: 'closed', reason: 'publication-changed' }];
+  const valid = [{ type: 'input', seq: 1, mask: 63 }, { type: 'state', seq: 1, state: { tick: 1 } }, { type: 'peer', connected: false }, { type: 'pong' }, { type: 'lease', expiresAt: room.expiresAt }, { type: 'closed', reason: 'publication-changed' }];
   for (const value of valid) assert.deepEqual(validateMultiplayerServerMessage(JSON.stringify(value), strictState), value);
-  const invalid = [{ type: 'input', seq: 0, mask: 1 }, { type: 'input', seq: 1, mask: 64 }, { type: 'input', seq: 1.2, mask: 1 }, { type: 'input', seq: 1, mask: 1, studentName: 'Private' }, { type: 'state', seq: 1, state: { tick: 1, script: 'anything' } }, { type: 'state', seq: 1, state: { tick: 1, data: 'x'.repeat(30000) } }, { type: 'pong', token }, { type: 'closed', reason: '<script>' }, { type: 'closed', reason: ['expired'] }, { type: 'peer', connected: 'true' }];
+  const invalid = [{ type: 'input', seq: 0, mask: 1 }, { type: 'input', seq: 1, mask: 64 }, { type: 'input', seq: 1.2, mask: 1 }, { type: 'input', seq: 1, mask: 1, studentName: 'Private' }, { type: 'state', seq: 1, state: { tick: 1, script: 'anything' } }, { type: 'state', seq: 1, state: { tick: 1, data: 'x'.repeat(30000) } }, { type: 'pong', token }, { type: 'lease', expiresAt: room.expiresAt, token }, { type: 'lease', expiresAt: true }, { type: 'lease', expiresAt: 1.2 }, { type: 'closed', reason: '<script>' }, { type: 'closed', reason: ['expired'] }, { type: 'peer', connected: 'true' }];
   for (const value of invalid) assert.equal(validateMultiplayerServerMessage(JSON.stringify(value), strictState), undefined);
   for (const value of [null, '[]', '{}', 'invalid json']) assert.equal(validateMultiplayerServerMessage(value, strictState), undefined);
 });
@@ -80,7 +80,7 @@ test('the relay is explicitly configured independently of the Core API', () => {
 test('host authenticates in the first body and accepts only monotonic guest controls', () => {
   const t = connection();
   try {
-    t.ready(); assert.equal(t.socket.url.includes(token), false); assert.deepEqual(t.socket.sent[0], { type: 'join', roomId: id, token });
+    t.ready(); assert.equal(t.socket.url.includes(token), false); assert.deepEqual(t.socket.sent[0], { type: 'join', roomId: id, token, leaseVersion: 1 });
     assert.equal(t.statuses.at(-1), 'connected');
     const beforeHeartbeat = t.peers.length; t.socket.message({ type: 'peer', connected: true }); assert.equal(t.peers.length, beforeHeartbeat, 'heartbeat must not clear held controls');
     t.socket.message({ type: 'input', seq: 2, mask: 32 }); t.socket.message({ type: 'input', seq: 1, mask: 1 }); t.socket.message({ type: 'input', seq: 2, mask: 2 });
@@ -161,7 +161,7 @@ test('reconnect reuses the in-memory seat and capability, preserving sequence or
   try {
     c.ready(); c.socket.message({ type: 'state', seq: 5, state: { tick: 1 } }); c.socket.disconnect();
     assert.equal(c.statuses.at(-1), 'reconnecting'); t.mock.timers.tick(500); assert.equal(c.sockets.length, 2);
-    const resumed = c.sockets[1]; resumed.open(); assert.deepEqual(resumed.sent[0], { type: 'join', roomId: id, token }); assert.equal(resumed.url.includes(token), false);
+    const resumed = c.sockets[1]; resumed.open(); assert.deepEqual(resumed.sent[0], { type: 'join', roomId: id, token, leaseVersion: 1 }); assert.equal(resumed.url.includes(token), false);
     resumed.message({ type: 'ready', ...publication, roomId: id, seat: 1, expiresAt: room.expiresAt }); resumed.message({ type: 'peer', connected: true });
     resumed.message({ type: 'state', seq: 4, state: { tick: 1 } }); resumed.message({ type: 'state', seq: 6, state: { tick: 1 } });
     assert.deepEqual(c.states, [{ seq: 5, state: { tick: 1 } }, { seq: 6, state: { tick: 1 } }]);
@@ -210,4 +210,127 @@ test('an invitation already present on initial page load is cleared and delivere
   const surface = { location, history: { state: null, replaceState() { location.hash = ''; } }, addEventListener(type: 'hashchange', callback: () => void) { events.set(type, callback); }, removeEventListener(type: 'hashchange') { events.delete(type); } };
   const stop = watchMultiplayerInvitations(surface, value => { assert.equal(location.hash, ''); delivered.push(value); });
   events.get('hashchange')!(); assert.deepEqual(delivered, [fragment]); stop();
+});
+
+
+test('authoritative rolling leases keep the same room connected for two hours and through reconnect', t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'], now });
+  const c = connection(1, 45000, () => Date.now());
+  const renewOnPing = (socket: FakeSocket) => {
+    socket.onSend = value => { if (value.type === 'ping') { socket.message({ type: 'lease', expiresAt: Math.floor(Date.now() / 1000) + 1800 }); socket.message({ type: 'pong' }); } };
+  };
+  try {
+    c.ready(); renewOnPing(c.socket);
+    for (let tick = 0; tick < 720; tick++) t.mock.timers.tick(10000);
+    assert.equal(Date.now() - now, 7200000); assert.ok(Date.now() > room.expiresAt * 1000);
+    assert.equal(c.statuses.at(-1), 'connected'); assert.equal(c.socket.closes, 0);
+    assert.equal(c.sockets.length, 1); assert.ok(c.socket.sent.filter((value: any) => value.type === 'ping').length >= 720);
+    c.socket.message({ type: 'state', seq: 10, state: { tick: 1 } });
+    c.socket.disconnect(); t.mock.timers.tick(500);
+    assert.equal(c.sockets.length, 2);
+    const resumed = c.sockets[1]; resumed.open();
+    assert.deepEqual(resumed.sent[0], { type: 'join', roomId: id, token, leaseVersion: 1 });
+    // A ready message can reflect a slightly earlier admitted lease without rolling back the timer.
+    resumed.message({ type: 'ready', ...publication, roomId: id, seat: 1, expiresAt: Math.floor(Date.now() / 1000) + 1790 });
+    resumed.message({ type: 'lease', expiresAt: Math.floor(Date.now() / 1000) + 1800 });
+    resumed.message({ type: 'peer', connected: true }); renewOnPing(resumed);
+    c.socket.message({ type: 'lease', expiresAt: Math.floor(Date.now() / 1000) + 90000 });
+    c.socket.message({ type: 'closed', reason: 'expired' });
+    resumed.message({ type: 'state', seq: 9, state: { tick: 1 } }); resumed.message({ type: 'state', seq: 11, state: { tick: 1 } });
+    assert.deepEqual(c.states, [{ seq: 10, state: { tick: 1 } }, { seq: 11, state: { tick: 1 } }]);
+    assert.equal(c.statuses.at(-1), 'connected');
+    for (let tick = 0; tick < 181; tick++) t.mock.timers.tick(10000);
+    assert.equal(c.statuses.at(-1), 'connected'); assert.equal(resumed.closes, 0);
+    assert.equal(room.expiresAt, Math.floor(now / 1000) + 1800, 'the caller descriptor remains immutable');
+  } finally { c.client.close(); }
+});
+
+test('ready can extend the descriptor and valid out-of-order leases never lower its deadline', t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'], now });
+  const c = connection(0, 45000, () => Date.now());
+  try {
+    c.socket.open(); c.socket.message({ type: 'ready', ...publication, roomId: id, seat: 0, expiresAt: room.expiresAt + 30 });
+    assert.equal(c.statuses.at(-1), 'waiting');
+    c.socket.message({ type: 'lease', expiresAt: room.expiresAt + 30 }); assert.equal(c.statuses.at(-1), 'waiting', 'equal lease is valid');
+    c.socket.message({ type: 'lease', expiresAt: room.expiresAt + 29 });
+    assert.equal(c.statuses.at(-1), 'waiting'); assert.equal(c.socket.closes, 0, 'an older bounded callback is harmless');
+  } finally { c.client.close(); }
+  for (const invalid of [Math.floor(now / 1000), Math.floor(now / 1000) - 1, Math.floor(now / 1000) + 1861, Infinity, true, '1800', 1.2]) {
+    const c = connection(0, 45000, () => Date.now());
+    try { c.ready(); c.socket.message({ type: 'lease', expiresAt: invalid }); assert.match(c.statuses.at(-1)!, /^ended:invalid-(?:lease|message)$/); assert.equal(c.socket.closes, 1); }
+    finally { c.client.close(); }
+  }
+  const pending = connection();
+  try { pending.socket.open(); pending.socket.message({ type: 'lease', expiresAt: room.expiresAt }); assert.equal(pending.statuses.at(-1), 'ended:invalid-message'); }
+  finally { pending.client.close(); }
+  for (const expiresAt of [Math.floor(Date.now() / 1000), Math.floor(Date.now() / 1000) + 1861]) {
+    const c = connection(0, 45000, () => Date.now());
+    try { c.socket.open(); c.socket.message({ type: 'ready', ...publication, roomId: id, seat: 0, expiresAt }); assert.equal(c.statuses.at(-1), 'ended:invalid-room'); }
+    finally { c.client.close(); }
+  }
+});
+
+test('only a lease can renew expiry; pongs and stale ready cannot silently prolong it', t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'], now });
+  const c = connection(0, 45000, () => Date.now());
+  try {
+    c.ready(); c.socket.onSend = value => { if (value.type === 'ping') c.socket.message({ type: 'pong' }); };
+    for (let tick = 0; tick < 180; tick++) t.mock.timers.tick(10000);
+    assert.equal(c.statuses.at(-1), 'expired'); assert.equal(c.socket.closes, 1);
+    c.socket.message({ type: 'lease', expiresAt: Math.floor(Date.now() / 1000) + 1800 });
+    assert.equal(c.statuses.at(-1), 'expired');
+  } finally { c.client.close(); }
+});
+
+test('public lobby responses are bounded exact publication bindings without capabilities', () => {
+  const listing = { ...publication, roomId: id, title: 'Space friends', expiresAt: room.expiresAt };
+  assert.deepEqual(validateMultiplayerLobby({ rooms: [listing] }, now), [listing]);
+  assert.equal(sameMultiplayerPublication(listing, { game_id: gameId, published_revision: 1, spec_sha256: publication.specSha256 }), true);
+  assert.deepEqual(validateMultiplayerLobby({ rooms: [] }, now), []);
+  for (const invalid of [null, [], { rooms: [], token }, { rooms: 'none' }, { rooms: Array(21).fill(listing) }, { rooms: [listing, listing] },
+    ...[{ token }, { inviteToken }, { hostToken: token }, { guestToken: token }, { roomId: 'not-a-uuid' }, { gameId: id.toUpperCase().replace('1', 'A') }, { publishedRevision: 0 }, { specSha256: 'g'.repeat(64) }, { expiresAt: Math.floor(now / 1000) }, { expiresAt: Math.floor(now / 1000) + 1861 }, { title: ' private ' }, { title: '<script>' }, { title: 'x'.repeat(81) }, { title: 'Hidden\u0000title' }].map(change => ({ rooms: [{ ...listing, ...change }] }))]) assert.equal(validateMultiplayerLobby(invalid, now), undefined);
+  const mutable = { rooms: [structuredClone(listing)] }, copy = validateMultiplayerLobby(mutable, now)!;
+  mutable.rooms[0].title = 'Changed'; assert.equal(copy[0].title, 'Space friends');
+});
+
+test('public lobby discovery uses GET without credentials, body, tokens or JSON preflight headers', async () => {
+  const original = globalThis.fetch, requests: { url: string; options: RequestInit }[] = [];
+  try {
+    globalThis.fetch = (async (url, options) => { requests.push({ url: String(url), options: options! }); return new Response(JSON.stringify({ rooms: [] }), { status: 200 }); }) as typeof fetch;
+    await multiplayerRequest('https://relay.example', '/multiplayer/lobby', 'GET');
+    assert.deepEqual(requests[0].url, 'https://relay.example/multiplayer/lobby');
+    const options = requests[0].options;
+    assert.equal(options.method, 'GET'); assert.equal(options.credentials, 'omit'); assert.equal(options.cache, 'no-store'); assert.equal(options.redirect, 'error');
+    assert.equal(options.referrerPolicy, 'no-referrer'); assert.equal(Object.hasOwn(options, 'body'), false); assert.equal(Object.hasOwn(options, 'headers'), false);
+    const binding = { ...publication };
+    await multiplayerRequest('https://relay.example', `/multiplayer/rooms/${id}/lobby-join`, 'POST', binding);
+    assert.deepEqual(JSON.parse(String(requests[1].options.body)), binding); assert.equal(requests[1].url.includes(token), false);
+    for (const [path, method, body] of [
+      ['/multiplayer/lobby', 'GET', { token }], ['/multiplayer/lobby?token=secret', 'GET', undefined],
+      ['/multiplayer/lobby', 'POST', {}], [`/multiplayer/rooms/${id}`, 'GET', undefined],
+      [`/multiplayer/rooms/${id}/lobby-join`, 'DELETE', {}], ['/multiplayer/rooms/not-a-uuid/lobby-join', 'POST', {}],
+    ] as const) await assert.rejects(() => multiplayerRequest('https://relay.example', path, method, body));
+    assert.equal(requests.length, 2);
+  } finally { globalThis.fetch = original; }
+});
+
+
+test('a stale reconnect ready preserves the newer accepted lease without admitting a changed binding', t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'], now });
+  const c = connection(0, 45000, () => Date.now());
+  try {
+    c.ready(); t.mock.timers.tick(10000);
+    c.socket.message({ type: 'lease', expiresAt: room.expiresAt + 10 });
+    c.socket.message({ type: 'lease', expiresAt: room.expiresAt });
+    assert.equal(c.statuses.at(-1), 'connected', 'an out-of-order earlier callback does not disconnect the room');
+    c.socket.disconnect(); t.mock.timers.tick(500);
+    const resumed = c.sockets[1]; resumed.open();
+    resumed.message({ type: 'ready', ...publication, roomId: id, seat: 0, expiresAt: room.expiresAt });
+    resumed.message({ type: 'peer', connected: true });
+    resumed.onSend = value => { if (value.type === 'ping') resumed.message({ type: 'pong' }); };
+    for (let tick = 0; tick < 179; tick++) t.mock.timers.tick(10000);
+    assert.equal(Date.now() - now, 1800500);
+    assert.equal(c.statuses.at(-1), 'connected', 'the descriptor/ready deadline cannot replace an accepted newer lease');
+    t.mock.timers.tick(9500); assert.equal(c.statuses.at(-1), 'expired', 'pongs cannot further extend the newest lease');
+  } finally { c.client.close(); }
 });

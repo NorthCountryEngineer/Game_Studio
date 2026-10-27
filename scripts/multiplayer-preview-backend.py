@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import time
 import types
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -25,6 +26,10 @@ def load(name, path):
 
 games = load('preview_games', ROOT / 'backend/nce_api/games.py')
 relay = load('preview_relay', ROOT / 'backend/nce_api/multiplayer.py')
+# Only the synthetic adapter can advance its clock. Production still uses real
+# server time; this lets real local sockets cross lease boundaries without waits.
+preview_offset = 0
+relay.time = types.SimpleNamespace(time=lambda: time.time() + preview_offset)
 frontend_origin = sys.argv[1]
 socket_url = sys.argv[2]
 organization = '22222222-2222-4222-8222-222222222222'
@@ -59,8 +64,10 @@ relay._games = games
 # the local URL; the frontend likewise explicitly allows WS only in preview.
 relay.socket_url = lambda: socket_url
 spec = games.design_game('Asteroids with one level. Collect 3 stars, 180 seconds, 5 lives, easy difficulty.')['spec']
-spec.update(version=5, multiplayer={'mode': 'cooperative', 'maxPlayers': 2}, title='Two-player synthetic prize flight',
-    powerUps={'spawnInterval': 5, 'duration': 10, 'types': ['triple-shot', 'rapid-fire', 'shield', 'speed-boost']})
+spec.update(version=6, multiplayer={'mode': 'cooperative', 'maxPlayers': 2}, title='Two-player synthetic endless flight',
+    powerUps={'spawnInterval': 5, 'duration': 10, 'types': ['triple-shot', 'rapid-fire', 'shield', 'speed-boost']},
+    asteroids={'endless': True, 'difficultyInterval': 30, 'sizes': 3,
+        'enemies': {'enabled': True, 'difficulty': 'hard', 'hitPoints': 2, 'spawnInterval': 15, 'maxShips': 2}})
 spec['arcade']['rotation'] = False
 spec['arcade']['highScores'] = False
 spec = games.validate_spec(spec)
@@ -76,6 +83,12 @@ for raw in sys.stdin:
     outgoing.clear(); closures.clear()
     try:
         command = json.loads(raw)
+        if command['kind'] == 'advance-clock':
+            if set(command) != {'kind', 'seconds'} or type(command['seconds']) is not int or not 1 <= command['seconds'] <= 30:
+                raise ValueError('Invalid synthetic clock step.')
+            preview_offset += command['seconds']
+            print(json.dumps({'status': 200, 'result': {'now': int(relay.time.time())}, 'outgoing': [], 'closures': []}), flush=True)
+            continue
         event = {'headers': {'origin': command.get('origin', '')}, 'requestContext': {
             'http': {'sourceIp': '127.0.0.1'}, 'identity': {'sourceIp': '127.0.0.1'}}}
         if command['kind'] == 'http':

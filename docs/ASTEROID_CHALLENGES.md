@@ -45,7 +45,7 @@ In endless survival, collected triple shot, rapid fire and speed boost effects r
 
 Finite games retain their existing timed prizes and one-hit shield behavior. In a cooperative game, effects belong to the ship that collects the pickup. See [periodic prizes](ASTEROID_PRIZES.md) for the available effects and [multiplayer](MULTIPLAYER.md) for shared play.
 
-Solo endless play has no gameplay timer. Two-player games keep the existing 30-minute live-room expiry and connection rules; choosing endless survival does not extend a room's credentials or lifetime.
+Solo endless play has no gameplay timer. Active two-player rooms now renew their idle leases and have no fixed 30-minute room-age limit. Host disconnect/reconnect rules still apply, and an abandoned or idle room can expire. Individual AWS WebSocket connections have a two-hour transport limit and reconnect within the same retained game. See [multiplayer connection and lifecycle](MULTIPLAYER.md#connection-and-lifecycle).
 
 ## Private review and publication
 

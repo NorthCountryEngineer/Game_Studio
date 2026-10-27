@@ -32,16 +32,20 @@ lines.on('line', line => {
 });
 python.on('exit', () => { readyReject(new Error('The local backend stopped.')); while (pending.length) pending.shift().reject(new Error('The local backend stopped.')); });
 function dispatch(command) { return new Promise((resolveValue, reject) => { pending.push({ resolve: resolveValue, reject }); python.stdin.write(`${JSON.stringify(command)}\n`); }); }
-function headers(request, response) { if (request.headers.origin === origin) response.setHeader('Access-Control-Allow-Origin', origin); response.setHeader('Vary', 'Origin'); response.setHeader('Cache-Control', 'no-store'); response.setHeader('Access-Control-Allow-Methods', 'POST, DELETE, OPTIONS'); response.setHeader('Access-Control-Allow-Headers', 'Content-Type'); }
+function headers(request, response) { if (request.headers.origin === origin) response.setHeader('Access-Control-Allow-Origin', origin); response.setHeader('Vary', 'Origin'); response.setHeader('Cache-Control', 'no-store'); response.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS'); response.setHeader('Access-Control-Allow-Headers', 'Content-Type'); }
 try {
   const fixture = await ready;
   httpServer = createHTTPServer(async (request, response) => {
     headers(request, response);
     if (request.method === 'OPTIONS') { response.writeHead(request.headers.origin === origin ? 204 : 403); response.end(); return; }
     if (request.method === 'GET' && request.url === '/health') { response.setHeader('Content-Type', 'application/json'); response.end('{"status":"ok","mode":"synthetic-preview"}'); return; }
-    if (!['POST', 'DELETE'].includes(request.method) || !/^\/multiplayer\/rooms(?:\/[0-9a-f-]{36}(?:\/join)?)?$/.test(request.url || '')) { response.writeHead(404); response.end(); return; }
+    const clock = request.method === 'POST' && request.url === '/__multiplayer-preview/advance-clock';
+    const lobby = request.method === 'GET' && request.url === '/multiplayer/lobby';
+    const room = request.method === 'POST' && /^\/multiplayer\/rooms(?:\/[0-9a-f-]{36}\/(?:join|lobby-join))?$/.test(request.url || '') || request.method === 'DELETE' && /^\/multiplayer\/rooms\/[0-9a-f-]{36}$/.test(request.url || '');
+    if (!clock && !lobby && !room) { response.writeHead(404); response.end(); return; }
+    if (clock && request.headers.origin !== origin) { response.writeHead(403); response.end(); return; }
     let raw = ''; for await (const chunk of request) { raw += chunk; if (Buffer.byteLength(raw) > 2048) { response.writeHead(413); response.end(); return; } }
-    try { const result = await dispatch({ kind: 'http', method: request.method, path: request.url, body: JSON.parse(raw), origin: request.headers.origin || '' }); response.writeHead(result.status, { 'Content-Type': 'application/json' }); response.end(JSON.stringify(result.result)); }
+    try { const body = raw ? JSON.parse(raw) : {}; const command = clock ? { kind: 'advance-clock', seconds: body.seconds } : { kind: 'http', method: request.method, path: request.url, body, origin: request.headers.origin || '' }; const result = await dispatch(command); response.writeHead(result.status, { 'Content-Type': 'application/json' }); response.end(JSON.stringify(result.result)); }
     catch { response.writeHead(400, { 'Content-Type': 'application/json' }); response.end('{"error":"Invalid local request."}'); }
   });
   const wss = new WebSocketServer({ noServer: true, maxPayload: 28672, perMessageDeflate: false });

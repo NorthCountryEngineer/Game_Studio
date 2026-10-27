@@ -1,4 +1,4 @@
-"""Short-lived, capability-scoped cooperative rooms. No identities or gameplay are retained.
+"""Idle-expiring, capability-scoped cooperative rooms. No identities or gameplay are retained.
 
 The parent page relays bounded fixed-engine data; the sandbox never gains network
 access. A browser host is the simulation authority, not an assessment authority.
@@ -17,6 +17,7 @@ from urllib.parse import urlsplit
 import uuid
 
 ROOM_SECONDS = 1800
+LOBBY_LIMIT = 20
 PENDING_SECONDS = 45
 HEARTBEAT_SECONDS = 45
 DISCONNECT_GRACE = 60
@@ -301,8 +302,106 @@ def active_room(api, room_id):
     return room, spec, check
 
 
+def lobby_registry(api):
+    value = load(api, 'lobby', 'waiting')
+    if value and (not isinstance(value.get('roomIds'), list) or len(value['roomIds']) > LOBBY_LIMIT
+            or any(not isinstance(item, str) or not UUID.fullmatch(item) for item in value['roomIds'])
+            or len(set(value['roomIds'])) != len(value['roomIds'])):
+        fail('The public lobby is unavailable. Retry shortly.', 503)
+    return value
+
+
+def lobby_write(previous, room_ids, expires_at):
+    if len(room_ids) > LOBBY_LIMIT:
+        fail('The public lobby is full. Use a private invitation or retry shortly.', 409)
+    value = revision(previous, roomIds=room_ids, expiresAt=expires_at) if previous else row(
+        'lobby', 'waiting', roomIds=room_ids, expiresAt=expires_at)
+    return put(value, previous)
+
+
+def pending_public_guest(room):
+    return (room.get('visibility', 'private') == 'public' and room.get('guestHash')
+        and not room.get('guestAdmitted') and int(room.get('guestReservationExpiresAt', 0)) > 0)
+
+
+def waiting_public_room(api, room, now, host_required=True):
+    if (not room or room.get('visibility', 'private') != 'public' or room.get('closed')
+            or int(room['expiresAt']) <= now):
+        return False
+    if room.get('guestHash') and (not pending_public_guest(room)
+            or host_required and int(room['guestReservationExpiresAt']) > now):
+        # A pending public claimant temporarily hides the listing, but remains
+        # in the registry so an abandoned reservation becomes discoverable again.
+        return False
+    if connected(api, room, 0, now):
+        return True
+    if host_required:
+        return False
+    # Keep an unconnected host's initial reservation, and keep a previously
+    # connected host only for its existing bounded reconnect grace.
+    if not room.get('hostConnected'):
+        return int(room['createdAt']) + PENDING_SECONDS > now
+    absent = int(room.get('disconnectedAt0', 0))
+    if not absent:
+        host = load(api, 'connection', room['connection0']) if room.get('connection0') else None
+        absent = int(host.get('lastSeen', room['createdAt'])) + HEARTBEAT_SECONDS if host else int(room['createdAt'])
+    return absent + DISCONNECT_GRACE > now
+
+
+def public_rooms(api, event, body):
+    fields(body, ())
+    rate(api, event, 'lobby-list', 30)
+    rate(api, {'requestContext': {}}, 'all-lobby-list', 240)
+    registry = lobby_registry(api)
+    now, result = int(time.time()), []
+    for room_id in registry['roomIds'] if registry else []:
+        room = load(api, 'room', room_id)
+        if not waiting_public_room(api, room, now):
+            continue
+        try:
+            spec, _, _ = publication(api, room['gameId'], int(room['publishedRevision']), room['specSha256'])
+        except MultiplayerError as error:
+            if error.status in {404, 409}:
+                continue
+            raise
+        result.append({'roomId': room['roomId'], 'gameId': room['gameId'],
+            'publishedRevision': int(room['publishedRevision']), 'specSha256': room['specSha256'],
+            'title': spec['title'], 'expiresAt': int(room['expiresAt'])})
+    return {'rooms': result}
+
+
+def lobby_advertise(api, room, expires_at):
+    """Renew only a live capability's existing public waiting-room listing."""
+    if room.get('visibility', 'private') != 'public' or room.get('guestHash') and not pending_public_guest(room):
+        return []
+    registry = lobby_registry(api)
+    ids = list(registry['roomIds']) if registry else []
+    if room['roomId'] not in ids:
+        if len(ids) >= LOBBY_LIMIT:
+            now = int(time.time())
+            ids = [value for value in ids if waiting_public_room(api, load(api, 'room', value), now, host_required=False)]
+        if len(ids) >= LOBBY_LIMIT:
+            # A revived room can still play through its existing capabilities.
+            # Discovery capacity must never revoke an admitted host's lease.
+            return []
+        ids.append(room['roomId'])
+    return [lobby_write(registry, ids, max(expires_at, int(registry['expiresAt']) if registry else 0))]
+
+
+def lobby_remove(api, room):
+    if room.get('visibility', 'private') != 'public':
+        return []
+    registry = lobby_registry(api)
+    if not registry or room['roomId'] not in registry['roomIds']:
+        return []
+    return [lobby_write(registry, [value for value in registry['roomIds'] if value != room['roomId']], int(registry['expiresAt']))]
+
+
 def create_room(api, event, body):
-    fields(body, ('gameId', 'publishedRevision'))
+    fields(body, ('gameId', 'publishedRevision'), ('visibility',))
+    visibility = body.get('visibility', 'private')
+    if not isinstance(visibility, str) or visibility not in {'private', 'public'}:
+        fail('Choose a private invitation or public partner lobby.')
     rate(api, event, 'create', 6)
     # Separate installation-wide bound also limits distributed room allocation.
     rate(api, {'requestContext': {}}, 'all-create', 120)
@@ -313,31 +412,67 @@ def create_room(api, event, body):
     host, invite = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
     room = row('room', room_id, roomId=room_id, gameId=body['gameId'], publishedRevision=body['publishedRevision'],
         specSha256=spec_hash, hostHash=digest(host), inviteHash=digest(invite), guestHash='',
-        createdAt=now, expiresAt=now + ROOM_SECONDS, closed=False, hostConnected=False,
+        createdAt=now, expiresAt=now + ROOM_SECONDS, legacyExpiresAt0=now + ROOM_SECONDS,
+        legacyExpiresAt1=now + ROOM_SECONDS, closed=False, hostConnected=False, visibility=visibility,
         connection0='', connection1='', generation0='', generation1='', disconnectedAt0=0, disconnectedAt1=0)
-    if not transaction(api, [check, put(room)]):
-        fail('The game changed while the room was created. Retry.', 409)
-    return {'roomId': room_id, 'hostToken': host, 'inviteToken': invite, 'expiresAt': room['expiresAt'], 'socketUrl': endpoint,
+    for _ in range(5):
+        registry_operations = []
+        if visibility == 'public':
+            registry = lobby_registry(api)
+            live = []
+            for candidate_id in registry['roomIds'] if registry else []:
+                candidate = load(api, 'room', candidate_id)
+                if not waiting_public_room(api, candidate, now, host_required=False):
+                    continue
+                try:
+                    publication(api, candidate['gameId'], int(candidate['publishedRevision']), candidate['specSha256'])
+                except MultiplayerError as error:
+                    if error.status in {404, 409}:
+                        continue
+                    raise
+                live.append(candidate)
+            registry_operations = [lobby_write(registry, [value['roomId'] for value in live] + [room['roomId']],
+                max([room['expiresAt']] + [int(value['expiresAt']) for value in live]))]
+        if transaction(api, [check, put(room), *registry_operations]):
+            break
+        if visibility == 'private':
+            fail('The game changed while the room was created. Retry.', 409)
+        # A registry race is retriable; a changed publication remains refused by
+        # the same exact condition check in every attempted transaction.
+    else:
+        fail('The public lobby changed. Retry shortly.', 409)
+    return {'roomId': room['roomId'], 'hostToken': host, 'inviteToken': invite, 'expiresAt': room['expiresAt'], 'socketUrl': endpoint,
         'gameId': room['gameId'], 'publishedRevision': int(room['publishedRevision']), 'specSha256': room['specSha256']}
 
 
-def join_room(api, event, room_id, body):
-    fields(body, ('inviteToken', 'gameId', 'publishedRevision', 'specSha256'))
-    supplied = digest(body['inviteToken'])
+def join_room(api, event, room_id, body, public=False):
+    fields(body, ('gameId', 'publishedRevision', 'specSha256') if public else ('inviteToken', 'gameId', 'publishedRevision', 'specSha256'))
+    supplied = None if public else digest(body['inviteToken'])
     identifier(body['gameId']); integer(body['publishedRevision'], 1, 1000000000)
     if not isinstance(body['specSha256'], str) or not re.fullmatch(r'[a-f0-9]{64}', body['specSha256']):
         fail('An exact published game binding is required.')
-    rate(api, event, 'join', 20)
+    rate(api, event, 'lobby-join' if public else 'join', 20)
+    if public:
+        rate(api, {'requestContext': {}}, 'all-lobby-join', 120)
     endpoint = socket_url()
     for _ in range(5):
         room, _, check = active_room(api, room_id)
         if body['gameId'] != room['gameId'] or body['publishedRevision'] != int(room['publishedRevision']) or not hmac.compare_digest(body['specSha256'], room['specSha256']):
             fail('This invitation belongs to a different game edition. Open its original link.', 409)
-        if room['guestHash'] or not hmac.compare_digest(room['inviteHash'], supplied):
+        if public:
+            if not waiting_public_room(api, room, int(time.time())):
+                fail('This public room is no longer waiting for a partner.', 409)
+        elif room['guestHash'] or not hmac.compare_digest(room['inviteHash'], supplied):
             fail('This invitation has been used or is invalid. Ask for a new room.', 403)
         token = secrets.token_urlsafe(32)
-        changed = revision(room, guestHash=digest(token), inviteHash='')
-        if transaction(api, [check, put(changed, room)]):
+        now = int(time.time())
+        changed = revision(room, guestHash=digest(token), inviteHash='', guestAdmitted=False, guestClaimedAt=now,
+            guestReservationExpiresAt=now + PENDING_SECONDS if public else 0,
+            legacyExpiresAt0=int(room.get('legacyExpiresAt0', room['expiresAt'])), legacyExpiresAt1=int(room['expiresAt']))
+        # Only WebSocket admission seals a public claimant's seat. Keep its
+        # registry reservation until then; private invitations remain one-use.
+        lobby_operations = [] if public else lobby_remove(api, room)
+        if transaction(api, [check, put(changed, room), *lobby_operations]):
             return {'roomId': room_id, 'guestToken': token, 'expiresAt': int(room['expiresAt']), 'socketUrl': endpoint,
                 'gameId': room['gameId'], 'publishedRevision': int(room['publishedRevision']), 'specSha256': room['specSha256']}
     fail('This room changed. Retry shortly.', 409)
@@ -354,11 +489,15 @@ def close_room(api, room_id, body):
 
 
 def dispatch(api, event, method, path, body):
+    if method == 'GET' and path == '/multiplayer/lobby':
+        return public_rooms(api, event, body)
     if method == 'POST' and path == '/multiplayer/rooms':
         return create_room(api, event, body)
-    match = re.fullmatch(r'/multiplayer/rooms/([^/]+)(/join)?', path)
+    match = re.fullmatch(r'/multiplayer/rooms/([^/]+)(/join|/lobby-join)?', path)
     if match and method == 'POST' and match[2] == '/join':
         return join_room(api, event, match[1], body)
+    if match and method == 'POST' and match[2] == '/lobby-join':
+        return join_room(api, event, match[1], body, public=True)
     if match and method == 'DELETE' and not match[2]:
         rate(api, event, 'close', 30)
         return close_room(api, match[1], body)
@@ -502,31 +641,49 @@ def connect(api, event):
 
 
 def admit(api, connection, body):
-    fields(body, ('type', 'roomId', 'token'))
+    fields(body, ('type', 'roomId', 'token'), ('leaseVersion',))
+    if 'leaseVersion' in body and (type(body['leaseVersion']) is not int or body['leaseVersion'] != 1):
+        fail('Unsupported multiplayer lease protocol.')
+    renewable = body.get('leaseVersion') == 1
     identifier(body['roomId'])
     supplied = digest(body['token'])
     now = int(time.time())
     if 'roomId' in connection or int(connection['expiresAt']) <= now:
         fail('This relay admission expired. Reconnect.', 403)
     for _ in range(5):
+        now = int(time.time())
+        if int(connection['expiresAt']) <= now:
+            fail('This relay admission expired. Reconnect.', 403)
         room, _, check = active_room(api, body['roomId'])
         if hmac.compare_digest(room['hostHash'], supplied):
             seat = 0
         elif room['guestHash'] and hmac.compare_digest(room['guestHash'], supplied):
+            if pending_public_guest(room) and int(room['guestReservationExpiresAt']) <= now:
+                fail('This public partner reservation expired. Choose the room again.', 410)
             seat = 1
         else:
             fail('This room capability is invalid.', 403)
         generation = str(uuid.uuid4())
         old_id = room.get('connection' + str(seat))
+        expires_at = max(int(room['expiresAt']), now + ROOM_SECONDS) if renewable else int(room['expiresAt'])
+        connection_expiry = expires_at if renewable else int(room.get('legacyExpiresAt' + str(seat), room['expiresAt']))
+        if connection_expiry <= now:
+            fail('This legacy room capability expired. Start a new room.', 410)
         changed_room = revision(room, **{'connection' + str(seat): connection['connectionId'], 'generation' + str(seat): generation,
-            'disconnectedAt' + str(seat): 0}, **({'hostConnected': True} if seat == 0 else {}))
+            'disconnectedAt' + str(seat): 0}, expiresAt=expires_at,
+            legacyExpiresAt0=int(room.get('legacyExpiresAt0', room['expiresAt'])),
+            legacyExpiresAt1=int(room.get('legacyExpiresAt1', room['expiresAt'])),
+            **({'hostConnected': True} if seat == 0 else {'guestAdmitted': True}))
         changed_connection = revision(connection, roomId=room['roomId'], seat=seat, generation=generation,
-            lastSeen=now, expiresAt=int(room['expiresAt']), seq=-1)
-        if transaction(api, [check, put(changed_room, room), put(changed_connection, connection)]):
+            lastSeen=now, expiresAt=connection_expiry, seq=-1, **({'leaseVersion': 1} if renewable else {}))
+        lobby_operations = lobby_advertise(api, changed_room, expires_at) if seat == 0 else lobby_remove(api, changed_room)
+        if transaction(api, [check, put(changed_room, room), put(changed_connection, connection), *lobby_operations]):
             if old_id and old_id != connection['connectionId']:
                 disconnect_socket(api, old_id)
-            post(api, connection['connectionId'], {'type': 'ready', 'roomId': room['roomId'], 'seat': seat, 'expiresAt': int(room['expiresAt']),
+            post(api, connection['connectionId'], {'type': 'ready', 'roomId': room['roomId'], 'seat': seat, 'expiresAt': connection_expiry,
                 'gameId': room['gameId'], 'publishedRevision': int(room['publishedRevision']), 'specSha256': room['specSha256']})
+            if renewable:
+                post(api, connection['connectionId'], {'type': 'lease', 'expiresAt': expires_at})
             post(api, connection['connectionId'], {'type': 'peer', 'connected': connected(api, changed_room, 1 - seat)})
             if connected(api, changed_room, 1 - seat):
                 post(api, changed_room['connection' + str(1 - seat)], {'type': 'peer', 'connected': True})
@@ -603,12 +760,20 @@ def message(api, event):
         count = int(connection.get(count_key, 0)) + 1 if int(connection.get(second_key, 0)) == now else 1
         if count > maximum:
             fail('Multiplayer messages arrived too quickly.', 429)
-        changed = revision(connection, lastSeen=now, seq=seq, **{second_key: now, count_key: count})
-        if transaction(api, [check, room_check(room), put(changed, connection)]):
+        renew = kind == 'ping' and connection.get('leaseVersion') == 1
+        expires_at = max(int(room['expiresAt']), now + ROOM_SECONDS) if renew else int(connection['expiresAt'])
+        changed = revision(connection, lastSeen=now, seq=seq, expiresAt=expires_at, **{second_key: now, count_key: count})
+        lease_operations = [put(revision(room, expiresAt=expires_at,
+            legacyExpiresAt0=int(room.get('legacyExpiresAt0', room['expiresAt'])),
+            legacyExpiresAt1=int(room.get('legacyExpiresAt1', room['expiresAt']))), room),
+            *lobby_advertise(api, room, expires_at)] if renew else [room_check(room)]
+        if transaction(api, [check, *lease_operations, put(changed, connection)]):
             if duplicate:
                 return
             if kind == 'ping':
                 post(api, value, {'type': 'pong'})
+                if renew:
+                    post(api, value, {'type': 'lease', 'expiresAt': expires_at})
                 post(api, value, {'type': 'peer', 'connected': connected(api, room, 1 - seat, now)})
             else:
                 peer_id = room.get('connection' + str(1 - seat))
