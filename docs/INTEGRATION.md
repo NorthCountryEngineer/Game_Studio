@@ -45,6 +45,12 @@ The SDK generates a unique channel and validates messages against the expected f
 
 The version 1 completion envelope contains `version`, `source`, `channel`, `type`, `gameId`, `publishedRevision` and `result`. Results contain outcome (`won`/`lost`), elapsed time, collected count in `score`, optional arcade points and reviewed level IDs. Word games report solved answers, found words or completed prompts; a crossword solution reveal reports `lost`. They use the single review item `level-1` and have no points or high-score board. No entered letters, Mad Libs answers, completed stories, user identifiers or authentication material are sent. Extra result fields are rejected. The shared SDK permits finite elapsed seconds from 0 through 86,400 for untimed puzzles; the fixed player separately checks the format-specific result. Sessions older than 24 hours must be restarted. `ready` identifies a mounted integration surface; gameplay still has its own loading state.
 
+## Host-owned assignment points
+
+The same SDK exports `validateScoringPolicy`, `gameObjectiveUnits`, `calculateProvisionalPoints`, `selectScoringAttempt`, `createPublicationBinding` and `scorePublishedGame`. An application can attach an immutable 25-point, 100-point or other policy to its own assignment while reusing the same game. Rules support proportional objectives, full completion or an explicit arcade-point target; whole/hundredth half-up rounding; first/latest/best attempt selection; bounded attempts; and explicit crossword reveal behavior. Calculations are provisional client observations. The host admits attempts and recalculates/stores points under its own authorization, privacy and final-award rules.
+
+See [the complete scoring contract and host workflow](ASSIGNMENT_SCORING.md). Do not add scoring rules or identifiers to the strict version 1 result envelope. It has no attempt ID, and restarting can emit another result on the same channel. Accept one terminal result for a server-admitted attempt, then remount for another attempt. Public snapshot helpers check exact edition/hash but do not fetch current publication or validate a host runtime digest.
+
 ## HTTP API
 
 All API endpoints are installation-scoped. Public access needs no token:

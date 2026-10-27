@@ -1,5 +1,11 @@
 # Validation and release boundary
 
+## Assignment scoring — current source
+
+On October 27, 2026, the host scoring SDK passed **174 TypeScript tests**, typechecking and the standalone SDK build. The eleven additional scoring tests cover strict policy/result validation, 25/100 scales, complete-game denominators for partial multi-level attempts, half-up rounding, completion and explicit arcade targets, solution reveals, Mad Libs participation, invalid/duplicate attempt histories, canonical SHA-256 parity with Python for every game format and Unicode, stale publication rejection and input mutation during asynchronous hashing. Existing strict version 1 events, source/origin/channel isolation, private publication workflows and arcade score tests remain passing.
+
+The generated standalone module exports all six scoring helpers and can be imported without browser globals or credentials. It is approximately 49 kB uncompressed / 13 kB gzip and includes the shared strict validators; it contains no sandbox player UI or guided designer. Build outputs stay ignored. These are synthetic offline source checks, not evidence of deployment, authentic student gameplay, host gradebook persistence or final academic assessment. The owning application's attempt admission, protected storage, approval and award flow needs its own tests and release acceptance. See [assignment scoring](ASSIGNMENT_SCORING.md).
+
 ## Word games — current source
 
 Crossword, word search and Mad Libs use strict version 3 data and their fixed isolated player. Focused tests cover complete connected layouts, deterministic browser/backend parity, bounded adversarial crossword search, word-search fallback, template token validation, Unicode and unsafe content, direct authoring controls, saved-revision review, private/public snapshot preservation, pagination compatibility, model output and idempotency, score rejection and counts-only completion messages. Runtime tests execute the actual serialized sandbox code and exercise letter entry, answer checks/reveal, pointer and keyboard word selection, Mad Libs entry/reveal, hostile messages and expired sessions.

@@ -10,5 +10,11 @@ Exports:
 - `mountGame(container, {studioOrigin, hostId, gameId, title?, onEvent?})`: create the frame and validated event listener; returns `{iframe, destroy()}`.
 - `listPublishedGames(apiOrigin, {signal?})`: paginated public catalog.
 - `parseGameStudioEvent(value)`: strict version 1 event validation.
+- `validateScoringPolicy(value)`: strict normalized version 1 host assignment rules.
+- `gameObjectiveUnits(spec)` and `calculateProvisionalPoints(spec, result, policy)`: full-game objective totals and deterministic provisional assignment points.
+- `selectScoringAttempt([{ordinal, earned_points}], policy)`: first/latest/best selection using host-issued ordinals.
+- `createPublicationBinding(publicSnapshot)` and `scorePublishedGame(publicSnapshot, expectedBinding, result, policy)`: asynchronous canonical SHA-256 edition binding and bound provisional calculation.
+
+Assignment scoring does not change the game definition, version 1 event envelope or arcade leaderboard. The owning application must admit attempts, validate its runtime and current publication, recalculate on its backend, protect student records and approve final awards. See [assignment scoring](../docs/ASSIGNMENT_SCORING.md) for 25/100-point examples, rounding and reveal rules, replay boundaries and integration requirements.
 
 Use [the integration contract](../docs/INTEGRATION.md) and [local two-origin example](../examples/host/README.md). Import the module from the deployed studio URL or bundle the local built package; this repository does not publish a paid or public npm package. The host must approve the studio URL in its own script/frame policy, and the Game Studio deployment must approve the host origin independently.

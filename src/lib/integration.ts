@@ -1,5 +1,7 @@
 /** Versioned host interface. Tokens, role claims and private drafts never cross postMessage. */
 export const INTEGRATION_VERSION = 1 as const;
+export { validateScoringPolicy, gameObjectiveUnits, calculateProvisionalPoints, selectScoringAttempt, createPublicationBinding, scorePublishedGame } from './game-scoring';
+export type { ScoringPolicy, ProvisionalPoints, PublicationBinding, ScoringAttempt } from './game-scoring';
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const hostId = /^[a-z][a-z0-9_-]{0,63}$/;
 const channelId = /^[a-zA-Z0-9_-]{1,80}$/;
