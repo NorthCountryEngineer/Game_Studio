@@ -43,7 +43,7 @@ player.destroy();
 
 The SDK generates a unique channel and validates messages against the expected frame, origin, channel and game. A raw iframe snippet is also available in **Share or embed** after publication. Preserve its `referrerpolicy="strict-origin"`, approved host ID and channel. Hosts must permit the configured studio origin in their own `frame-src` and SDK URL in `script-src`. A host-wide `no-referrer` policy must not override the player's strict-origin referrer requirement.
 
-The version 1 completion envelope contains `version`, `source`, `channel`, `type`, `gameId`, `publishedRevision` and `result`. Results contain outcome (`won`/`lost`), elapsed time, collected count, optional points and reviewed level IDs. No user identifiers or authentication material are sent. `ready` identifies a mounted integration surface; gameplay still has its own loading state.
+The version 1 completion envelope contains `version`, `source`, `channel`, `type`, `gameId`, `publishedRevision` and `result`. Results contain outcome (`won`/`lost`), elapsed time, collected count in `score`, optional arcade points and reviewed level IDs. Word games report solved answers, found words or completed prompts; a crossword solution reveal reports `lost`. They use the single review item `level-1` and have no points or high-score board. No entered letters, Mad Libs answers, completed stories, user identifiers or authentication material are sent. Extra result fields are rejected. The shared SDK permits finite elapsed seconds from 0 through 86,400 for untimed puzzles; the fixed player separately checks the format-specific result. Sessions older than 24 hours must be restarted. `ready` identifies a mounted integration surface; gameplay still has its own loading state.
 
 ## HTTP API
 
@@ -52,12 +52,15 @@ All API endpoints are installation-scoped. Public access needs no token:
 | Method and route | Purpose |
 | --- | --- |
 | `GET /integration` | Branding, revision, approved hosts and fixed route templates |
-| `GET /games/published` | Paginated public catalog (`games`, optional `cursor`) |
+| `GET /games/published` | Legacy version 1/2 public catalog (`games`, optional `cursor`) |
+| `GET /games/published?specVersion=all` | Public catalog including version 3 word games |
 | `GET /games/published/{id}` | Current public game snapshot |
 | `GET /game-scores/{id}?revision=N` | Edition-specific public top-ten board |
 | `GET /health` | Availability check |
 
-`listPublishedGames(apiOrigin)` in the SDK handles public catalog pagination. The public board exposes arcade names and points, not account identifiers. Shared score submission requires a normal Game Studio Core session; embedded guests can use local scores when browser storage permits.
+`listPublishedGames(apiOrigin)` in the current SDK requests `specVersion=all` on every page and handles public catalog pagination. Only `cursor` and `specVersion=all` are accepted catalog parameters. An empty legacy-filtered page may still have a cursor; continue until no cursor is returned. Direct ID lookup returns any supported saved version, including version 3. Hosts that render data themselves must validate the versioned union before accepting word games; see [word-game schema](WORD_GAMES.md). Existing NCAcademy imports remain version 1/2 until that separate adapter is upgraded. The native public player and current SDK support all formats.
+
+The public board exposes arcade names and points, not account identifiers. Word games reject shared score reads and submissions. Shared arcade score submission requires a normal Game Studio Core session; embedded arcade guests can use local scores when browser storage permits.
 
 Protected authoring/account/agent endpoints accept only access tokens issued to this installation's paired Core clients, checked by live introspection. NCAcademy or Axolotl tokens cannot be forwarded to reuse their audiences. Server integrations must use an explicitly reviewed Game Studio identity contract rather than copying a token from another service. This version ships the top-level creator workflow and public player interfaces; it does not mint arbitrary machine credentials or delegated student tickets.
 

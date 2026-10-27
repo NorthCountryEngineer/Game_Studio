@@ -49,7 +49,7 @@ export function parseGameStudioEvent(value: unknown): GameStudioEvent | undefine
   if (v.type === 'completed') {
     if (!Number.isSafeInteger(v.publishedRevision) || Number(v.publishedRevision) < 1 || !v.result || typeof v.result !== 'object' || Array.isArray(v.result)) return;
     const r = v.result as Record<string, unknown>;
-    if (Object.keys(r).some(k => !['outcome', 'elapsed', 'score', 'points', 'reviewedLevelIds'].includes(k)) || !['won', 'lost'].includes(String(r.outcome)) || typeof r.elapsed !== 'number' || !Number.isFinite(r.elapsed) || r.elapsed < 0 || r.elapsed > 1440 || !Number.isSafeInteger(r.score) || Number(r.score) < 0 || Number(r.score) > 320 || (r.points !== undefined && (!Number.isSafeInteger(r.points) || Number(r.points) < 0 || Number(r.points) > 1000000)) || !Array.isArray(r.reviewedLevelIds) || r.reviewedLevelIds.length > 8 || r.reviewedLevelIds.some(x => typeof x !== 'string' || !/^level-[1-8]$/.test(x)) || new Set(r.reviewedLevelIds).size !== r.reviewedLevelIds.length) return;
+    if (Object.keys(r).some(k => !['outcome', 'elapsed', 'score', 'points', 'reviewedLevelIds'].includes(k)) || !['won', 'lost'].includes(String(r.outcome)) || typeof r.elapsed !== 'number' || !Number.isFinite(r.elapsed) || r.elapsed < 0 || r.elapsed > 86400 || !Number.isSafeInteger(r.score) || Number(r.score) < 0 || Number(r.score) > 320 || (r.points !== undefined && (!Number.isSafeInteger(r.points) || Number(r.points) < 0 || Number(r.points) > 1000000)) || !Array.isArray(r.reviewedLevelIds) || r.reviewedLevelIds.length > 8 || r.reviewedLevelIds.some(x => typeof x !== 'string' || !/^level-[1-8]$/.test(x)) || new Set(r.reviewedLevelIds).size !== r.reviewedLevelIds.length) return;
   }
   return JSON.parse(JSON.stringify(v)) as GameStudioEvent;
 }
@@ -75,7 +75,10 @@ export async function listPublishedGames(apiOrigin: string, options: { signal?: 
   const origin = integrationOrigin(apiOrigin), result: unknown[] = [], seen = new Set<string>();
   let cursor: string | undefined;
   do {
-    const url = new URL('/games/published', origin); if (cursor) url.searchParams.set('cursor', cursor);
+    const url = new URL('/games/published', origin);
+    // Explicit opt-in keeps older arcade-only hosts on their supported schema.
+    url.searchParams.set('specVersion', 'all');
+    if (cursor) url.searchParams.set('cursor', cursor);
     const response = await fetch(url, { credentials: 'omit', redirect: 'error', signal: options.signal });
     if (!response.ok) throw new Error('The Game Studio catalog could not be opened.');
     const page = await response.json(); if (!page || !Array.isArray(page.games) || (page.cursor !== undefined && typeof page.cursor !== 'string')) throw new Error('Invalid game catalog response.');

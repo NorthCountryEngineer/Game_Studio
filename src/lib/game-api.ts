@@ -16,7 +16,10 @@ export async function listGames(published = false): Promise<Game[]> {
   if (!isCore) return local().list(published);
   const games: Game[] = [], seen = new Set<string>(); let cursor: string | undefined;
   do {
-    const page: { games: Game[]; cursor?: string } = await coreRequest(`/games${published ? '/published' : ''}${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`, 'GET', undefined, !published);
+    const query = new URLSearchParams();
+    if (published) query.set('specVersion', 'all');
+    if (cursor) query.set('cursor', cursor);
+    const page: { games: Game[]; cursor?: string } = await coreRequest(`/games${published ? '/published' : ''}${query.size ? `?${query}` : ''}`, 'GET', undefined, !published);
     games.push(...page.games); cursor = page.cursor;
     if (cursor && seen.has(cursor)) throw new Error('The game library returned a repeated page. Reload and try again.');
     if (cursor) seen.add(cursor);

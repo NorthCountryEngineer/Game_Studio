@@ -88,6 +88,7 @@ def publication(api, game_id, revision):
         fail('A new edition was published. Reload this game before saving scores.', 409)
     try: spec = games().validate_spec(state['spec'])
     except (games().GameError, KeyError): fail('This game cannot accept arcade scores.', 409)
+    if spec['version'] == 3: fail('High scores are not enabled for word games.', 404)
     if not spec.get('arcade', {}).get('scoring') or not spec['arcade']['highScores']:
         fail('High scores are not enabled for this game.', 404)
     return spec, item
@@ -100,6 +101,7 @@ def max_points(spec, levels):
 
 
 def validate_result(value, spec):
+    if spec['version'] == 3: fail('Word games cannot submit arcade scores.')
     required = {'outcome', 'elapsed', 'score', 'reviewedLevelIds', 'points'}
     if not isinstance(value, dict) or set(value) != required: fail('Unexpected or missing score report fields.')
     if not isinstance(value['outcome'], str) or value['outcome'] not in {'won', 'lost'}:

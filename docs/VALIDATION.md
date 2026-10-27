@@ -1,5 +1,17 @@
 # Validation and release boundary
 
+## Word games — current source
+
+Crossword, word search and Mad Libs use strict version 3 data and their fixed isolated player. Focused tests cover complete connected layouts, deterministic browser/backend parity, bounded adversarial crossword search, word-search fallback, template token validation, Unicode and unsafe content, direct authoring controls, saved-revision review, private/public snapshot preservation, pagination compatibility, model output and idempotency, score rejection and counts-only completion messages. Runtime tests execute the actual serialized sandbox code and exercise letter entry, answer checks/reveal, pointer and keyboard word selection, Mad Libs entry/reveal, hostile messages and expired sessions.
+
+Validation on October 26, 2026 passed **163 TypeScript tests, 196 Python backend tests and 19 deployment guard tests**, typechecking, preview and production builds, deployment structure/security checks and deterministic Lambda packaging. The backend total includes the existing production branding regressions retained from remote main. Browser/backend parity tests run the actual implementations; model tests use mocked providers.
+
+The compiled browser rehearsal used only disposable local state: all three formats were created, edited or given custom content, completed in the isolated player, explicitly acknowledged, published, and shown in the public Games shelf. A crossword was solved through its numbered grid and checked; word search was completed using keyboard and pointer endpoints; Mad Libs was completed by both button and Enter, and a fresh public player started with empty answers. The initial Mad Libs native form was blocked by the sandbox; the fixed implementation uses explicit button/keyboard handlers and retains `allow-scripts` only, no form permission, and `form-action 'none'`. Executable sandbox tests cover that regression. Reload retained saved definitions and publications.
+
+These local checks do not establish a production release or paid-model acceptance. Release admission needs successful checks on the exact pushed source, followed by the normal Core-managed release and independent Lambda/frontend source proof, health checks and existing-data preservation. Production receipts belong in the private release bundle. NCAcademy's pinned importer/player was not changed and has no version 3 acceptance in this work.
+
+## Historical extraction checkpoint
+
 The standalone application passes 136 TypeScript tests, 174 Python backend tests and 19 deployment guard tests. Typechecking, preview/production builds, deterministic Lambda packaging, registry parity and infrastructure structure/security invariants pass. A fresh offline npm installation also succeeded in an isolated temporary directory.
 
 The following are recorded local checks for the historical companion recipe snapshot. The companion Core recipe passes 132 offline tests, system checks, migration drift checks and its onboarding security invariants. Its corrected production-source baseline is c27e6a03, verified against all 459 included files of the existing Core image. The historical recipe source is `52d8ad1`; its original Core PR is https://github.com/NorthCountryEngineer/NCE_Core/pull/6.

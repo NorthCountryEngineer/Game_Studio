@@ -1,7 +1,7 @@
 import { coreRequest, isCore } from './core';
 import { validateGameSpec } from './game-design';
 import { createGameEngine, validateGameResult } from './game-runtime';
-import type { Game, GameResult, GameSpec } from './game-types';
+import type { ArcadeGameSpec, Game, GameResult } from './game-types';
 
 export type GameScoreEntry = { name: string; points: number; createdAt: string };
 export type GameScoreBoard = { entries: GameScoreEntry[]; scope: 'shared' | 'browser'; publishedRevision: number; limit: 10 };
@@ -30,10 +30,10 @@ export function validateArcadeName(value: unknown): string {
   if (!name) throw new Error('Choose an arcade name with 1–16 letters, numbers, spaces, underscores, or hyphens.');
   return name;
 }
-function publishedGame(game: Game): { spec: GameSpec; publishedRevision: number; maximumPoints: number } {
+function publishedGame(game: Game): { spec: ArcadeGameSpec; publishedRevision: number; maximumPoints: number } {
   if (!game || !identifier(game.id) || game.status !== 'Published' || !revision(game.publishedRevision) || game.revision !== game.publishedRevision) throw new Error('Open the current published game before viewing or saving high scores.');
   const spec = validateGameSpec(game.spec);
-  if (!spec.arcade?.scoring || !spec.arcade.highScores) throw new Error('High scores are disabled for this game.');
+  if (spec.version === 3 || !spec.arcade?.scoring || !spec.arcade.highScores) throw new Error('High scores are disabled for this game.');
   return { spec, publishedRevision: game.publishedRevision, maximumPoints: createGameEngine().maxPoints(spec) };
 }
 function cleanReport(game: Game, value: GameScoreReport): GameScoreReport {

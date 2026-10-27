@@ -86,8 +86,8 @@ export class LocalGameLibrary {
   test(id: string, revision: number, reviewedLevelIds?: string[]): Game {
     const state = this.read(), game = this.draft(state, id, revision);
     validateGameSpec(game.spec);
-    if (game.spec.version === 2) {
-      const ids = getGameLevels(game.spec).map(level => level.id);
+    if (game.spec.version === 2 || game.spec.version === 3) {
+      const ids = game.spec.version === 3 ? ['level-1'] : getGameLevels(game.spec).map(level => level.id);
       if (!Array.isArray(reviewedLevelIds) || reviewedLevelIds.length !== ids.length || new Set(reviewedLevelIds).size !== ids.length || reviewedLevelIds.some(id => !ids.includes(id))) throw new Error('Complete and review every level of this saved version before marking the playtest complete.');
     }
     game.testedRevision = game.revision + 1; return this.update(state, game);
@@ -107,7 +107,11 @@ export class LocalGameLibrary {
   duplicate(id: string, revision: number, newId: string): Game {
     identifier(newId); const state = this.read(); this.enabled(state); const source = this.draft(state, id, revision);
     if (state.deleted.includes(newId) || state.drafts.some(item => item.id === newId)) throw new Error('This copy identifier already exists. Reload the library.');
-    const stamp = now(), game: Game = { id: newId, spec: validateGameSpec({ ...source.spec, title: `${source.spec.title.slice(0, 70)} (copy)` }), revision: 0, status: 'Draft', messages: [], createdAt: stamp, updatedAt: stamp };
+    let title = `${source.spec.title.slice(0, 70)} (copy)`;
+    if (source.spec.version === 3) {
+      title = `Copy of ${source.spec.title}`.slice(0, 80).replace(/[\uD800-\uDBFF]$/u, '').trimEnd();
+    }
+    const stamp = now(), game: Game = { id: newId, spec: validateGameSpec({ ...source.spec, title }), revision: 0, status: 'Draft', messages: [], createdAt: stamp, updatedAt: stamp };
     state.drafts.unshift(game); state.prompts[newId] = ''; state.receipts[newId] = []; this.write(state); return copy(game);
   }
   delete(id: string, revision: number): void {

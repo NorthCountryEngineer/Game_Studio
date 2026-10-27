@@ -1,8 +1,10 @@
 # Game Studio
 
-An independent, tenant-scoped NCE Core application for conversational 2D game creation, private playtesting, publication, embedded play and shared arcade scores. Extracted from the deployed Axolotl News Game Studio at source revision `38719feef155e068ae8566fe21b3918f0809488b`; no newsroom stories, presentation, credentials or production records are included.
+An independent, tenant-scoped NCE Core application for conversational arcade and word-game creation, private playtesting, publication, embedded play and shared arcade scores. Extracted from the deployed Axolotl News Game Studio at source revision `38719feef155e068ae8566fe21b3918f0809488b`; no newsroom stories, presentation, credentials or production records are included.
 
 Creators describe an adventure and refine a saved game through conversation or the visual controls. Collection, dodge/Asteroids and platform games support up to eight designed levels, repeatable procedural layouts, progression, difficulty, touch controls, optional shooting/splitting/points, and named high scores. Only tested editions can be published. Published snapshots remain independent of draft changes. An administrator can pause creation without taking published games offline, manage content through the admin toggle and ellipsis menus, configure agents/modes/workflows, invite accounts, and customize service branding.
+
+Creators can also choose **Crossword**, **Word search**, or **Mad Libs**. Edit answers and clues, word lists, or story templates and prompts; save, playtest and acknowledge the content before publishing. Crosswords and word searches have repeatable seeded layouts. Mad Libs collects the player's words before revealing the story. All three run in the fixed isolated player, without arcade timers, lives or high-score boards. See [word-game workflow and limits](docs/WORD_GAMES.md).
 
 ## Run locally
 
@@ -26,7 +28,7 @@ Open `http://127.0.0.1:5180/game-studio`. To configure local branding and a conn
 4. An authorized game administrator creates, tests and publishes a game. Copy its player link or SDK snippet into the host's lesson/page configuration.
 5. Players use the embedded public player. Signed-in shared score submission uses Game Studio's own top-level Core login; anonymous embedded play can keep local scores. No host access token is forwarded.
 
-The companion Core recipe is reviewed in [NCE Core PR #6](https://github.com/NorthCountryEngineer/NCE_Core/pull/6); it must be released through Core before this new archetype is available in its console.
+The companion Core recipe is tracked in [NCE Core PR #6](https://github.com/NorthCountryEngineer/NCE_Core/pull/6). Source validation and release evidence are recorded in [validation](docs/VALIDATION.md); do not infer live acceptance from a local build.
 
 See [integration contract](docs/INTEGRATION.md), [architecture and boundaries](docs/ARCHITECTURE.md), [Core onboarding](nce/README.md), and [AWS deployment](deployment/README.md). The SDK is framework-independent ES modules, served at `/sdk/game-studio.js`; no npm publication or subscription is required.
 

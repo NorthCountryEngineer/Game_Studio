@@ -1,5 +1,5 @@
-import { validateGameSpec } from './game-design';
-import type { GameLevel, GameResult, GameSpec } from './game-types';
+import { validateArcadeGameSpec } from './game-design';
+import type { GameLevel, GameResult, ArcadeGameSpec, GameSpec } from './game-types';
 
 export type GameInput = { left?: boolean; right?: boolean; up?: boolean; down?: boolean; jump?: boolean; fire?: boolean };
 export type GameEntity = { id: number; kind: 'snack' | 'hazard'; x: number; y: number; w: number; h: number; vx: number; vy: number; asteroid?: 'large' | 'small'; grace?: number };
@@ -34,15 +34,15 @@ export function createGameEngine() {
     return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
   }
   function random(state: GameState) { state.seed = (Math.imul(state.seed, 1664525) + 1013904223) >>> 0; return state.seed / 4294967296; }
-  function getLevels(spec: GameSpec): GameLevel[] {
+  function getLevels(spec: ArcadeGameSpec): GameLevel[] {
     return spec.version === 2 && spec.levels ? spec.levels.map(level => ({ ...level, rules: { ...level.rules } })) : [{ id: 'level-1', title: spec.title, brief: spec.instructions || 'Collect treasures and avoid obstacles.', theme: spec.theme, rules: { ...spec.rules }, seed: 17031 }];
   }
-  function forLevel(spec: GameSpec, index: number): GameSpec {
+  function forLevel(spec: ArcadeGameSpec, index: number): ArcadeGameSpec {
     const level = getLevels(spec)[index];
     if (!level) throw new Error('Choose a level in this game.');
     return { ...spec, theme: level.theme, rules: { ...level.rules } };
   }
-  function maxPoints(spec: GameSpec, selectedLevelIds?: string[]) {
+  function maxPoints(spec: ArcadeGameSpec, selectedLevelIds?: string[]) {
     if (!spec.arcade?.scoring) return 0;
     return getLevels(spec).filter(level => !selectedLevelIds || selectedLevelIds.includes(level.id)).reduce((total, level) => total + level.rules.goal * 10 + (Math.ceil(level.rules.timeLimit / 0.5) + 8) * (spec.arcade?.splitAsteroids ? 120 : 20), 0);
   }
@@ -60,7 +60,7 @@ export function createGameEngine() {
     }
     return near;
   }
-  function spawn(state: GameState, spec: GameSpec, kind: 'snack' | 'hazard') {
+  function spawn(state: GameState, spec: ArcadeGameSpec, kind: 'snack' | 'hazard') {
     const arcade = spec.genre === 'dodge' && spec.arcade;
     // Reserve both future fragments while a large rock is alive, so splitting
     // always creates exactly two fragments without allowing entity explosions.
@@ -86,7 +86,7 @@ export function createGameEngine() {
       state.entities.push(entity); state.nextId++; return;
     }
   }
-  function create(original: GameSpec, selected: string | number = 0): GameState {
+  function create(original: ArcadeGameSpec, selected: string | number = 0): GameState {
     const levels = getLevels(original);
     const index = typeof selected === 'number' ? selected : levels.findIndex(level => level.id === selected);
     if (!Number.isInteger(index) || index < 0 || index >= levels.length) throw new Error('Choose a level in this game.');
@@ -113,7 +113,7 @@ export function createGameEngine() {
     }
     return state;
   }
-  function step(state: GameState, original: GameSpec, input: GameInput, elapsed: number): GameState {
+  function step(state: GameState, original: ArcadeGameSpec, input: GameInput, elapsed: number): GameState {
     const spec = forLevel(original, state.levelIndex || 0);
     if (state.outcome !== 'playing' || !Number.isFinite(elapsed) || elapsed <= 0) return state;
     const dt = Math.min(elapsed, 1 / 20), player = state.player;
@@ -215,7 +215,7 @@ export function createGameEngine() {
     else if (state.elapsed >= spec.rules.timeLimit) state.outcome = 'lost';
     return state;
   }
-  function nextLevel(state: GameState, spec: GameSpec): GameState | undefined {
+  function nextLevel(state: GameState, spec: ArcadeGameSpec): GameState | undefined {
     if (state.outcome !== 'won' || state.levelIndex + 1 >= getLevels(spec).length) return undefined;
     return create(spec, state.levelIndex + 1);
   }
@@ -226,6 +226,14 @@ export function createGameEngine() {
 export function validateGameResult(value: unknown, spec: GameSpec, levelId?: string): GameResult | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return;
   const result = value as Record<string, unknown>;
+  if (spec.version === 3) {
+    if (Object.keys(result).length !== 4 || Object.keys(result).some(key => !['outcome', 'elapsed', 'score', 'reviewedLevelIds'].includes(key))) return;
+    if (levelId && levelId !== 'level-1' || !['won', 'lost'].includes(result.outcome as string) || !Array.isArray(result.reviewedLevelIds) || result.reviewedLevelIds.length !== 1 || result.reviewedLevelIds[0] !== 'level-1') return;
+    const max = spec.genre === 'crossword' ? spec.puzzle.entries.length : spec.genre === 'word-search' ? spec.puzzle.words.length : spec.puzzle.blanks.length;
+    if (typeof result.elapsed !== 'number' || !Number.isFinite(result.elapsed) || result.elapsed < 0 || result.elapsed > 86400 || typeof result.score !== 'number' || !Number.isInteger(result.score) || result.score < 0 || result.score > max || result.outcome === 'won' && result.score !== max || spec.genre !== 'crossword' && result.outcome === 'lost') return;
+    return { outcome: result.outcome as 'won' | 'lost', elapsed: result.elapsed, score: result.score, reviewedLevelIds: ['level-1'] };
+  }
+
   if (!['level-complete', 'won', 'lost'].includes(result.outcome as string) || !Array.isArray(result.reviewedLevelIds) || !result.reviewedLevelIds.length || result.reviewedLevelIds.some(id => typeof id !== 'string') || new Set(result.reviewedLevelIds).size !== result.reviewedLevelIds.length) return;
   const ids = result.reviewedLevelIds as string[];
   const levels = createGameEngine().getLevels(spec);
@@ -241,7 +249,7 @@ export function validateGameResult(value: unknown, spec: GameSpec, levelId?: str
   return { outcome: result.outcome as GameResult['outcome'], elapsed: result.elapsed, score: result.score, reviewedLevelIds: [...result.reviewedLevelIds] as string[], ...(spec.arcade?.scoring ? { points: result.points as number } : {}) };
 }
 
-export function startGameSandbox(engine: ReturnType<typeof createGameEngine>, validate: typeof validateGameSpec, nonce: string) {
+export function startGameSandbox(engine: ReturnType<typeof createGameEngine>, validate: typeof validateArcadeGameSpec, nonce: string) {
   const canvas = document.getElementById('game') as HTMLCanvasElement;
   const context = canvas.getContext('2d');
   const title = document.getElementById('title')!;
@@ -252,7 +260,7 @@ export function startGameSandbox(engine: ReturnType<typeof createGameEngine>, va
   const pause = document.getElementById('pause') as HTMLButtonElement;
   const next = document.getElementById('next') as HTMLButtonElement;
   const restart = document.getElementById('restart') as HTMLButtonElement;
-  let gameSpec: GameSpec | undefined, spec: GameSpec | undefined, selectedLevel: string | undefined, state: GameState | undefined, running = false, paused = false, notified = false;
+  let gameSpec: ArcadeGameSpec | undefined, spec: ArcadeGameSpec | undefined, selectedLevel: string | undefined, state: GameState | undefined, running = false, paused = false, notified = false;
   let previous = 0, accumulator = 0;
   const reviews = new Map<string, { score: number; elapsed: number; points?: number }>();
   const keys = new Set<string>(), pressed = new Set<string>();
@@ -438,5 +446,5 @@ export function gameSandboxDocument(nonce: string): string {
   if (!/^[a-zA-Z0-9_-]{16,100}$/u.test(nonce)) throw new Error('A safe random game nonce is required.');
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-${nonce}'; style-src 'unsafe-inline'; connect-src 'none'; img-src 'none'; media-src 'none'; font-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'; worker-src 'none'"><style>
 *{box-sizing:border-box}body{margin:0;background:#fffaf0;color:#254e45;font:15px/1.4 system-ui,sans-serif}main{padding:12px}h2{font-size:20px;margin:0 0 6px}p{margin:7px 0}canvas{display:block;width:100%;aspect-ratio:16/9;background:#e4f2e8;border-radius:10px;outline-offset:3px}canvas:focus-visible,button:focus-visible{outline:3px solid #a94c7b}#status{font-weight:700;font-variant-numeric:tabular-nums}.buttons,.touch{display:flex;gap:8px;align-items:center;justify-content:center;flex-wrap:wrap;margin-top:10px}button{font:inherit;min-height:44px;min-width:56px;padding:8px 15px;border:1px solid #497267;border-radius:8px;background:#fffaf0;color:#254e45;cursor:pointer;touch-action:none;user-select:none}button:active{background:#cce4d5}button:disabled{opacity:.5;cursor:default}#start{background:#254e45;color:#fffaf0}.touch button{font-size:20px;min-width:54px}[hidden]{display:none!important}#announce{min-height:22px;font-weight:600;text-align:center}#legend{font-size:13px;text-align:center}#instruction{font-size:14px} @media(max-width:500px){main{padding:6px}h2{font-size:18px}.touch{gap:5px}.touch button{padding:7px;min-width:44px}#instruction{font-size:12px}}
-</style></head><body><main><h2 id="title">Loading your game…</h2><div id="status" aria-label="Game score"></div><div id="campaign" aria-label="Adventure totals"></div><p id="instruction"></p><canvas id="game" width="960" height="540" tabindex="0">This game needs a browser with Canvas support. Keyboard and touch controls are provided.</canvas><p id="legend"></p><div class="buttons"><button id="start" disabled>Start game</button><button id="pause" disabled>Pause</button><button id="next" hidden>Next level</button><button id="restart" hidden>Restart game</button></div><div class="touch" aria-label="Game movement controls"><button type="button" data-control="left" aria-label="Move left">←</button><button type="button" data-control="up" aria-label="Move up or jump">↑</button><button type="button" data-control="down" aria-label="Move down">↓</button><button type="button" data-control="right" aria-label="Move right">→</button><button type="button" data-control="jump" id="jump" aria-label="Jump">Jump</button><button type="button" data-control="fire" id="fire" aria-label="Fire" hidden>Fire ✦</button></div><p id="announce" role="status" aria-live="polite">Loading…</p><p id="controls-help" style="text-align:center;font-size:12px">Arrow keys or WASD · P to pause · R to restart</p></main><script nonce="${nonce}">const __name = (fn) => fn; (${startGameSandbox.toString()})((${createGameEngine.toString()})(),(${validateGameSpec.toString()}),"${nonce}");</script></body></html>`;
+</style></head><body><main><h2 id="title">Loading your game…</h2><div id="status" aria-label="Game score"></div><div id="campaign" aria-label="Adventure totals"></div><p id="instruction"></p><canvas id="game" width="960" height="540" tabindex="0">This game needs a browser with Canvas support. Keyboard and touch controls are provided.</canvas><p id="legend"></p><div class="buttons"><button id="start" disabled>Start game</button><button id="pause" disabled>Pause</button><button id="next" hidden>Next level</button><button id="restart" hidden>Restart game</button></div><div class="touch" aria-label="Game movement controls"><button type="button" data-control="left" aria-label="Move left">←</button><button type="button" data-control="up" aria-label="Move up or jump">↑</button><button type="button" data-control="down" aria-label="Move down">↓</button><button type="button" data-control="right" aria-label="Move right">→</button><button type="button" data-control="jump" id="jump" aria-label="Jump">Jump</button><button type="button" data-control="fire" id="fire" aria-label="Fire" hidden>Fire ✦</button></div><p id="announce" role="status" aria-live="polite">Loading…</p><p id="controls-help" style="text-align:center;font-size:12px">Arrow keys or WASD · P to pause · R to restart</p></main><script nonce="${nonce}">const __name = (fn) => fn; (${startGameSandbox.toString()})((${createGameEngine.toString()})(),(${validateArcadeGameSpec.toString()}),"${nonce}");</script></body></html>`;
 }

@@ -18,6 +18,10 @@ The host displays its creator link only to its own administrators. That link is 
 
 Drafts stay private. Playtesting runs a validated data-only game specification inside a sandboxed frame with a fixed engine, nonce-bound messages and no network access. Generated content cannot add executable JavaScript, remote assets, new tools or mechanics beyond the supported engine. Agentic level planning remains constrained by the same schema. The free guided designer is deterministic; optional configured models can propose a tailored progression. All levels must be reviewed in the saved revision before a publisher can publish a copied snapshot.
 
+`GameSpec` is a discriminated union: version 1/2 retain the existing arcade schema and version 3 carries one crossword, word search or Mad Libs definition. Word games have separate strict validators, deterministic bounded layout algorithms, and a fixed word-game sandbox. Browser and backend validators/layouts are checked against each other. The Lambda packager includes the new `word_games.py` module without changing table or identity configuration. A word game's single review item is `level-1`; editing clears its acknowledged revision, and publication still needs the separate human action. See [format definitions and limits](WORD_GAMES.md).
+
+The optional existing model path is restricted to the current word-game format and administrator-defined usage limits. A model proposes data for that schema, never code or publication. All formats work through the free guided builder and direct editors without a model. Player letters, Mad Libs answers and completed stories are ephemeral inside the sandbox; outbound results contain only validated completion counts. Public puzzle definitions include their answers and are suitable for practice, not confidential tests. Puzzle results do not create arcade score boards.
+
 Publishing updates one canonical live edition. Hosts embed that canonical game ID, so a later publication becomes visible there; a stale score submission receives a reload error. Boards reset with each edition. Unpublishing removes public play and its board everywhere using that installation, while retaining the private draft. Deletion is explicit and requires the administrative capability.
 
 ## Host embedding
@@ -27,6 +31,8 @@ Publishing updates one canonical live edition. Hosts embed that canonical game I
 The exported completion event is a client-reported gameplay observation. It is suitable for UI feedback and an instructor's activity view; it is not proof of a student's identity, learning or grade. A future NCAcademy integration must bind activity to its own trusted session and instructor-approved lesson policy. Academy students need not become Core creators. Generated educational games remain private until an instructor/administrator reviews and publishes them.
 
 Public games and their arcade nicknames are publicly accessible. Approved embedding origins are a framing and integration boundary, not content confidentiality. Do not publish sensitive student information into game titles, descriptions, level text or nicknames. This release does not add private enrollment-based game distribution or automatically modify NCAcademy's lessons/accounts.
+
+The unversioned public catalog remains compatible with legacy hosts by returning only version 1/2 games. Game Studio and its current SDK opt in to all formats with `specVersion=all`. Filtered pages retain their cursor even when empty. Direct published-ID lookup returns the saved versioned definition. NCAcademy's pinned data-import player remains a separate version 1/2 consumer; supporting version 3 there requires its own importer/player update and acceptance.
 
 ## Branding
 

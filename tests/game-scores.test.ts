@@ -6,6 +6,7 @@ import ts from 'typescript';
 import { defaultGameSpec, validateGameSpec } from '../src/lib/game-design.ts';
 import { createGameEngine, validateGameResult } from '../src/lib/game-runtime.ts';
 import type { Game, GameResult } from '../src/lib/game-types.ts';
+import { defaultWordGameSpec } from '../src/lib/word-game-design.ts';
 
 const id = '11111111-1111-4111-8111-111111111111';
 const request = (n = 1) => `22222222-2222-4222-8222-${String(n).padStart(12, '0')}`;
@@ -32,6 +33,19 @@ test('arcade names are bounded, plain ASCII nicknames with consistent normalizat
   assert.equal(api.validateArcadeName(' gill  pilot '), 'GILL PILOT');
   assert.equal(api.validateArcadeName('axolotl_1-x'), 'AXOLOTL_1-X');
   for (const bad of ['', '   ', 'x'.repeat(17), '<script>', 'Gill\nPilot', '\tPilot', 'Lótl', '鱼', null, 42]) assert.throws(() => api.validateArcadeName(bad), /arcade name/);
+});
+
+test('word games cannot read or submit arcade boards and leave existing boards intact', () => {
+  const h = harness(), arcade = game();
+  h.api.saveLocalGameScore(arcade, report());
+  const original = [...h.values.entries()];
+  for (const genre of ['crossword', 'word-search', 'mad-libs'] as const) {
+    const puzzle = { ...game(), spec: defaultWordGameSpec(genre) };
+    assert.throws(() => h.api.getLocalGameScores(puzzle), /disabled/);
+    assert.throws(() => h.api.saveLocalGameScore(puzzle, report(2)), /disabled/);
+  }
+  assert.deepEqual([...h.values.entries()], original);
+  assert.equal(h.calls.length, 0);
 });
 
 test('browser scores stay separate from newsroom data and retain each nickname’s best top-ten result', () => {

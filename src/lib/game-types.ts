@@ -8,7 +8,7 @@ export type GameLevel = {
   rules: GameRules;
   seed: number;
 };
-export type GameSpec = {
+export type ArcadeGameSpec = {
   version: 1 | 2;
   title: string;
   description: string;
@@ -22,6 +22,18 @@ export type GameSpec = {
   progression?: string;
   levels?: GameLevel[];
 };
+
+export type WordGenre = 'crossword' | 'word-search' | 'mad-libs';
+type WordBase = { version: 3; title: string; description: string; instructions: string };
+export type CrosswordEntry = { answer: string; clue: string };
+export type CrosswordSpec = WordBase & { genre: 'crossword'; puzzle: { seed: number; entries: CrosswordEntry[] } };
+export type WordSearchSpec = WordBase & { genre: 'word-search'; puzzle: { seed: number; size: number; allowBackwards: boolean; words: string[] } };
+export type MadLibBlank = { id: string; label: string };
+export type MadLibsSpec = WordBase & { genre: 'mad-libs'; puzzle: { template: string; blanks: MadLibBlank[] } };
+export type WordGameSpec = CrosswordSpec | WordSearchSpec | MadLibsSpec;
+export type GameSpec = ArcadeGameSpec | WordGameSpec;
+export function isWordGameSpec(spec: GameSpec): spec is WordGameSpec { return spec.version === 3; }
+export function gameReviewLevelIds(spec: GameSpec): string[] { return spec.version === 3 || spec.version === 1 ? ['level-1'] : (spec.levels || []).map(level => level.id); }
 
 export type GameMessage = { id: string; role: 'user' | 'assistant'; text: string };
 export type Game = {
