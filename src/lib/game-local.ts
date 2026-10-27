@@ -86,7 +86,7 @@ export class LocalGameLibrary {
   test(id: string, revision: number, reviewedLevelIds?: string[]): Game {
     const state = this.read(), game = this.draft(state, id, revision);
     validateGameSpec(game.spec);
-    if (game.spec.version === 2 || game.spec.version === 3) {
+    if (game.spec.version !== 1) {
       const ids = game.spec.version === 3 ? ['level-1'] : getGameLevels(game.spec).map(level => level.id);
       if (!Array.isArray(reviewedLevelIds) || reviewedLevelIds.length !== ids.length || new Set(reviewedLevelIds).size !== ids.length || reviewedLevelIds.some(id => !ids.includes(id))) throw new Error('Complete and review every level of this saved version before marking the playtest complete.');
     }

@@ -51,6 +51,16 @@ class ScoreTests(unittest.TestCase):
     def stored_board(self):
         return self.database.rows['published-games'][games.key('game-score', support.GAME)]
 
+    def test_cooperative_enabled_edition_cannot_write_to_a_solo_scoreboard(self):
+        saved = games.update(self.api, self.claims, support.GAME, {
+            'revision': self.published['revision'], 'spec': {**self.published['spec'],
+            'version': 4, 'multiplayer': {'mode': 'cooperative', 'maxPlayers': 2}}})
+        published = self.publish(self.finish_test(saved))
+        self.revision = published['publishedRevision']
+        self.error(404, self.get)
+        self.error(404, self.submit)
+        self.assertNotIn(games.key('game-score', support.GAME), self.database.rows['published-games'])
+
     def test_public_board_is_readable_without_authorization_and_projects_only_safe_fields(self):
         empty = self.get()
         self.assertEqual(empty, {'scope': 'shared', 'publishedRevision': self.revision, 'limit': 10, 'entries': []})

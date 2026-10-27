@@ -15,7 +15,9 @@
     "preview": "vite preview --host 127.0.0.1",
     "test:api": "python3 -m unittest discover -s tests -p \"test_*.py\"",
     "build:sdk": "node scripts/build-sdk.mjs",
-    "prebuild": "npm run build:sdk"
+    "prebuild": "npm run build:sdk",
+    "dev:multiplayer": "node scripts/multiplayer-preview.mjs",
+    "test:multiplayer-preview": "node --import tsx scripts/test-multiplayer-preview.mjs"
   },
   "dependencies": {
     "react": "18.3.1",
@@ -28,6 +30,7 @@
     "@vitejs/plugin-react": "4.3.3",
     "tsx": "4.19.2",
     "typescript": "5.7.2",
-    "vite": "5.4.11"
+    "vite": "5.4.11",
+    "ws": "8.22.0"
   }
 }

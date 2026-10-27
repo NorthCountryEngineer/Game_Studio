@@ -9,7 +9,7 @@ export type GameLevel = {
   seed: number;
 };
 export type ArcadeGameSpec = {
-  version: 1 | 2;
+  version: 1 | 2 | 4;
   title: string;
   description: string;
   genre: 'collect' | 'dodge' | 'platformer';
@@ -21,7 +21,11 @@ export type ArcadeGameSpec = {
   arcade?: GameArcadeOptions;
   progression?: string;
   levels?: GameLevel[];
+  multiplayer?: { mode: 'cooperative'; maxPlayers: 2 };
 };
+
+export type CooperativeGameSpec = ArcadeGameSpec & { version: 4; progression: string; levels: GameLevel[]; multiplayer: { mode: 'cooperative'; maxPlayers: 2 } };
+export function isCooperativeGameSpec(spec: GameSpec): spec is CooperativeGameSpec { return spec.version === 4; }
 
 export type WordGenre = 'crossword' | 'word-search' | 'mad-libs';
 type WordBase = { version: 3; title: string; description: string; instructions: string };

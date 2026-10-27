@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import type { Game, GameResult, GameSettings, GameSpec } from '../lib/game-types';
+import { isCooperativeGameSpec, type Game, type GameResult, type GameSettings, type GameSpec } from '../lib/game-types';
 import { deleteGame, duplicateGame, getGame, getGameSettings, listGames } from '../lib/game-api';
 import { GamePlayer } from './GamePlayer';
+import { CooperativeGame } from './CooperativePlayer';
 import { getGameLevels } from '../lib/game-design';
 import { ItemActions } from './ItemActions';
 import { useConfirm } from './Confirm';
@@ -19,7 +20,7 @@ const genreName = { collect: 'Collect treasures', dodge: 'Dodge obstacles', plat
 export function gameCardPresentation(spec: GameSpec) {
   if (spec.version === 3) return { world: `word-${spec.genre}`, symbol: spec.genre === 'crossword' ? '▦' : spec.genre === 'word-search' ? '⌕' : '✎', category: wordGenreNames[spec.genre], detail: wordGameSummary(spec), label: 'Word game' };
   const count = getGameLevels(spec).length;
-  return { world: `world-${spec.theme}`, symbol: spec.theme === 'space' ? '✦' : spec.theme === 'garden' ? '✿' : '≈', category: genreName[spec.genre], detail: `${count} ${count === 1 ? 'level' : 'levels'}`, label: themeName[spec.theme] };
+  return { world: `world-${spec.theme}`, symbol: spec.theme === 'space' ? '✦' : spec.theme === 'garden' ? '✿' : '≈', category: genreName[spec.genre], detail: `${count} ${count === 1 ? 'level' : 'levels'}${spec.version === 4 ? ' · 1–2 players' : ''}`, label: themeName[spec.theme] };
 }
 
 function useGameActions({ navigate, adminMode, signed }: Props, refresh: () => Promise<void>) {
@@ -74,13 +75,14 @@ export function GamePage(props: Props & { id: string; embedded?: boolean; onGame
 type ScoreRun = { id: string; result: GameResult };
 export function PublishedGame({ game, signed, embedded = false, onGameEvent }: { game: Game; signed: boolean; embedded?: boolean; onGameEvent?: (event: PublishedGameEvent) => void }) {
   const [run, setRun] = useState<ScoreRun>();
-  const enabled = game.spec.version !== 3 && Boolean(game.spec.arcade?.highScores && game.spec.arcade.scoring);
+  const enabled = game.spec.version !== 3 && game.spec.version !== 4 && Boolean(game.spec.arcade?.highScores && game.spec.arcade.scoring);
   function record(result: GameResult) {
     if (result.outcome !== 'level-complete') onGameEvent?.({ type: 'completed', gameId: game.id, publishedRevision: game.publishedRevision ?? game.revision, result: { ...result, reviewedLevelIds: [...result.reviewedLevelIds] } });
     if (!enabled || result.outcome === 'level-complete' || !Number.isSafeInteger(result.points) || (result.points ?? 0) <= 0) return;
     setRun({ id: crypto.randomUUID(), result });
   }
-  return <><GamePlayer spec={game.spec} onComplete={record} />{enabled && <GameHighScores game={game} signed={signed} run={run} embedded={embedded} />}</>;
+  const solo = <><GamePlayer spec={game.spec} onComplete={record} />{enabled && <GameHighScores game={game} signed={signed} run={run} embedded={embedded} />}</>;
+  return isCooperativeGameSpec(game.spec) ? <CooperativeGame game={{ ...game, spec: game.spec }}>{solo}</CooperativeGame> : solo;
 }
 
 function GameHighScores({ game, signed, run, embedded }: { game: Game; signed: boolean; run?: ScoreRun; embedded: boolean }) {

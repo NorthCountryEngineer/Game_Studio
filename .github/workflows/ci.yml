@@ -27,6 +27,7 @@ jobs:
       - run: python3 scripts/package-api.py
       - name: Verify shared registry source
         run: cmp config/agent-framework.json backend/nce_api/agent-framework.json
+      - run: npm run test:multiplayer-preview
       - run: npm run build:preview
       - name: Build production with synthetic public registration
         env:

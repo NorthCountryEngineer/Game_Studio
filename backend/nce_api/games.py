@@ -76,10 +76,10 @@ def validate_spec(value):
     if isinstance(value, dict) and type(value.get('version')) in {int, float} and value['version'] == 3:
         try: return word_games().validate_spec(value)
         except word_games().WordGameError as error: fail(str(error))
-    if not isinstance(value, dict) or type(value.get('version')) is not int or value['version'] not in {1, 2}:
+    if not isinstance(value, dict) or type(value.get('version')) is not int or value['version'] not in {1, 2, 4}:
         fail('Unsupported game version.')
     required = ('version', 'title', 'description', 'genre', 'theme', 'player', 'rules', 'objects', 'instructions')
-    fields(value, required + (('progression', 'levels') if value['version'] == 2 else ()) + (('arcade',) if 'arcade' in value else ()))
+    fields(value, required + (('progression', 'levels') if value['version'] in {2, 4} else ()) + (('multiplayer',) if value['version'] == 4 else ()) + (('arcade',) if 'arcade' in value else ()))
     text(value['title'], 80, 'Game title'); text(value['description'], 300, 'Description', True)
     text(value['instructions'], 300, 'Instructions', True)
     if not isinstance(value['genre'], str) or value['genre'] not in {'collect', 'dodge', 'platformer'}: fail('Choose a supported game style.')
@@ -99,7 +99,7 @@ def validate_spec(value):
     validate_rules(rules)
     fields(objects, ('collectible', 'hazard'))
     text(objects['collectible'], 30, 'Collectible'); text(objects['hazard'], 30, 'Hazard')
-    if value['version'] == 2:
+    if value['version'] in {2, 4}:
         text(value['progression'], 300, 'Level progression')
         levels = value['levels']
         if not isinstance(levels, list) or not 1 <= len(levels) <= 8: fail('Choose from 1 to 8 levels.')
@@ -114,6 +114,10 @@ def validate_spec(value):
                 fail('Choose a supported level world.')
             validate_rules(level['rules'])
             integer(level['seed'], 1, 2147483647, 'Level layout seed')
+    if value['version'] == 4:
+        fields(value['multiplayer'], ('mode', 'maxPlayers'))
+        if value['multiplayer']['mode'] != 'cooperative' or type(value['multiplayer']['maxPlayers']) is not int or value['multiplayer']['maxPlayers'] != 2:
+            fail('Multiplayer supports two cooperative players.')
     return deepcopy(value)
 
 
@@ -134,7 +138,7 @@ def default_spec():
 def get_levels(spec):
     """Saved version 1 games keep their original single-level rules and seed."""
     if spec['version'] == 3: return [{'id': 'level-1', 'title': spec['title'], 'brief': spec['instructions']}]
-    if spec['version'] == 2: return deepcopy(spec['levels'])
+    if spec['version'] in {2, 4}: return deepcopy(spec['levels'])
     return [{'id': 'level-1', 'title': spec['title'], 'brief': spec['instructions'] or 'Collect treasures and avoid obstacles.',
         'theme': spec['theme'], 'rules': deepcopy(spec['rules']), 'seed': 17031}]
 
@@ -157,7 +161,7 @@ def arcade_challenge(spec):
 
 
 def arcade_instructions(spec):
-    goal = 'Complete each level’s collection goal.' if spec['version'] == 2 else f"Collect {spec['rules']['goal']} {spec['objects']['collectible']}s before time runs out."
+    goal = 'Complete each level’s collection goal.' if spec['version'] in {2, 4} else f"Collect {spec['rules']['goal']} {spec['objects']['collectible']}s before time runs out."
     arcade = spec.get('arcade', {})
     points = (' Points: snacks 10' + (', large hits 20' if arcade.get('shooting') else '') + (', small pieces 50' if arcade.get('splitAsteroids') else '') + '.') if arcade.get('scoring') else ''
     return f'{arcade_controls(spec)} {goal} {arcade_challenge(spec)}{points}'
@@ -209,7 +213,7 @@ def plan_levels(spec, count, seed_text, previous=None):
         levels.append({'id': f'level-{index + 1}', 'title': stage,
             'brief': arcade_level_brief(spec, goal, 'Learn the controls.' if index == 0 else 'Combine your skills.' if index == count - 1 else 'Practice with more obstacles.') if 'arcade' in spec else f"{focus} Collect {goal} {spec['objects']['collectible']}s and avoid {spec['objects']['hazard']}s.",
             'theme': spec['theme'], 'rules': rules, 'seed': previous[index]['seed'] if index < len(previous) else layout_seed(f'{seed_text}|{index + 1}')})
-    result.update(version=2, levels=levels,
+    result.update(version=4 if spec['version'] == 4 else 2, levels=levels,
         progression='One complete adventure with a saved layout. Lives and time reset when you retry.' if count == 1 else 'Start with the controls and a smaller goal, practice avoiding obstacles, then finish with the full goal and a greater challenge. Each level starts with fresh lives and time.')
     return validate_spec(result)
 
@@ -331,7 +335,7 @@ def design_game(message, current=None):
     arcade_changed = before.get('arcade') != spec.get('arcade')
     mechanics_changed = before['rules'] != spec['rules'] or before['theme'] != spec['theme'] or before['genre'] != spec['genre'] or before['objects'] != spec['objects']
     seed_text = message + '|' + spec['title']
-    if target and before['version'] == 2 and not accepted_count and not replan:
+    if target and before['version'] in {2, 4} and not accepted_count and not replan:
         index, levels = int(target[1]) - 1, get_levels(before)
         if index >= len(levels):
             notes.append(f'This game does not have level {index + 1}.'); spec['rules'] = before['rules']; spec['theme'] = before['theme']
@@ -351,20 +355,28 @@ def design_game(message, current=None):
                 level['brief'] = arcade_level_brief(spec, level['rules']['goal'], 'Practice this part of the adventure.') if 'arcade' in spec else f"Practice this part of the adventure. Collect {level['rules']['goal']} {spec['objects']['collectible']}s within {level['rules']['timeLimit']} seconds and avoid {spec['objects']['hazard']}s."
             spec.update(rules=before['rules'], theme=before['theme'], levels=levels)
             changes.append(f'level {index + 1}')
-    elif not current or accepted_count or replan or before['version'] == 2 and mechanics_changed:
-        spec = plan_levels(spec, count, seed_text, [] if shuffle else get_levels(before)[:8 if before['version'] == 2 else 0])
+    elif not current or accepted_count or replan or before['version'] in {2, 4} and mechanics_changed:
+        spec = plan_levels(spec, count, seed_text, [] if shuffle else get_levels(before)[:8 if before['version'] in {2, 4} else 0])
         changes.append('a staged level plan')
-    elif shuffle and before['version'] == 2:
+    elif shuffle and before['version'] in {2, 4}:
         levels = get_levels(spec)
         for index, level in enumerate(levels): level['seed'] = layout_seed(f"{level['seed']}|{seed_text}|{index + 1}")
         spec['levels'] = levels; changes.append('fresh saved layouts')
-    if before['version'] == 2 and spec['version'] == 2 and arcade_changed and not mechanics_changed and not accepted_count and not replan:
+    if before['version'] in {2, 4} and spec['version'] in {2, 4} and arcade_changed and not mechanics_changed and not accepted_count and not replan:
         for level in spec['levels']: level['brief'] = refresh_arcade_brief(before, spec, level['brief'])
-    if spec['version'] == 2 and not custom_instructions and (changes or not current):
+    if spec['version'] in {2, 4} and not custom_instructions and (changes or not current):
         controls = 'Use arrows or WASD to move; Space or Up jumps.' if spec['genre'] == 'platformer' else 'Use arrows or WASD to swim.'
         spec['instructions'] = arcade_instructions(spec) if 'arcade' in spec else f"{controls} Complete each level’s collection goal and avoid {spec['objects']['hazard']}s. Each level starts with fresh lives and time. Touch controls are available below the game."
-    if has(r'\b(multiplayer|3d|chat|weapons?|upload|custom code|javascript|payment|purchase|soundtrack|music)\b') or has(r'\bonline\b') and not has(r'\b(?:high[ -]?scores?|leaderboards?)\b') or re.search(r'https?://|<script|javascript:', message, re.I):
-        notes.append('This builder supports single-player 2D games and optional shared high scores for signed-in players. It cannot add custom code, external assets, music, multiplayer, chat, or purchases.')
+    if has(r'\b(3d|chat|weapons?|upload|custom code|javascript|payment|purchase|soundtrack|music)\b') or has(r'\bonline\b') and not has(r'\b(?:high[ -]?scores?|leaderboards?)\b') or re.search(r'https?://|<script|javascript:', message, re.I):
+        notes.append('This builder supports 2D games, optional two-player cooperation, and shared high scores for signed-in players. It cannot add custom code, external assets, music, chat, or purchases.')
+    cooperative = arcade_toggle(lower, r'multiplayer|two[ -]player|2[ -]player|cooperative|co-op')
+    if cooperative is True:
+        if spec['version'] == 1: spec = plan_levels(spec, 1, seed_text)
+        spec.update(version=4, multiplayer={'mode': 'cooperative', 'maxPlayers': 2})
+        changes.append('optional two-player cooperation')
+    elif cooperative is False and spec['version'] == 4:
+        spec.pop('multiplayer'); spec['version'] = 2
+        changes.append('single-player only')
     summary = 'Updated ' + ', '.join(dict.fromkeys(changes)) + '.' if changes else 'I can build a collection, dodging, or platform game in a pond, space, or garden.'
     help_text = 'Review the level plan, then test each level. Ask for “5 levels”, “level 2 harder”, or “shuffle layouts”. The free guided plan uses fixed progression rules; a configured AI assistant can design a tailored progression.' if changes else 'Try “a space platformer, 3 levels, collect 12, 90 seconds, 3 lives,” or use a line such as “Title: Moon Axolotl”.'
     return {'spec': validate_spec(spec), 'reply': ' '.join([summary, *notes, help_text])}
@@ -603,7 +615,7 @@ def complete_test(api, claims, game_id, body):
     if state['spec']['version'] == 3:
         if body.get('reviewedLevelIds') != ['level-1']:
             fail('Complete and review this exact word game revision before marking it tested.')
-    elif state['spec']['version'] == 2:
+    elif state['spec']['version'] in {2, 4}:
         reviewed = body.get('reviewedLevelIds')
         level_ids = {level['id'] for level in state['spec']['levels']}
         if not isinstance(reviewed, list) or len(reviewed) != len(level_ids) or any(not isinstance(value, str) for value in reviewed) or set(reviewed) != level_ids:
@@ -728,8 +740,18 @@ def model_spec(af, agent, model, state, message):
     fields(result, ('text', 'spec'))
     text(result['text'], 1600, 'Assistant reply', safe=False)
     generated = validate_spec(result['spec'])
-    if generated['version'] != 2 and (state['spec']['version'] == 2 or design_game(message, state['spec'])['spec']['version'] == 2):
+    if generated['version'] not in {2, 4} and (state['spec']['version'] in {2, 4} or design_game(message, state['spec'])['spec']['version'] in {2, 4}):
         fail('The assistant must preserve a complete level plan. Edit this draft or start a new request.', 502)
+    # The creator's explicit setting controls cooperation, never model invention.
+    desired = design_game(message, state['spec'])['spec']
+    if desired['version'] == 4:
+        if generated['version'] not in {2, 4}: fail('The assistant must preserve the multiplayer level plan.', 502)
+        generated = validate_spec({**generated, 'version': 4, 'multiplayer': deepcopy(desired['multiplayer'])})
+    elif state['spec']['version'] == 4 and desired['version'] == 2:
+        generated.pop('multiplayer', None); generated['version'] = 2
+        generated = validate_spec(generated)
+    elif generated['version'] == 4:
+        fail('The assistant cannot enable multiplayer without a creator request.', 502)
     return generated, result['text']
 
 

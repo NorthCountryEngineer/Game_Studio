@@ -119,3 +119,11 @@ test('bound scoring freezes validated inputs before asynchronous hashing yields'
   game.spec.title = 'Changed during hashing'; observed.score = 9; rules.max_points = 100; binding.published_revision = 50;
   assert.equal((await scoring).earned_points, 10);
 });
+
+
+test('cooperative editions cannot be combined into single-player assignment credit', () => {
+  const solo = planGameLevels(defaultGameSpec(), 2, 'cooperative-scale');
+  const cooperative = { ...solo, version: 4, multiplayer: { mode: 'cooperative', maxPlayers: 2 } };
+  assert.throws(() => gameObjectiveUnits(cooperative), /per-player/);
+  assert.throws(() => calculateProvisionalPoints(cooperative, result(1), policy), /do not award/);
+});

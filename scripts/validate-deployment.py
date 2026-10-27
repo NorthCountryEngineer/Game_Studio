@@ -52,6 +52,9 @@ def check_template(path):
 def main():
     backend = check_template(ROOT / 'infra/aws/game-studio.template.json')
     frontend = check_template(ROOT / 'infra/aws/frontend.template.json')
+    multiplayer = check_template(ROOT / 'infra/aws/multiplayer.template.json')
+    assert multiplayer['Resources']['Relay']['Properties']['Handler'] == 'multiplayer.handler'
+    assert multiplayer['Resources']['Rooms']['Properties']['TimeToLiveSpecification'] == {'AttributeName': 'expiresAt', 'Enabled': True}
     env = backend['Resources']['ApiFunction']['Properties']['Environment']['Variables']
     assert all(key in env for key in ['CORE_ISSUER', 'CORE_ORGANIZATION_ID', 'CORE_SERVICE_ID', 'CORE_CREDENTIALS_PARAMETER', 'PRIVATE_TABLE', 'PUBLIC_TABLE', 'ASSISTANT_TABLE', 'GAME_DRAFT_TABLE', 'GAME_PUBLIC_TABLE', 'GAME_STUDIO_CONFIG_JSON'])
     assert backend['Resources']['HttpApi']['Properties']['CorsConfiguration']['AllowOrigins'] == {'Ref': 'AllowedOrigins'}

@@ -55,12 +55,14 @@ export function validateScoringPolicy(value: unknown): ScoringPolicy {
 /** A validated full definition supplies the denominator, never client-reported maxima. */
 export function gameObjectiveUnits(value: unknown): number {
   const spec = validateGameSpec(value);
+  if (spec.version === 4) throw new Error('Cooperative-enabled editions require a future per-player scoring contract.');
   return spec.version === 3 ? spec.genre === 'crossword' ? spec.puzzle.entries.length : spec.genre === 'word-search' ? spec.puzzle.words.length : spec.puzzle.blanks.length : spec.version === 2 ? spec.levels!.reduce((total, level) => total + level.rules.goal, 0) : spec.rules.goal;
 }
 
 /** Deterministic half-up arithmetic. This is a provisional observation, not a grade. */
 export function calculateProvisionalPoints(specValue: unknown, resultValue: unknown, policyValue: unknown): ProvisionalPoints {
   const spec = validateGameSpec(specValue), policy = validateScoringPolicy(policyValue);
+  if (spec.version === 4) throw new Error('Cooperative-enabled editions do not award assignment points.');
   object(resultValue, ['outcome', 'elapsed', 'score', 'reviewedLevelIds', ...(spec.version !== 3 && spec.arcade?.scoring ? ['points'] : [])]);
   const result = validateGameResult(resultValue, spec);
   if (!result || result.outcome === 'level-complete') throw new Error('Finish one valid complete game attempt before calculating points.');

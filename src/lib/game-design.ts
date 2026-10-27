@@ -19,9 +19,9 @@ export function validateArcadeGameSpec(value: unknown): ArcadeGameSpec {
     return input;
   }
   const version = value && typeof value === 'object' ? (value as Record<string, unknown>).version : undefined;
-  if (version !== 1 && version !== 2) throw new Error('Unsupported game version.');
+  if (version !== 1 && version !== 2 && version !== 4) throw new Error('Unsupported game version.');
   const hasArcade = Object.prototype.hasOwnProperty.call(value, 'arcade');
-  const spec = object(value, ['version', 'title', 'description', 'genre', 'theme', 'player', 'rules', 'objects', 'instructions', ...(version === 2 ? ['progression', 'levels'] : []), ...(hasArcade ? ['arcade'] : [])], 'Game');
+  const spec = object(value, ['version', 'title', 'description', 'genre', 'theme', 'player', 'rules', 'objects', 'instructions', ...(version !== 1 ? ['progression', 'levels'] : []), ...(version === 4 ? ['multiplayer'] : []), ...(hasArcade ? ['arcade'] : [])], 'Game');
   const player = object(spec.player, ['name', 'color', 'speed', 'jump'], 'Player');
   const rules = object(spec.rules, ['goal', 'timeLimit', 'lives', 'difficulty'], 'Rules');
   const objects = object(spec.objects, ['collectible', 'hazard'], 'Objects');
@@ -45,7 +45,7 @@ export function validateArcadeGameSpec(value: unknown): ArcadeGameSpec {
     if (arcade.highScores && !arcade.scoring) throw new Error('High scores require scoring.');
     clean.arcade = { ...arcade } as GameArcadeOptions;
   }
-  if (version === 2) {
+  if (version !== 1) {
     clean.progression = text(spec.progression, 300, 'Progression');
     if (!Array.isArray(spec.levels) || spec.levels.length < 1 || spec.levels.length > 8) throw new Error('A game needs 1 to 8 levels.');
     const ids = new Set<string>();
@@ -58,12 +58,17 @@ export function validateArcadeGameSpec(value: unknown): ArcadeGameSpec {
       return { id: level.id, title: text(level.title, 80, 'Level title'), brief: text(level.brief, 300, 'Level brief'), theme: level.theme as GameLevel['theme'], seed: integer(level.seed, 1, 2147483647, 'Layout seed'), rules: { goal: integer(settings.goal, 3, 40, 'Level goal'), timeLimit: integer(settings.timeLimit, 30, 180, 'Level time'), lives: integer(settings.lives, 1, 5, 'Level lives'), difficulty: integer(settings.difficulty, 1, 5, 'Level difficulty') } };
     });
   }
+  if (version === 4) {
+    const multiplayer = object(spec.multiplayer, ['mode', 'maxPlayers'], 'Multiplayer');
+    if (multiplayer.mode !== 'cooperative' || multiplayer.maxPlayers !== 2) throw new Error('Multiplayer supports two cooperative players.');
+    clean.multiplayer = { mode: 'cooperative', maxPlayers: 2 };
+  }
   return clean;
 }
 
 /** Legacy games retain their original rules and layout, without rewriting saved data. */
 export function getGameLevels(spec: ArcadeGameSpec): GameLevel[] {
-  return spec.version === 2 ? structuredClone(spec.levels || []) : [{ id: 'level-1', title: spec.title, brief: spec.instructions || 'Collect treasures and avoid obstacles.', theme: spec.theme, rules: { ...spec.rules }, seed: 17031 }];
+  return spec.version !== 1 ? structuredClone(spec.levels || []) : [{ id: 'level-1', title: spec.title, brief: spec.instructions || 'Collect treasures and avoid obstacles.', theme: spec.theme, rules: { ...spec.rules }, seed: 17031 }];
 }
 
 function layoutSeed(text: string): number {
@@ -83,7 +88,7 @@ function arcadeChallenge(spec: ArcadeGameSpec): string {
 }
 
 function arcadeInstructions(spec: ArcadeGameSpec): string {
-  const goal = spec.version === 2 ? 'Complete each level’s collection goal.' : `Collect ${spec.rules.goal} ${spec.objects.collectible}s before time runs out.`;
+  const goal = spec.version !== 1 ? 'Complete each level’s collection goal.' : `Collect ${spec.rules.goal} ${spec.objects.collectible}s before time runs out.`;
   const points = spec.arcade?.scoring ? ` Points: snacks 10${spec.arcade.shooting ? ', large hits 20' : ''}${spec.arcade.splitAsteroids ? ', small pieces 50' : ''}.` : '';
   return `${arcadeControls(spec)} ${goal} ${arcadeChallenge(spec)}${points}`;
 }
@@ -130,7 +135,7 @@ export function planGameLevels(spec: ArcadeGameSpec, count: number, seedText: st
     const focus = count === 1 ? 'Explore the world at your own pace.' : index === 0 ? 'Learn the controls with a smaller collection goal and fewer obstacles.' : index === count - 1 ? 'Put your practice together with the full collection goal and the strongest challenge.' : 'Practice finding treasures while watching a more varied obstacle pattern.';
     return { id: `level-${index + 1}`, title: stage, brief: spec.arcade ? arcadeLevelBrief(spec, goal, index === 0 ? 'Learn the controls.' : index === count - 1 ? 'Combine your skills.' : 'Practice with more obstacles.') : `${focus} Collect ${goal} ${spec.objects.collectible}s and avoid ${spec.objects.hazard}s.`, theme: spec.theme, rules: { ...spec.rules, goal, difficulty }, seed: previous[index]?.seed || layoutSeed(`${seedText}|${index + 1}`) };
   });
-  return validateArcadeGameSpec({ ...spec, version: 2, progression: count === 1 ? 'One complete adventure with a saved layout. Lives and time reset when you retry.' : 'Start with the controls and a smaller goal, practice avoiding obstacles, then finish with the full goal and a greater challenge. Each level starts with fresh lives and time.', levels });
+  return validateArcadeGameSpec({ ...spec, version: spec.version === 4 ? 4 : 2, progression: count === 1 ? 'One complete adventure with a saved layout. Lives and time reset when you retry.' : 'Start with the controls and a smaller goal, practice avoiding obstacles, then finish with the full goal and a greater challenge. Each level starts with fresh lives and time.', levels });
 }
 
 export function defaultGameSpec(): ArcadeGameSpec {
@@ -239,7 +244,7 @@ export function designArcadeGame(message: string, current?: ArcadeGameSpec): { s
   const arcadeChanged = JSON.stringify(before.arcade) !== JSON.stringify(spec.arcade);
   const mechanicsChanged = JSON.stringify(before.rules) !== JSON.stringify(spec.rules) || before.theme !== spec.theme || before.genre !== spec.genre || JSON.stringify(before.objects) !== JSON.stringify(spec.objects);
   const seedText = `${message}|${spec.title}`;
-  if (target && before.version === 2 && !acceptedCount && !replan) {
+  if (target && before.version !== 1 && !acceptedCount && !replan) {
     const index = Number(target[1]) - 1, levels = getGameLevels(before);
     if (!levels[index]) { notes.push(`This game does not have level ${index + 1}.`); spec.rules = before.rules; spec.theme = before.theme; }
     else {
@@ -255,21 +260,31 @@ export function designArcadeGame(message: string, current?: ArcadeGameSpec): { s
       spec = { ...spec, rules: before.rules, theme: before.theme, levels };
       changes.push(`level ${index + 1}`);
     }
-  } else if (!current || acceptedCount || replan || before.version === 2 && mechanicsChanged) {
-    spec = planGameLevels(spec, count, seedText, shuffle ? [] : getGameLevels(before).slice(0, before.version === 2 ? 8 : 0));
+  } else if (!current || acceptedCount || replan || before.version !== 1 && mechanicsChanged) {
+    spec = planGameLevels(spec, count, seedText, shuffle ? [] : getGameLevels(before).slice(0, before.version !== 1 ? 8 : 0));
     changes.push('a staged level plan');
-  } else if (shuffle && before.version === 2) {
+  } else if (shuffle && before.version !== 1) {
     spec.levels = getGameLevels(spec).map((level, index) => ({ ...level, seed: layoutSeed(`${level.seed}|${seedText}|${index + 1}`) }));
     changes.push('fresh saved layouts');
   }
-  if (before.version === 2 && spec.version === 2 && arcadeChanged && !mechanicsChanged && !acceptedCount && !replan) {
+  if (before.version !== 1 && spec.version !== 1 && arcadeChanged && !mechanicsChanged && !acceptedCount && !replan) {
     spec.levels = getGameLevels(spec).map(level => ({ ...level, brief: refreshArcadeBrief(before, spec, level.brief) }));
   }
-  if (spec.version === 2 && !customInstructions && (changes.length || !current)) {
+  if (spec.version !== 1 && !customInstructions && (changes.length || !current)) {
     const controls = spec.genre === 'platformer' ? 'Use arrows or WASD to move; Space or Up jumps.' : 'Use arrows or WASD to swim.';
     spec.instructions = spec.arcade ? arcadeInstructions(spec) : `${controls} Complete each level’s collection goal and avoid ${spec.objects.hazard}s. Each level starts with fresh lives and time. Touch controls are available below the game.`;
   }
-  if (has(/\b(multiplayer|3d|chat|weapons?|upload|custom code|javascript|payment|purchase|soundtrack|music)\b/) || has(/\bonline\b/) && !has(/\b(?:high[ -]?scores?|leaderboards?)\b/) || /https?:\/\/|<script|javascript:/iu.test(message)) notes.push('This builder supports single-player 2D games and optional shared high scores for signed-in players. It cannot add custom code, external assets, music, multiplayer, chat, or purchases.');
+  if (has(/\b(3d|chat|weapons?|upload|custom code|javascript|payment|purchase|soundtrack|music)\b/) || has(/\bonline\b/) && !has(/\b(?:high[ -]?scores?|leaderboards?)\b/) || /https?:\/\/|<script|javascript:/iu.test(message)) notes.push('This builder supports 2D games, optional two-player cooperation, and shared high scores for signed-in players. It cannot add custom code, external assets, music, chat, or purchases.');
+  const cooperative = arcadeToggle(lower, 'multiplayer|two[ -]player|2[ -]player|cooperative|co-op');
+  if (cooperative === true) {
+    if (spec.version === 1) spec = planGameLevels(spec, 1, seedText);
+    spec = validateArcadeGameSpec({ ...spec, version: 4, multiplayer: { mode: 'cooperative', maxPlayers: 2 } });
+    changes.push('optional two-player cooperation');
+  } else if (cooperative === false && spec.version === 4) {
+    const { multiplayer: _multiplayer, ...single } = spec;
+    spec = validateArcadeGameSpec({ ...single, version: 2 });
+    changes.push('single-player only');
+  }
   const summary = changes.length ? `Updated ${[...new Set(changes)].join(', ')}.` : 'I can build a collection, dodging, or platform game in a pond, space, or garden.';
   const help = changes.length ? 'Review the level plan, then test each level. Ask for “5 levels”, “level 2 harder”, or “shuffle layouts”. The free guided plan uses fixed progression rules; a configured AI assistant can design a tailored progression.' : 'Try “a space platformer, 3 levels, collect 12, 90 seconds, 3 lives,” or use a line such as “Title: Moon Axolotl”.';
   return { spec: validateArcadeGameSpec(spec), reply: [summary, ...notes, help].join(' ') };

@@ -35,7 +35,7 @@ export function createGameEngine() {
   }
   function random(state: GameState) { state.seed = (Math.imul(state.seed, 1664525) + 1013904223) >>> 0; return state.seed / 4294967296; }
   function getLevels(spec: ArcadeGameSpec): GameLevel[] {
-    return spec.version === 2 && spec.levels ? spec.levels.map(level => ({ ...level, rules: { ...level.rules } })) : [{ id: 'level-1', title: spec.title, brief: spec.instructions || 'Collect treasures and avoid obstacles.', theme: spec.theme, rules: { ...spec.rules }, seed: 17031 }];
+    return spec.version !== 1 && spec.levels ? spec.levels.map(level => ({ ...level, rules: { ...level.rules } })) : [{ id: 'level-1', title: spec.title, brief: spec.instructions || 'Collect treasures and avoid obstacles.', theme: spec.theme, rules: { ...spec.rules }, seed: 17031 }];
   }
   function forLevel(spec: ArcadeGameSpec, index: number): ArcadeGameSpec {
     const level = getLevels(spec)[index];
@@ -66,7 +66,7 @@ export function createGameEngine() {
     // always creates exactly two fragments without allowing entity explosions.
     if (arcade && state.entities.reduce((count, entity) => count + (entity.kind === 'hazard' && entity.asteroid !== 'small' ? 2 : 1), 0) + (kind === 'hazard' ? 2 : 1) > 128) return;
     const size = kind === 'snack' ? 22 : arcade && (arcade.shooting || arcade.rotation) ? 42 : 30;
-    for (let attempt = 0; attempt < (spec.version === 2 ? 40 : 1); attempt++) {
+    for (let attempt = 0; attempt < (spec.version !== 1 ? 40 : 1); attempt++) {
       let x = 35 + random(state) * (width - 70 - size), y = 35 + random(state) * (height - 130 - size), vx = 0, vy = 0;
       if (spec.genre === 'platformer') {
         const platform = state.platforms[1 + Math.floor(random(state) * (state.platforms.length - 1))];
@@ -82,7 +82,7 @@ export function createGameEngine() {
       // Keep the initial board playable without an unavoidable hit at spawn.
       if (spec.genre === 'collect' && Math.abs(x - state.player.x) < 95 && Math.abs(y - state.player.y) < 95) x = x < width / 2 ? width - 100 : 50;
       const entity: GameEntity = { id: state.nextId, kind, x, y, w: size, h: size, vx, vy, ...(arcade && kind === 'hazard' ? { asteroid: 'large' as const } : {}) };
-      if (spec.version === 2 && attempt < 39 && (overlaps({ ...state.player, x: state.player.x - 16, y: state.player.y - 16, w: state.player.w + 32, h: state.player.h + 32 }, entity) || state.entities.some(other => overlaps({ ...other, x: other.x - 8, y: other.y - 8, w: other.w + 16, h: other.h + 16 }, entity)))) continue;
+      if (spec.version !== 1 && attempt < 39 && (overlaps({ ...state.player, x: state.player.x - 16, y: state.player.y - 16, w: state.player.w + 32, h: state.player.h + 32 }, entity) || state.entities.some(other => overlaps({ ...other, x: other.x - 8, y: other.y - 8, w: other.w + 16, h: other.h + 16 }, entity)))) continue;
       state.entities.push(entity); state.nextId++; return;
     }
   }
@@ -94,12 +94,12 @@ export function createGameEngine() {
     const state: GameState = {
       player: { x: spec.genre === 'platformer' ? 48 : 460, y: spec.genre === 'platformer' ? 464 : spec.genre === 'dodge' ? 448 : 260, w: 42, h: 34, vy: 0, grounded: spec.genre === 'platformer' },
       entities: [], platforms: spec.genre === 'platformer' ? [{ x: 0, y: 500, w: 960, h: 40 }, { x: 40, y: 420, w: 270, h: 16 }, { x: 250, y: 340, w: 270, h: 16 }, { x: 460, y: 260, w: 270, h: 16 }, { x: 650, y: 180, w: 270, h: 16 }, { x: 430, y: 100, w: 270, h: 16 }] : [],
-      score: 0, lives: spec.rules.lives, elapsed: 0, invulnerable: 1, nextSnack: 0.4, nextHazard: 0.7, seed: original.version === 2 ? levels[index].seed : 17031, nextId: 1, previousJump: false, outcome: 'playing', levelIndex: index, levelId: levels[index].id,
+      score: 0, lives: spec.rules.lives, elapsed: 0, invulnerable: 1, nextSnack: 0.4, nextHazard: 0.7, seed: original.version !== 1 ? levels[index].seed : 17031, nextId: 1, previousJump: false, outcome: 'playing', levelIndex: index, levelId: levels[index].id,
       ...(spec.arcade?.rotation || spec.arcade?.shooting ? { angle: -Math.PI / 2 } : {}),
       ...(spec.arcade?.shooting ? { bullets: [], fireCooldown: 0 } : {}),
       ...(spec.arcade?.scoring ? { points: 0 } : {}),
     };
-    if (original.version === 2 && spec.genre === 'platformer') {
+    if (original.version !== 1 && spec.genre === 'platformer') {
       // Each successive surface overlaps the last by at least 50px, so even the
       // slowest player can jump vertically in the overlap. A 75px rise is below
       // the minimum jump apex, including the engine's largest permitted step.

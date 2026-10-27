@@ -186,3 +186,7 @@ uvx iam-policy-autopilot@latest generate-policies \
 Review tool output; do not apply generated policies automatically. DynamoDB transactions authorize underlying item actions, including `ConditionCheckItem`; there is no separate `dynamodb:TransactWriteItems` grant to add. Bedrock/media capabilities in the copied runtime policy do not trigger calls or subscriptions. Only current saved administrator policy authorizes actual provider operations; no live provider calls are needed for the synthetic release checks.
 
 AWS documentation used for packaging: [Amplify custom headers](https://docs.aws.amazon.com/amplify/latest/userguide/setting-custom-headers.html), [header YAML patterns](https://docs.aws.amazon.com/amplify/latest/userguide/custom-header-YAML-format.html), [Lambda execution roles](https://docs.aws.amazon.com/lambda/latest/dg/lambda-intro-execution-role.html), and [DynamoDB transactions](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/transaction-apis.html).
+
+## Optional multiplayer relay
+
+The additive managed WebSocket relay is an application-owned extension with a separate release script. It preserves this Core-managed stack and shared permission boundary. Follow [MULTIPLAYER.md](../docs/MULTIPLAYER.md) to deploy the relay, record its public endpoint, and then release the normal frontend/API. Backend changes require updating both Lambdas.

@@ -45,3 +45,7 @@ An installation starts with its configured application name, badge, accent and o
 The original Axolotl deployment and data are preserved. This repository contains the engine and authoring behavior, not a copy of live records. A host can adopt the standalone service incrementally through public links and the SDK. Moving existing drafts, accounts or score boards requires an explicit, reviewed data migration; changing endpoints alone is not such a migration.
 
 References: [Amplify custom headers](https://docs.aws.amazon.com/amplify/latest/userguide/setting-custom-headers.html), [browser messaging security](https://developer.mozilla.org/en-US/docs/Web/API/Window/postMessage#security_concerns).
+
+## Optional multiplayer extension
+
+Version 4 arcade editions opt in to two-player cooperative play while retaining saved levels and solo play. The parent page connects through an additive application-owned HTTP/WebSocket relay; the opaque game iframe remains network-disabled. A dedicated encrypted TTL table stores anonymous capability hashes and leases, never snapshots or student identities. The extension can read/condition-check the exact public-edition table and cannot access private drafts or Core credentials. The existing Core stack and shared permission boundary stay unchanged. Legacy catalogs still expose only versions 1–2; cooperative editions do not enter the old solo leaderboard, SDK completion or assignment scoring contract. See [MULTIPLAYER.md](MULTIPLAYER.md) for lifecycle, testing and both release steps.

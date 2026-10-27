@@ -22,6 +22,8 @@ npm run dev
 
 Open `http://127.0.0.1:5180/game-studio`. To configure local branding and a connected local host, copy `game-studio-config.example.json` to ignored `game-studio-config.json`, replace its example origins, and restart the preview. For a real second-origin integration, see [the runnable host example](examples/host/README.md).
 
+For two-session multiplayer rehearsal, run `npm run dev:multiplayer` and open `http://127.0.0.1:8096/__multiplayer-fixture` in two browser sessions. Host a two-player game in one session and paste its invitation into the other. The loopback HTTP/WebSocket adapter uses the real Python relay with synthetic in-memory database/callback ports. `npm run test:multiplayer-preview` starts an isolated temporary preview, checks two actual WebSocket clients and stops its own servers; CI runs the same check. To check an already-running preview, use `npm run test:multiplayer-preview -- --reuse`. Stop it with Ctrl+C to discard all temporary rooms. This development fixture is never included in the production frontend; it neither creates accounts nor calls AWS, Core or models.
+
 ## Integrate an application
 
 1. Install/deploy Game Studio for the intended Core tenant and environment. Each installation has its own data, paired Core clients and origin.
@@ -47,3 +49,5 @@ npm run build:preview
 ```
 
 These checks use synthetic state and mocked providers. They do not establish live AWS/Core acceptance. Infrastructure scripts default to local planning; live provisioning is a separate operator action that can incur AWS charges. Existing Axolotl games and its deployment remain unchanged by this extraction. Do not point this service at Axolotl's tables or credentials.
+
+Optional two-player cooperative arcade games preserve solo play and give each player their own character, lives, goals and points in one shared world. See [the multiplayer workflow, privacy and additive relay release](docs/MULTIPLAYER.md).

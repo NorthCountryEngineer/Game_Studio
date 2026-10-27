@@ -1,0 +1,642 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Optional two-player Game Studio relay. Additive application-owned extension; reads current published editions only, retains no identities or gameplay and never reads Core credentials.",
+  "Metadata": {
+    "AWSToolsMetrics": {
+      "AWSAgentToolkit": "aws-cloudformation@3"
+    },
+    "com.aws.cloudformation.Context": {
+      "ref": [
+        {
+          "at": "docs/MULTIPLAYER.md",
+          "has": "Room protocol, lifecycle, costs and deployment boundaries"
+        }
+      ],
+      "must": [
+        "Preserve the existing Core-managed application stack, roles, identities and private data.",
+        "Bind this extension to one verified application and publication table."
+      ]
+    }
+  },
+  "Parameters": {
+    "ApplicationIdentifier": {
+      "Type": "String",
+      "AllowedPattern": "^[a-f0-9-]{36}$",
+      "Description": "Exact verified existing Core application identifier."
+    },
+    "ApplicationOrigin": {
+      "Type": "String",
+      "AllowedPattern": "^https://[a-z0-9.-]+$",
+      "Description": "Exact existing Game Studio frontend; WebSocket Origin and HTTP CORS allowlist."
+    },
+    "CoreOrganizationId": {
+      "Type": "String",
+      "AllowedPattern": "^[a-f0-9-]{36}$",
+      "Description": "Public deployment organization identifier; grants no Core authority."
+    },
+    "CoreServiceId": {
+      "Type": "String",
+      "AllowedPattern": "^[a-f0-9-]{36}$",
+      "Description": "Public deployment service identifier; grants no Core authority."
+    },
+    "PublishedGamesTable": {
+      "Type": "String",
+      "AllowedPattern": "^[A-Za-z0-9_.-]{3,255}$",
+      "Description": "Existing published-games table discovered from the verified Core application stack. Read and condition-check only."
+    },
+    "LambdaCodeBucket": {
+      "Type": "String",
+      "AllowedPattern": "^[a-z0-9.-]+$",
+      "Description": "Verified private artifact bucket in this account."
+    },
+    "LambdaCodeKey": {
+      "Type": "String",
+      "AllowedPattern": "^code/multiplayer/[a-f0-9]{40}/[a-f0-9]{64}/api.zip$",
+      "Description": "Immutable exact reviewed source archive path."
+    }
+  },
+  "Resources": {
+    "Rooms": {
+      "Type": "AWS::DynamoDB::Table",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "Ephemeral capability hashes, connection leases and bounded abuse counters; no snapshots or identities.",
+          "must": [
+            "Enforce logical expiry in every request; TTL is asynchronous cleanup.",
+            "Never store raw room tokens, chat, student identities or gameplay."
+          ]
+        }
+      },
+      "Properties": {
+        "BillingMode": "PAY_PER_REQUEST",
+        "AttributeDefinitions": [
+          {
+            "AttributeName": "id",
+            "AttributeType": "S"
+          }
+        ],
+        "KeySchema": [
+          {
+            "AttributeName": "id",
+            "KeyType": "HASH"
+          }
+        ],
+        "SSESpecification": {
+          "SSEEnabled": true
+        },
+        "TimeToLiveSpecification": {
+          "AttributeName": "expiresAt",
+          "Enabled": true
+        }
+      }
+    },
+    "Logs": {
+      "Type": "AWS::Logs::LogGroup",
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "Infrastructure diagnostics only.",
+          "must": [
+            "Never log request bodies, capability tokens or frame state."
+          ]
+        }
+      },
+      "Properties": {
+        "LogGroupName": {
+          "Fn::Sub": "/aws/lambda/${AWS::StackName}-relay"
+        },
+        "RetentionInDays": 7
+      }
+    },
+    "Socket": {
+      "Type": "AWS::ApiGatewayV2::Api",
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "Managed bidirectional transport across separate networks; no TURN service or peer IP exchange.",
+          "must": [
+            "No credentials in URL or query; first message admits a room capability."
+          ]
+        }
+      },
+      "Properties": {
+        "Name": {
+          "Fn::Sub": "${AWS::StackName}-socket"
+        },
+        "ProtocolType": "WEBSOCKET",
+        "RouteSelectionExpression": "$request.body.type"
+      }
+    },
+    "Role": {
+      "Type": "AWS::IAM::Role",
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "Dedicated extension role with no Core credential, private table, student, provider or existing role access.",
+          "must": [
+            "Published editions are read/condition-check only.",
+            "Callbacks restricted to this socket, account, region and stage.",
+            "Never attach this policy to an existing application or Core role."
+          ]
+        }
+      },
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "Policies": [
+          {
+            "PolicyName": "MultiplayerOnly",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "dynamodb:GetItem",
+                    "dynamodb:PutItem",
+                    "dynamodb:DeleteItem",
+                    "dynamodb:ConditionCheckItem"
+                  ],
+                  "Resource": {
+                    "Fn::GetAtt": [
+                      "Rooms",
+                      "Arn"
+                    ]
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "dynamodb:GetItem",
+                    "dynamodb:ConditionCheckItem"
+                  ],
+                  "Resource": {
+                    "Fn::Sub": "arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${PublishedGamesTable}"
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "execute-api:ManageConnections"
+                  ],
+                  "Resource": {
+                    "Fn::Sub": "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${Socket}/production/*/@connections/*"
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "logs:CreateLogStream",
+                    "logs:PutLogEvents"
+                  ],
+                  "Resource": {
+                    "Fn::GetAtt": [
+                      "Logs",
+                      "Arn"
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "Relay": {
+      "Type": "AWS::Lambda::Function",
+      "DependsOn": [
+        "Logs"
+      ],
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "Shares the exact reviewed declarative game validator with the app; only ephemeral network coordination.",
+          "must": [
+            "No live provider calls or private identity/client credentials.",
+            "Fixed callback URL from this stack, never event-supplied."
+          ]
+        }
+      },
+      "Properties": {
+        "FunctionName": {
+          "Fn::Sub": "${AWS::StackName}-relay"
+        },
+        "Runtime": "python3.12",
+        "Handler": "multiplayer.handler",
+        "Role": {
+          "Fn::GetAtt": [
+            "Role",
+            "Arn"
+          ]
+        },
+        "Timeout": 10,
+        "MemorySize": 256,
+        "Code": {
+          "S3Bucket": {
+            "Ref": "LambdaCodeBucket"
+          },
+          "S3Key": {
+            "Ref": "LambdaCodeKey"
+          }
+        },
+        "Environment": {
+          "Variables": {
+            "CORE_ORGANIZATION_ID": {
+              "Ref": "CoreOrganizationId"
+            },
+            "CORE_SERVICE_ID": {
+              "Ref": "CoreServiceId"
+            },
+            "GAME_PUBLIC_TABLE": {
+              "Ref": "PublishedGamesTable"
+            },
+            "FRONTEND_ORIGIN": {
+              "Ref": "ApplicationOrigin"
+            },
+            "APPLICATION_ORIGIN": {
+              "Ref": "ApplicationOrigin"
+            },
+            "MULTIPLAYER_TABLE": {
+              "Ref": "Rooms"
+            },
+            "MULTIPLAYER_SOCKET_URL": {
+              "Fn::Sub": "wss://${Socket}.execute-api.${AWS::Region}.${AWS::URLSuffix}/production"
+            },
+            "MULTIPLAYER_CALLBACK_URL": {
+              "Fn::Sub": "https://${Socket}.execute-api.${AWS::Region}.${AWS::URLSuffix}/production"
+            }
+          }
+        }
+      }
+    },
+    "SocketIntegration": {
+      "Type": "AWS::ApiGatewayV2::Integration",
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "Route socket lifecycle and fixed protocol to one bounded handler.",
+          "must": [
+            "Only the dedicated relay Lambda."
+          ]
+        }
+      },
+      "Properties": {
+        "ApiId": {
+          "Ref": "Socket"
+        },
+        "IntegrationType": "AWS_PROXY",
+        "IntegrationMethod": "POST",
+        "IntegrationUri": {
+          "Fn::Sub": "arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${Relay.Arn}/invocations"
+        }
+      }
+    },
+    "SocketConnect": {
+      "Type": "AWS::ApiGatewayV2::Route",
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "Capability admission is in the first message; network connection alone grants no seat.",
+          "must": [
+            "Every gameplay message must validate current room, edition, seat and lease."
+          ]
+        }
+      },
+      "Properties": {
+        "ApiId": {
+          "Ref": "Socket"
+        },
+        "RouteKey": "$connect",
+        "AuthorizationType": "NONE",
+        "Target": {
+          "Fn::Sub": "integrations/${SocketIntegration}"
+        }
+      }
+    },
+    "SocketConnectInvoke": {
+      "Type": "AWS::Lambda::Permission",
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "Exact socket lifecycle invocation permission.",
+          "must": [
+            "Same account, exact socket, stage and route only."
+          ]
+        }
+      },
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Ref": "Relay"
+        },
+        "Principal": "apigateway.amazonaws.com",
+        "SourceAccount": {
+          "Ref": "AWS::AccountId"
+        },
+        "SourceArn": {
+          "Fn::Sub": "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${Socket}/production/$connect"
+        }
+      }
+    },
+    "SocketMessage": {
+      "Type": "AWS::ApiGatewayV2::Route",
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "Capability admission is in the first message; network connection alone grants no seat.",
+          "must": [
+            "Every gameplay message must validate current room, edition, seat and lease."
+          ]
+        }
+      },
+      "Properties": {
+        "ApiId": {
+          "Ref": "Socket"
+        },
+        "RouteKey": "$default",
+        "AuthorizationType": "NONE",
+        "Target": {
+          "Fn::Sub": "integrations/${SocketIntegration}"
+        }
+      }
+    },
+    "SocketMessageInvoke": {
+      "Type": "AWS::Lambda::Permission",
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "Exact socket lifecycle invocation permission.",
+          "must": [
+            "Same account, exact socket, stage and route only."
+          ]
+        }
+      },
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Ref": "Relay"
+        },
+        "Principal": "apigateway.amazonaws.com",
+        "SourceAccount": {
+          "Ref": "AWS::AccountId"
+        },
+        "SourceArn": {
+          "Fn::Sub": "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${Socket}/production/$default"
+        }
+      }
+    },
+    "SocketDisconnect": {
+      "Type": "AWS::ApiGatewayV2::Route",
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "Capability admission is in the first message; network connection alone grants no seat.",
+          "must": [
+            "Every gameplay message must validate current room, edition, seat and lease."
+          ]
+        }
+      },
+      "Properties": {
+        "ApiId": {
+          "Ref": "Socket"
+        },
+        "RouteKey": "$disconnect",
+        "AuthorizationType": "NONE",
+        "Target": {
+          "Fn::Sub": "integrations/${SocketIntegration}"
+        }
+      }
+    },
+    "SocketDisconnectInvoke": {
+      "Type": "AWS::Lambda::Permission",
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "Exact socket lifecycle invocation permission.",
+          "must": [
+            "Same account, exact socket, stage and route only."
+          ]
+        }
+      },
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Ref": "Relay"
+        },
+        "Principal": "apigateway.amazonaws.com",
+        "SourceAccount": {
+          "Ref": "AWS::AccountId"
+        },
+        "SourceArn": {
+          "Fn::Sub": "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${Socket}/production/$disconnect"
+        }
+      }
+    },
+    "SocketDeployment": {
+      "Type": "AWS::ApiGatewayV2::Deployment",
+      "DependsOn": [
+        "SocketConnect",
+        "SocketMessage",
+        "SocketDisconnect"
+      ],
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "Explicit reviewed WebSocket route deployment.",
+          "must": [
+            "Bump this logical resource on protocol route/integration changes."
+          ]
+        }
+      },
+      "Properties": {
+        "ApiId": {
+          "Ref": "Socket"
+        },
+        "Description": "Fixed multiplayer protocol routes version 1."
+      }
+    },
+    "SocketStage": {
+      "Type": "AWS::ApiGatewayV2::Stage",
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "Bound aggregate relay traffic; payload logging remains disabled.",
+          "must": [
+            "No payload logs or raw IP access logs.",
+            "Limits are traffic controls, not a monetary spending cap."
+          ]
+        }
+      },
+      "Properties": {
+        "ApiId": {
+          "Ref": "Socket"
+        },
+        "StageName": "production",
+        "DeploymentId": {
+          "Ref": "SocketDeployment"
+        },
+        "DefaultRouteSettings": {
+          "DataTraceEnabled": false,
+          "DetailedMetricsEnabled": false,
+          "LoggingLevel": "OFF",
+          "ThrottlingBurstLimit": 200,
+          "ThrottlingRateLimit": 100
+        }
+      }
+    },
+    "Http": {
+      "Type": "AWS::ApiGatewayV2::Api",
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "Public capability-scoped room coordination at the exact application origin.",
+          "must": [
+            "No cookies, Core bearer credentials or broad CORS allowlist."
+          ]
+        }
+      },
+      "Properties": {
+        "Name": {
+          "Fn::Sub": "${AWS::StackName}-rooms"
+        },
+        "ProtocolType": "HTTP",
+        "CorsConfiguration": {
+          "AllowOrigins": [
+            {
+              "Ref": "ApplicationOrigin"
+            }
+          ],
+          "AllowMethods": [
+            "POST",
+            "DELETE",
+            "GET",
+            "OPTIONS"
+          ],
+          "AllowHeaders": [
+            "content-type"
+          ],
+          "MaxAge": 300
+        }
+      }
+    },
+    "HttpIntegration": {
+      "Type": "AWS::ApiGatewayV2::Integration",
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "HTTP room operations use the same scoped handler.",
+          "must": [
+            "No other application routes or identity delegation."
+          ]
+        }
+      },
+      "Properties": {
+        "ApiId": {
+          "Ref": "Http"
+        },
+        "IntegrationType": "AWS_PROXY",
+        "IntegrationUri": {
+          "Fn::GetAtt": [
+            "Relay",
+            "Arn"
+          ]
+        },
+        "PayloadFormatVersion": "2.0"
+      }
+    },
+    "HttpRoute": {
+      "Type": "AWS::ApiGatewayV2::Route",
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "Only explicit capability room routes are accepted by the handler.",
+          "must": [
+            "Unrecognized routes fail closed."
+          ]
+        }
+      },
+      "Properties": {
+        "ApiId": {
+          "Ref": "Http"
+        },
+        "RouteKey": "$default",
+        "AuthorizationType": "NONE",
+        "Target": {
+          "Fn::Sub": "integrations/${HttpIntegration}"
+        }
+      }
+    },
+    "HttpStage": {
+      "Type": "AWS::ApiGatewayV2::Stage",
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "Bound public room admission traffic in addition to per-source handler limits.",
+          "must": [
+            "No payload access logs."
+          ]
+        }
+      },
+      "Properties": {
+        "ApiId": {
+          "Ref": "Http"
+        },
+        "StageName": "$default",
+        "AutoDeploy": true,
+        "DefaultRouteSettings": {
+          "ThrottlingBurstLimit": 20,
+          "ThrottlingRateLimit": 10
+        }
+      }
+    },
+    "HttpInvoke": {
+      "Type": "AWS::Lambda::Permission",
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "Exact HTTP default-route invocation permission.",
+          "must": [
+            "Same account and exact API/stage/route."
+          ]
+        }
+      },
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Ref": "Relay"
+        },
+        "Principal": "apigateway.amazonaws.com",
+        "SourceAccount": {
+          "Ref": "AWS::AccountId"
+        },
+        "SourceArn": {
+          "Fn::Sub": "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${Http}/$default/$default"
+        }
+      }
+    }
+  },
+  "Outputs": {
+    "ApiUrl": {
+      "Value": {
+        "Fn::GetAtt": [
+          "Http",
+          "ApiEndpoint"
+        ]
+      }
+    },
+    "SocketUrl": {
+      "Value": {
+        "Fn::Sub": "wss://${Socket}.execute-api.${AWS::Region}.${AWS::URLSuffix}/production"
+      }
+    },
+    "FunctionName": {
+      "Value": {
+        "Ref": "Relay"
+      }
+    },
+    "RoomsTable": {
+      "Value": {
+        "Ref": "Rooms"
+      }
+    },
+    "ApplicationIdentifier": {
+      "Value": {
+        "Ref": "ApplicationIdentifier"
+      }
+    }
+  }
+}

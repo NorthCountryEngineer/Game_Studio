@@ -33,7 +33,7 @@ export function validateArcadeName(value: unknown): string {
 function publishedGame(game: Game): { spec: ArcadeGameSpec; publishedRevision: number; maximumPoints: number } {
   if (!game || !identifier(game.id) || game.status !== 'Published' || !revision(game.publishedRevision) || game.revision !== game.publishedRevision) throw new Error('Open the current published game before viewing or saving high scores.');
   const spec = validateGameSpec(game.spec);
-  if (spec.version === 3 || !spec.arcade?.scoring || !spec.arcade.highScores) throw new Error('High scores are disabled for this game.');
+  if (spec.version === 3 || spec.version === 4 || !spec.arcade?.scoring || !spec.arcade.highScores) throw new Error('High scores are disabled for this game.');
   return { spec, publishedRevision: game.publishedRevision, maximumPoints: createGameEngine().maxPoints(spec) };
 }
 function cleanReport(game: Game, value: GameScoreReport): GameScoreReport {
