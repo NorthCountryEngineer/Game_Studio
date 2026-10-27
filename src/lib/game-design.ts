@@ -1,4 +1,4 @@
-import type { ArcadeGameSpec, GameArcadeOptions, GameLevel, GameSpec } from './game-types';
+import type { ArcadeGameSpec, GameArcadeOptions, GameLevel, GamePowerUps, GameSpec } from './game-types';
 import { createWordGameEngine } from './word-game-engine';
 import { designWordGame, wordGameGenre } from './word-game-design';
 
@@ -19,9 +19,9 @@ export function validateArcadeGameSpec(value: unknown): ArcadeGameSpec {
     return input;
   }
   const version = value && typeof value === 'object' ? (value as Record<string, unknown>).version : undefined;
-  if (version !== 1 && version !== 2 && version !== 4) throw new Error('Unsupported game version.');
+  if (version !== 1 && version !== 2 && version !== 4 && version !== 5) throw new Error('Unsupported game version.');
   const hasArcade = Object.prototype.hasOwnProperty.call(value, 'arcade');
-  const spec = object(value, ['version', 'title', 'description', 'genre', 'theme', 'player', 'rules', 'objects', 'instructions', ...(version !== 1 ? ['progression', 'levels'] : []), ...(version === 4 ? ['multiplayer'] : []), ...(hasArcade ? ['arcade'] : [])], 'Game');
+  const spec = object(value, ['version', 'title', 'description', 'genre', 'theme', 'player', 'rules', 'objects', 'instructions', ...(version !== 1 ? ['progression', 'levels'] : []), ...(version === 4 || version === 5 && Object.prototype.hasOwnProperty.call(value, 'multiplayer') ? ['multiplayer'] : []), ...(version === 5 ? ['powerUps'] : []), ...(hasArcade ? ['arcade'] : [])], 'Game');
   const player = object(spec.player, ['name', 'color', 'speed', 'jump'], 'Player');
   const rules = object(spec.rules, ['goal', 'timeLimit', 'lives', 'difficulty'], 'Rules');
   const objects = object(spec.objects, ['collectible', 'hazard'], 'Objects');
@@ -58,10 +58,17 @@ export function validateArcadeGameSpec(value: unknown): ArcadeGameSpec {
       return { id: level.id, title: text(level.title, 80, 'Level title'), brief: text(level.brief, 300, 'Level brief'), theme: level.theme as GameLevel['theme'], seed: integer(level.seed, 1, 2147483647, 'Layout seed'), rules: { goal: integer(settings.goal, 3, 40, 'Level goal'), timeLimit: integer(settings.timeLimit, 30, 180, 'Level time'), lives: integer(settings.lives, 1, 5, 'Level lives'), difficulty: integer(settings.difficulty, 1, 5, 'Level difficulty') } };
     });
   }
-  if (version === 4) {
+  if (version === 4 || version === 5 && Object.prototype.hasOwnProperty.call(spec, 'multiplayer')) {
     const multiplayer = object(spec.multiplayer, ['mode', 'maxPlayers'], 'Multiplayer');
     if (multiplayer.mode !== 'cooperative' || multiplayer.maxPlayers !== 2) throw new Error('Multiplayer supports two cooperative players.');
     clean.multiplayer = { mode: 'cooperative', maxPlayers: 2 };
+  }
+  if (version === 5) {
+    if (clean.genre !== 'dodge' || !clean.arcade?.shooting) throw new Error('Prizes require a dodge game with shooting.');
+    const prizes = object(spec.powerUps, ['spawnInterval', 'duration', 'types'], 'Prizes');
+    const allowed = ['triple-shot', 'rapid-fire', 'shield', 'speed-boost'];
+    if (!Array.isArray(prizes.types) || prizes.types.length < 1 || prizes.types.length > 4 || prizes.types.some(type => typeof type !== 'string' || !allowed.includes(type)) || new Set(prizes.types).size !== prizes.types.length) throw new Error('Choose one to four different supported prizes.');
+    clean.powerUps = { spawnInterval: integer(prizes.spawnInterval, 5, 60, 'Prize interval'), duration: integer(prizes.duration, 3, 30, 'Prize duration'), types: [...prizes.types] as GamePowerUps['types'] };
   }
   return clean;
 }
@@ -135,12 +142,14 @@ export function planGameLevels(spec: ArcadeGameSpec, count: number, seedText: st
     const focus = count === 1 ? 'Explore the world at your own pace.' : index === 0 ? 'Learn the controls with a smaller collection goal and fewer obstacles.' : index === count - 1 ? 'Put your practice together with the full collection goal and the strongest challenge.' : 'Practice finding treasures while watching a more varied obstacle pattern.';
     return { id: `level-${index + 1}`, title: stage, brief: spec.arcade ? arcadeLevelBrief(spec, goal, index === 0 ? 'Learn the controls.' : index === count - 1 ? 'Combine your skills.' : 'Practice with more obstacles.') : `${focus} Collect ${goal} ${spec.objects.collectible}s and avoid ${spec.objects.hazard}s.`, theme: spec.theme, rules: { ...spec.rules, goal, difficulty }, seed: previous[index]?.seed || layoutSeed(`${seedText}|${index + 1}`) };
   });
-  return validateArcadeGameSpec({ ...spec, version: spec.version === 4 ? 4 : 2, progression: count === 1 ? 'One complete adventure with a saved layout. Lives and time reset when you retry.' : 'Start with the controls and a smaller goal, practice avoiding obstacles, then finish with the full goal and a greater challenge. Each level starts with fresh lives and time.', levels });
+  return validateArcadeGameSpec({ ...spec, version: spec.version === 5 ? 5 : spec.version === 4 ? 4 : 2, progression: count === 1 ? 'One complete adventure with a saved layout. Lives and time reset when you retry.' : 'Start with the controls and a smaller goal, practice avoiding obstacles, then finish with the full goal and a greater challenge. Each level starts with fresh lives and time.', levels });
 }
 
 export function defaultGameSpec(): ArcadeGameSpec {
   return { version: 1, title: 'Axolotl Pond Adventure', description: 'Help a curious axolotl gather water snacks and steer clear of rocks.', genre: 'collect', theme: 'pond', player: { name: 'Axolotl', color: '#efadc4', speed: 5, jump: 10 }, rules: { goal: 10, timeLimit: 60, lives: 3, difficulty: 2 }, objects: { collectible: 'water snack', hazard: 'rock' }, instructions: 'Use the arrow keys or WASD to swim. Collect 10 water snacks before time runs out. Avoid rocks. Touch controls are available below the game.' };
 }
+
+export function defaultPowerUps(): GamePowerUps { return { spawnInterval: 12, duration: 10, types: ['triple-shot', 'rapid-fire', 'shield', 'speed-boost'] }; }
 
 /** A transparent, bounded conversational builder; it does not invoke an AI model. */
 export function designArcadeGame(message: string, current?: ArcadeGameSpec): { spec: ArcadeGameSpec; reply: string } {
@@ -150,7 +159,9 @@ export function designArcadeGame(message: string, current?: ArcadeGameSpec): { s
   const lower = message.toLowerCase();
   const changes: string[] = [], notes: string[] = [];
   const has = (regex: RegExp) => regex.test(lower);
-  const arcadeRequest = has(/\b(?:asteroids?|arcade(?:[ -]style)?(?:\s+game)?)\b/);
+  const prizeText = lower.split('\n').filter(line => !/^\s*(?:title|name|description|player|collectible|hazard|instructions)\s*:/u.test(line)).join('\n').replace(/\b(?:call(?:ed)?(?: it)?|title(?:d)?|name(?:d)?(?: it)?)\s+["“][^"”\n]+["”]/gu, '');
+  const prizes = arcadeToggle(prizeText, 'power[ -]?ups?|prizes?|triple[ -]?shots?|rapid[ -]?fire|shields?|speed[ -]?boosts?');
+  const arcadeRequest = has(/\b(?:asteroids?|arcade(?:[ -]style)?(?:\s+game)?)\b/) || prizes === true;
   const toggles = arcadeFeatures.map(([key, feature]) => [key, arcadeToggle(lower, feature)] as const);
   const hasArcadeToggle = toggles.some(([, value]) => value !== undefined);
   let explicitOtherGenre = false;
@@ -177,6 +188,10 @@ export function designArcadeGame(message: string, current?: ArcadeGameSpec): { s
   if (spec.genre !== 'dodge') {
     delete spec.arcade;
     if (hasArcadeToggle) notes.push('Rotation, shooting, and arcade score options are supported in dodge games.');
+  }
+  if (spec.version === 5 && (spec.genre !== 'dodge' || !spec.arcade?.shooting)) {
+    delete spec.powerUps; spec.version = spec.multiplayer ? 4 : 2;
+    changes.push('prizes off');
   }
   // Explicit settings win over incidental object words: stars can belong in a pond.
   const world = lower.match(/\b(pond|underwater|aquarium|lake|ocean|space|galaxy|garden|meadow)\b/)?.[1];
@@ -278,12 +293,23 @@ export function designArcadeGame(message: string, current?: ArcadeGameSpec): { s
   const cooperative = arcadeToggle(lower, 'multiplayer|two[ -]player|2[ -]player|cooperative|co-op');
   if (cooperative === true) {
     if (spec.version === 1) spec = planGameLevels(spec, 1, seedText);
-    spec = validateArcadeGameSpec({ ...spec, version: 4, multiplayer: { mode: 'cooperative', maxPlayers: 2 } });
+    spec = validateArcadeGameSpec({ ...spec, version: spec.version === 5 ? 5 : 4, multiplayer: { mode: 'cooperative', maxPlayers: 2 } });
     changes.push('optional two-player cooperation');
-  } else if (cooperative === false && spec.version === 4) {
+  } else if (cooperative === false && !!spec.multiplayer) {
     const { multiplayer: _multiplayer, ...single } = spec;
-    spec = validateArcadeGameSpec({ ...single, version: 2 });
+    spec = validateArcadeGameSpec({ ...single, version: spec.version === 5 ? 5 : 2 });
     changes.push('single-player only');
+  }
+  if (prizes === true) {
+    if (spec.genre === 'dodge' && spec.arcade?.shooting) {
+      if (spec.version === 1) spec = planGameLevels(spec, 1, seedText);
+      spec = validateArcadeGameSpec({ ...spec, version: 5, powerUps: spec.powerUps ?? defaultPowerUps() });
+      changes.push('periodic ship prizes');
+    } else notes.push('Prizes are available in dodge games with shooting enabled.');
+  } else if (prizes === false && spec.version === 5) {
+    const { powerUps: _prizes, ...without } = spec;
+    spec = validateArcadeGameSpec({ ...without, version: spec.multiplayer ? 4 : 2 });
+    changes.push('prizes off');
   }
   const summary = changes.length ? `Updated ${[...new Set(changes)].join(', ')}.` : 'I can build a collection, dodging, or platform game in a pond, space, or garden.';
   const help = changes.length ? 'Review the level plan, then test each level. Ask for “5 levels”, “level 2 harder”, or “shuffle layouts”. The free guided plan uses fixed progression rules; a configured AI assistant can design a tailored progression.' : 'Try “a space platformer, 3 levels, collect 12, 90 seconds, 3 lives,” or use a line such as “Title: Moon Axolotl”.';

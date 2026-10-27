@@ -1,9 +1,12 @@
 import { validateArcadeGameSpec } from './game-design';
-import type { GameLevel, GameResult, ArcadeGameSpec, GameSpec } from './game-types';
+import type { GameLevel, GameResult, ArcadeGameSpec, GameSpec, GamePowerUpType, GamePowerUps } from './game-types';
 
 export type GameInput = { left?: boolean; right?: boolean; up?: boolean; down?: boolean; jump?: boolean; fire?: boolean };
 export type GameEntity = { id: number; kind: 'snack' | 'hazard'; x: number; y: number; w: number; h: number; vx: number; vy: number; asteroid?: 'large' | 'small'; grace?: number };
 export type GameBullet = { id: number; x: number; y: number; vx: number; vy: number; ttl: number };
+export type GamePowerUpEffects = { tripleShot: number; rapidFire: number; speedBoost: number; shield: 0 | 1 };
+export type GamePowerUpPickup = { id: number; type: GamePowerUpType; x: number; y: number; ttl: number };
+export type GamePowerUpWorld = { pickups: GamePowerUpPickup[]; nextSpawn: number };
 export type GamePlatform = { x: number; y: number; w: number; h: number };
 export type GameState = {
   player: { x: number; y: number; w: number; h: number; vy: number; grounded: boolean };
@@ -25,6 +28,7 @@ export type GameState = {
   bullets?: GameBullet[];
   fireCooldown?: number;
   points?: number;
+  powerUps?: GamePowerUpWorld & { effects: GamePowerUpEffects };
 };
 
 /** Self-contained so the exact tested engine can also run in an opaque-origin iframe. */
@@ -33,7 +37,50 @@ export function createGameEngine() {
   function overlaps(a: { x: number; y: number; w: number; h: number }, b: { x: number; y: number; w: number; h: number }) {
     return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
   }
-  function random(state: GameState) { state.seed = (Math.imul(state.seed, 1664525) + 1013904223) >>> 0; return state.seed / 4294967296; }
+  function random(state: { seed: number }) { state.seed = (Math.imul(state.seed, 1664525) + 1013904223) >>> 0; return state.seed / 4294967296; }
+  function newEffects(): GamePowerUpEffects { return { tripleShot: 0, rapidFire: 0, speedBoost: 0, shield: 0 }; }
+  function tickEffects(effects: GamePowerUpEffects, dt: number) {
+    effects.tripleShot = Math.max(0, effects.tripleShot - dt); effects.rapidFire = Math.max(0, effects.rapidFire - dt); effects.speedBoost = Math.max(0, effects.speedBoost - dt);
+  }
+  function advancePrizes(state: { seed: number; nextId: number }, world: GamePowerUpWorld, config: GamePowerUps, dt: number, players: { x: number; y: number; effects: GamePowerUpEffects; lives: number }[]) {
+    world.nextSpawn = Math.max(0, world.nextSpawn - dt);
+    if (!world.nextSpawn) {
+      if (world.pickups.length < 3) world.pickups.push({ id: state.nextId++, type: config.types[Math.floor(random(state) * config.types.length)], x: 32 + random(state) * (width - 92), y: -28, ttl: 12 });
+      world.nextSpawn = config.spawnInterval;
+    }
+    world.pickups = world.pickups.filter(pickup => {
+      pickup.y += 72 * dt; pickup.ttl = Math.max(0, pickup.ttl - dt);
+      if (!pickup.ttl || pickup.y > height + 28) return false;
+      // One pickup belongs to one living ship, with alternating tie priority.
+      for (const index of pickup.id % 2 && players.length > 1 ? [1, 0] : players.map((_player, i) => i)) {
+        const player = players[index];
+        if (!player.lives || !overlaps({ x: player.x, y: player.y, w: 42, h: 34 }, { x: pickup.x, y: pickup.y, w: 28, h: 28 })) continue;
+        if (pickup.type === 'shield') player.effects.shield = 1;
+        else if (pickup.type === 'triple-shot') player.effects.tripleShot = config.duration;
+        else if (pickup.type === 'rapid-fire') player.effects.rapidFire = config.duration;
+        else player.effects.speedBoost = config.duration;
+        return false;
+      }
+      return true;
+    });
+  }
+  function effectLabel(effects?: GamePowerUpEffects) {
+    if (!effects) return '';
+    const labels: string[] = [];
+    if (effects.tripleShot > 0) labels.push(`Triple shot ${Math.ceil(effects.tripleShot)}s`);
+    if (effects.rapidFire > 0) labels.push(`Rapid fire ${Math.ceil(effects.rapidFire)}s`);
+    if (effects.speedBoost > 0) labels.push(`Speed boost ${Math.ceil(effects.speedBoost)}s`);
+    if (effects.shield) labels.push('Shield: 1 extra hit');
+    return labels.join(' · ') || 'No active prizes';
+  }
+  function drawPrizes(ctx: CanvasRenderingContext2D, pickups: GamePowerUpPickup[]) {
+    for (const pickup of pickups) {
+      const color = pickup.type === 'triple-shot' ? '#c369e0' : pickup.type === 'rapid-fire' ? '#ffb23e' : pickup.type === 'shield' ? '#36cad7' : '#7ddc62';
+      const symbol = pickup.type === 'triple-shot' ? '3' : pickup.type === 'rapid-fire' ? '»' : pickup.type === 'shield' ? 'S' : '↑';
+      ctx.fillStyle = color; ctx.strokeStyle = '#211d3e'; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(pickup.x + 14, pickup.y + 14, 14, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#211d3e'; ctx.font = 'bold 20px system-ui'; ctx.textAlign = 'center'; ctx.fillText(symbol, pickup.x + 14, pickup.y + 21);
+    }
+  }
   function getLevels(spec: ArcadeGameSpec): GameLevel[] {
     return spec.version !== 1 && spec.levels ? spec.levels.map(level => ({ ...level, rules: { ...level.rules } })) : [{ id: 'level-1', title: spec.title, brief: spec.instructions || 'Collect treasures and avoid obstacles.', theme: spec.theme, rules: { ...spec.rules }, seed: 17031 }];
   }
@@ -64,7 +111,7 @@ export function createGameEngine() {
     const arcade = spec.genre === 'dodge' && spec.arcade;
     // Reserve both future fragments while a large rock is alive, so splitting
     // always creates exactly two fragments without allowing entity explosions.
-    if (arcade && state.entities.reduce((count, entity) => count + (entity.kind === 'hazard' && entity.asteroid !== 'small' ? 2 : 1), 0) + (kind === 'hazard' ? 2 : 1) > 128) return;
+    if (arcade && state.entities.reduce((count, entity) => count + (entity.kind === 'hazard' && entity.asteroid !== 'small' ? 2 : 1), 0) + (kind === 'hazard' ? 2 : 1) > (spec.version === 5 ? 64 : 128)) return;
     const size = kind === 'snack' ? 22 : arcade && (arcade.shooting || arcade.rotation) ? 42 : 30;
     for (let attempt = 0; attempt < (spec.version !== 1 ? 40 : 1); attempt++) {
       let x = 35 + random(state) * (width - 70 - size), y = 35 + random(state) * (height - 130 - size), vx = 0, vy = 0;
@@ -98,6 +145,7 @@ export function createGameEngine() {
       ...(spec.arcade?.rotation || spec.arcade?.shooting ? { angle: -Math.PI / 2 } : {}),
       ...(spec.arcade?.shooting ? { bullets: [], fireCooldown: 0 } : {}),
       ...(spec.arcade?.scoring ? { points: 0 } : {}),
+      ...(spec.version === 5 && spec.powerUps ? { powerUps: { pickups: [], nextSpawn: spec.powerUps.spawnInterval, effects: newEffects() } } : {}),
     };
     if (original.version !== 1 && spec.genre === 'platformer') {
       // Each successive surface overlaps the last by at least 50px, so even the
@@ -120,7 +168,8 @@ export function createGameEngine() {
     const arcade = spec.genre === 'dodge' ? spec.arcade : undefined;
     state.elapsed = Math.min(spec.rules.timeLimit, state.elapsed + dt);
     state.invulnerable = Math.max(0, state.invulnerable - dt);
-    const speed = 110 + spec.player.speed * 32;
+    if (state.powerUps) tickEffects(state.powerUps.effects, dt);
+    const speed = (110 + spec.player.speed * 32) * (state.powerUps?.effects.speedBoost ? 1.6 : 1);
     let dx = Number(Boolean(input.right)) - Number(Boolean(input.left));
     let dy = Number(Boolean(input.down)) - Number(Boolean(input.up));
     if (spec.genre === 'platformer') {
@@ -148,6 +197,7 @@ export function createGameEngine() {
       player.x = Math.max(0, Math.min(width - player.w, player.x + dx * speed * dt));
       player.y = Math.max(12, Math.min(height - player.h - 15, player.y + dy * speed * dt));
     }
+    if (spec.version === 5 && spec.powerUps && state.powerUps) advancePrizes(state, state.powerUps, spec.powerUps, dt, [{ x: player.x, y: player.y, effects: state.powerUps.effects, lives: state.lives }]);
     if (spec.genre === 'dodge') {
       state.nextSnack -= dt; state.nextHazard -= dt;
       if (state.nextSnack <= 0) { spawn(state, spec, 'snack'); state.nextSnack = Math.min(0.8, spec.rules.timeLimit / (spec.rules.goal * 1.7)); }
@@ -156,10 +206,11 @@ export function createGameEngine() {
     if (arcade?.shooting) {
       state.bullets ||= [];
       state.fireCooldown = Math.max(0, (state.fireCooldown || 0) - dt);
-      if (input.fire && !state.fireCooldown && state.bullets.length < 32) {
-        const angle = arcade.rotation ? (state.angle ?? -Math.PI / 2) : -Math.PI / 2;
-        state.bullets.push({ id: state.nextId++, x: player.x + player.w / 2 + Math.cos(angle) * 25, y: player.y + player.h / 2 + Math.sin(angle) * 25, vx: Math.cos(angle) * 620, vy: Math.sin(angle) * 620, ttl: 1.6 });
-        state.fireCooldown = 0.22;
+      const angles = state.powerUps?.effects.tripleShot ? [-0.18, 0, 0.18] : [0];
+      if (input.fire && !state.fireCooldown && state.bullets.length + angles.length <= 32) {
+        const forward = arcade.rotation ? (state.angle ?? -Math.PI / 2) : -Math.PI / 2;
+        for (const offset of angles) { const angle = forward + offset; state.bullets.push({ id: state.nextId++, x: player.x + player.w / 2 + Math.cos(angle) * 25, y: player.y + player.h / 2 + Math.sin(angle) * 25, vx: Math.cos(angle) * 620, vy: Math.sin(angle) * 620, ttl: 1.6 }); }
+        state.fireCooldown = state.powerUps?.effects.rapidFire ? 0.08 : 0.22;
       }
     }
     const collected = new Set<number>();
@@ -204,7 +255,7 @@ export function createGameEngine() {
       if (!overlaps(player, entity)) continue;
       if (entity.kind === 'snack') { collected.add(entity.id); if (arcade?.scoring && state.score < spec.rules.goal) state.points = (state.points || 0) + 10; state.score++; }
       else if (!state.invulnerable && !entity.grace) {
-        state.lives--; state.invulnerable = 1.5;
+        if (state.powerUps?.effects.shield) state.powerUps.effects.shield = 0; else state.lives--; state.invulnerable = 1.5;
         if (spec.genre === 'platformer') { player.x = 48; player.y = 464; player.vy = 0; }
       }
     }
@@ -219,7 +270,7 @@ export function createGameEngine() {
     if (state.outcome !== 'won' || state.levelIndex + 1 >= getLevels(spec).length) return undefined;
     return create(spec, state.levelIndex + 1);
   }
-  return { create, step, nextLevel, getLevels, forLevel, overlaps, sweptHit, maxPoints, width, height };
+  return { create, step, nextLevel, getLevels, forLevel, overlaps, sweptHit, maxPoints, newEffects, tickEffects, advancePrizes, effectLabel, drawPrizes, width, height };
 }
 
 /** Treat the opaque frame's results as untrusted messages, never as permissions. */
@@ -269,7 +320,7 @@ export function startGameSandbox(engine: ReturnType<typeof createGameEngine>, va
   function controlHelp() {
     if (!spec) return '';
     const movement = spec.arcade?.rotation ? 'Left / Right or A / D turn the ship through 360°. Up / W thrusts forward; Down / S reverses.' : spec.genre === 'platformer' ? 'Arrow keys or WASD move. Space or Up jumps.' : 'Arrow keys or WASD move.';
-    return `${movement}${spec.arcade?.shooting ? ` Space or Z fires.${spec.arcade.splitAsteroids ? ' Large asteroids split into two small pieces; shoot each small piece once to destroy it.' : ' One shot destroys an asteroid.'}` : ''}${spec.arcade?.scoring ? ` Collectibles: 10 points.${spec.arcade.shooting ? ` Large asteroids: 20 points.${spec.arcade.splitAsteroids ? ' Small pieces: 50 points.' : ''}` : ''}` : ''} P pauses. R restarts this level.`;
+    return `${movement}${spec.arcade?.shooting ? ` Space or Z fires.${spec.arcade.splitAsteroids ? ' Large asteroids split into two small pieces; shoot each small piece once to destroy it.' : ' One shot destroys an asteroid.'}` : ''}${spec.arcade?.scoring ? ` Collectibles: 10 points.${spec.arcade.shooting ? ` Large asteroids: 20 points.${spec.arcade.splitAsteroids ? ' Small pieces: 50 points.' : ''}` : ''}` : ''}${spec.version === 5 ? ' Falling prizes: 3 = triple shot, » = rapid fire, S = one-hit shield, ↑ = speed boost. Collect with your ship; timed prizes refresh without stacking.' : ''} P pauses. R restarts this level.`;
   }
   function levelInstructions(brief: string) {
     if (!gameSpec || !spec) return '';
@@ -370,12 +421,14 @@ export function startGameSandbox(engine: ReturnType<typeof createGameEngine>, va
         ctx.fillStyle = '#c5cec3'; ctx.beginPath(); ctx.arc(x - 4 * scale, y - 4 * scale, 3 * scale, 0, Math.PI * 2); ctx.fill();
       }
     }
+    if (state.powerUps) engine.drawPrizes(ctx, state.powerUps.pickups);
     if (spec.arcade?.shooting) for (const bullet of state.bullets || []) {
       const length = 11 / 620;
       ctx.strokeStyle = '#fff4a2'; ctx.lineWidth = 5; ctx.lineCap = 'round'; ctx.beginPath(); ctx.moveTo(bullet.x - bullet.vx * length, bullet.y - bullet.vy * length); ctx.lineTo(bullet.x, bullet.y); ctx.stroke();
       ctx.strokeStyle = '#ec805b'; ctx.lineWidth = 2; ctx.stroke();
     }
     const p = state.player;
+    if (state.powerUps?.effects.shield) { ctx.strokeStyle = '#36cad7'; ctx.lineWidth = 4; ctx.beginPath(); ctx.arc(p.x + p.w / 2, p.y + p.h / 2, 34, 0, Math.PI * 2); ctx.stroke(); }
     if (!(state.invulnerable > 0 && Math.floor(state.elapsed * 9) % 2)) {
       const x = p.x + p.w / 2, y = p.y + p.h / 2;
       ctx.save(); ctx.translate(x, y);
@@ -414,7 +467,7 @@ export function startGameSandbox(engine: ReturnType<typeof createGameEngine>, va
     if (state && spec) {
       const seconds = Math.max(0, Math.ceil(spec.rules.timeLimit - state.elapsed));
       const levelLabel = gameSpec && engine.getLevels(gameSpec).length > 1 ? `Level ${state.levelIndex + 1} / ${engine.getLevels(gameSpec).length} · ` : '';
-      const label = `${levelLabel}Snacks ${state.score} / ${spec.rules.goal}${spec.arcade?.scoring ? ` · Points ${state.points || 0}` : ''} · Lives ${state.lives} · Time ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+      const label = `${levelLabel}Snacks ${state.score} / ${spec.rules.goal}${spec.arcade?.scoring ? ` · Points ${state.points || 0}` : ''} · Lives ${state.lives} · Time ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}${state.powerUps ? ` · ${engine.effectLabel(state.powerUps.effects)}` : ''}`;
       if (status.textContent !== label) status.textContent = label;
       const previousReviews = [...reviews.entries()].filter(([id]) => id !== state!.levelId).map(([, review]) => review);
       const totalScore = previousReviews.reduce((sum, review) => sum + review.score, state.score);

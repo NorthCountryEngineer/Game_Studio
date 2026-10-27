@@ -227,6 +227,64 @@ class MultiplayerTests(unittest.TestCase):
         value['bullets'] = [dict(id=1, owner=0, x=300, y=200, vx=0, vy=-620, ttl=1)]
         self.error(400, lambda: relay.validate_state(value, self.spec))
 
+    def prize_snapshot(self):
+        self.spec.update(version=5, powerUps=support.games.default_power_ups())
+        self.mutate_publication(lambda value: value.update(spec=deepcopy(self.spec)))
+        value = self.snapshot()
+        value.update(nextId=100, powerUps={'nextSpawn': 12, 'pickups': [dict(id=90, type='shield', x=400, y=-28, ttl=12)]})
+        for player in value['players']:
+            player['effects'] = dict(tripleShot=0, rapidFire=0, speedBoost=0, shield=0)
+        return value
+
+    def test_prize_edition_rooms_bind_exact_settings_and_forward_only_valid_state(self):
+        value = self.prize_snapshot()
+        room, _ = self.pair()
+        self.assertEqual(room['specSha256'], relay.hashlib.sha256(relay.canonical(self.spec).encode()).hexdigest())
+        value['players'][1]['effects'].update(tripleShot=10, rapidFire=10, speedBoost=10, shield=1)
+        self.send('host-connection', {'type': 'state', 'seq': 0, 'state': value})
+        self.assertEqual(self.messages('guest-connection'), [{'type': 'state', 'seq': 0, 'state': value}])
+        self.mutate_publication(lambda publication: publication['spec']['powerUps'].update(duration=11))
+        self.error(410, lambda: self.send('host-connection', {'type': 'state', 'seq': 1, 'state': value}))
+
+    def test_prize_solo_edition_does_not_admit_cooperative_room(self):
+        self.prize_snapshot()
+        self.spec.pop('multiplayer')
+        self.mutate_publication(lambda value: value.update(spec=deepcopy(self.spec)))
+        self.error(409, self.create)
+
+    def test_prize_snapshot_rejects_missing_unknown_replayed_ids_and_unsupported_effects(self):
+        original = self.prize_snapshot()
+        self.assertEqual(relay.validate_state(original, self.spec), original)
+        candidates = []
+        value = deepcopy(original); value.pop('powerUps'); candidates.append(value)
+        for field, new in [('nextSpawn', 12.1), ('nextSpawn', True), ('pickups', original['powerUps']['pickups'] * 4)]:
+            value = deepcopy(original); value['powerUps'][field] = new; candidates.append(value)
+        for field, new in [('type', 'secret'), ('x', -1), ('y', 569), ('ttl', 13), ('id', 100), ('html', '<script>')]:
+            value = deepcopy(original); value['powerUps']['pickups'][0][field] = new; candidates.append(value)
+        for field, new in [('shield', 2), ('shield', True), ('tripleShot', 11), ('rapidFire', math.nan), ('speedBoost', -1), ('secret', 1)]:
+            value = deepcopy(original); value['players'][0]['effects'][field] = new; candidates.append(value)
+        value = deepcopy(original); value['players'][0].pop('effects'); candidates.append(value)
+        value = deepcopy(original); value['entities'] = [dict(id=90, kind='snack', x=1, y=1, w=20, h=20, vx=0, vy=0)]; candidates.append(value)
+        for value in candidates:
+            with self.subTest(value=value): self.error(400, lambda: relay.validate_state(value, self.spec))
+        self.spec['powerUps']['types'] = ['triple-shot']
+        value = deepcopy(original); value['powerUps']['pickups'] = []; value['players'][0]['effects']['shield'] = 1
+        self.error(400, lambda: relay.validate_state(value, self.spec))
+        legacy = deepcopy(self.spec); legacy['version'] = 4; legacy.pop('powerUps')
+        self.error(400, lambda: relay.validate_state(original, legacy))
+
+    def test_prize_snapshots_bound_shared_projectiles_and_weight_split_asteroids(self):
+        value = self.prize_snapshot(); value['nextId'] = 1000
+        value['bullets'] = [dict(id=i + 1, owner=i // 32, x=300, y=200, vx=0, vy=-620, ttl=1) for i in range(64)]
+        self.assertEqual(relay.validate_state(value, self.spec), value)
+        value['bullets'][32]['owner'] = 0
+        self.error(400, lambda: relay.validate_state(value, self.spec))
+        value['bullets'] = []
+        value['entities'] = [dict(id=i + 1, kind='hazard', asteroid='large', x=300, y=0, w=42, h=42, vx=0, vy=100) for i in range(32)]
+        self.assertEqual(relay.validate_state(value, self.spec), value)
+        value['entities'].append(dict(value['entities'][0], id=33))
+        self.error(400, lambda: relay.validate_state(value, self.spec))
+
     def test_replayed_and_out_of_order_sequences_are_not_forwarded_twice(self):
         self.pair()
         self.send('guest-connection', {'type': 'input', 'seq': 3, 'mask': 16})

@@ -127,3 +127,18 @@ test('cooperative editions cannot be combined into single-player assignment cred
   assert.throws(() => gameObjectiveUnits(cooperative), /per-player/);
   assert.throws(() => calculateProvisionalPoints(cooperative, result(1), policy), /do not award/);
 });
+
+
+test('prize-enabled solo editions retain whole-campaign scaling while cooperative prize editions reject credit', async () => {
+  const levels = planGameLevels({ ...defaultGameSpec(), genre: 'dodge', arcade: { rotation: true, shooting: true, splitAsteroids: true, scoring: true, highScores: true } }, 2, 'prize-scale');
+  levels.levels![0].rules.goal = 10; levels.levels![1].rules.goal = 20;
+  const spec = { ...levels, version: 5 as const, powerUps: { spawnInterval: 12, duration: 10, types: ['triple-shot', 'rapid-fire', 'shield', 'speed-boost'] } };
+  assert.equal(gameObjectiveUnits(spec), 30);
+  assert.equal(calculateProvisionalPoints(spec, { ...result(5), points: 50 }, policy).earned_points, 4.17);
+  assert.equal(calculateProvisionalPoints(spec, { ...result(5), points: 50 }, { ...policy, max_points: 100 }).earned_points, 16.67);
+  const game = publication(spec as GameSpec), binding = await createPublicationBinding(game);
+  assert.equal((await scorePublishedGame(game, binding, { ...result(30, 'won', ['level-1', 'level-2']), points: 300 }, policy)).earned_points, 25);
+  const coop = { ...spec, multiplayer: { mode: 'cooperative', maxPlayers: 2 } };
+  assert.throws(() => gameObjectiveUnits(coop), /per-player/);
+  assert.throws(() => calculateProvisionalPoints(coop, { ...result(5), points: 50 }, policy), /do not award/);
+});

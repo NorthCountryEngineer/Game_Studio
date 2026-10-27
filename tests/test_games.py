@@ -378,6 +378,49 @@ class GameTests(unittest.TestCase):
         edited = games.update(self.api, self.claims, GAME, {'revision': pending['revision'], 'spec': pending['spec']})
         self.assertNotIn('operationState', edited)
 
+    def test_prize_edition_needs_every_level_review_and_stays_out_of_legacy_catalog(self):
+        state = self.create(prompt='Asteroids with three levels and periodic prizes.')
+        self.assertEqual(state['spec']['version'], 5)
+        self.error(400, lambda: games.complete_test(self.api, self.claims, GAME, {'revision': state['revision']}))
+        self.error(400, lambda: games.complete_test(self.api, self.claims, GAME, {'revision': state['revision'], 'reviewedLevelIds': ['level-1']}))
+        published = self.publish(self.finish_test(state))
+        self.assertEqual(published['spec']['powerUps'], games.default_power_ups())
+        self.assertEqual(games.list_games(self.api, None, {}, True)['games'], [])
+        all_formats = games.list_games(self.api, None, {'queryStringParameters': {'specVersion': 'all'}}, True)['games']
+        self.assertEqual([game['id'] for game in all_formats], [GAME])
+        changed = games.update(self.api, self.claims, GAME, {'revision': published['revision'], 'spec': dict(published['spec'], title='Edited prize game')})
+        self.assertNotIn('testedRevision', changed)
+        self.error(409, lambda: self.publish(changed))
+
+    def test_model_proposals_cannot_silently_remove_prizes_cooperation_or_change_prize_settings(self):
+        self.configure_model()
+        state = self.create(prompt='Asteroids with prizes and multiplayer.')
+        state['spec']['powerUps'].update(spawnInterval=27, duration=18, types=['shield', 'triple-shot'])
+        state = games.update(self.api, self.claims, GAME, {'revision': state['revision'], 'spec': state['spec']})
+        proposed = deepcopy(state['spec']); proposed['version'] = 2
+        proposed.pop('powerUps'); proposed.pop('multiplayer'); proposed['title'] = 'A new title'
+        self.provider.converse.return_value = {'output': {'message': {'content': [{'text': json.dumps({'text': 'Updated title.', 'spec': proposed})}]}}}
+        updated = self.message(state, 'Title: A new title')
+        self.assertEqual(updated['spec']['version'], 5)
+        self.assertEqual(updated['spec']['powerUps'], state['spec']['powerUps'])
+        self.assertEqual(updated['spec']['multiplayer'], state['spec']['multiplayer'])
+        proposed = deepcopy(updated['spec']); proposed['powerUps'] = games.default_power_ups()
+        self.provider.converse.return_value = {'output': {'message': {'content': [{'text': json.dumps({'text': 'Updated.', 'spec': proposed})}]}}}
+        again = self.message(updated, 'Title: Another title', request=SECOND)
+        self.assertEqual(again['spec']['powerUps'], state['spec']['powerUps'])
+
+    def test_model_cannot_invent_prizes_and_explicit_disable_is_honored(self):
+        self.configure_model(); state = self.create(prompt='Asteroids.')
+        invented = games.design_game('Add prizes.', state['spec'])['spec']
+        self.provider.converse.return_value = {'output': {'message': {'content': [{'text': json.dumps({'text': 'Prizes!', 'spec': invented})}]}}}
+        self.error(502, lambda: self.message(state, 'Title: A new title'))
+        # A separately saved existing prize edition can explicitly remove the feature.
+        pending = games.load(self.api, self.claims, GAME)[0]
+        state = games.update(self.api, self.claims, GAME, {'revision': pending['revision'], 'spec': invented})
+        self.provider.converse.return_value = {'output': {'message': {'content': [{'text': json.dumps({'text': 'Removed prizes.', 'spec': invented})}]}}}
+        updated = self.message(state, 'Disable prizes.', request=SECOND)
+        self.assertEqual(updated['spec']['version'], 2); self.assertNotIn('powerUps', updated['spec'])
+
     def test_malicious_model_spec_cannot_publish_or_inject_executable_content(self):
         self.configure_model(); state = self.create(); candidate = games.default_spec(); candidate['script'] = 'fetch(secret)'
         self.provider.converse.return_value = {'output': {'message': {'content': [{'text': json.dumps({'text': 'Run this', 'spec': candidate})}]}}}

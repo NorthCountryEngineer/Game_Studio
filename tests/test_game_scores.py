@@ -61,6 +61,20 @@ class ScoreTests(unittest.TestCase):
         self.error(404, self.submit)
         self.assertNotIn(games.key('game-score', support.GAME), self.database.rows['published-games'])
 
+    def test_solo_prizes_accept_bounded_scores_but_cooperative_prizes_cannot_enter_solo_board(self):
+        spec = {**self.published['spec'], 'version': 5, 'powerUps': {
+            'spawnInterval': 12, 'duration': 10, 'types': ['triple-shot', 'rapid-fire', 'shield', 'speed-boost']}}
+        saved = games.update(self.api, self.claims, support.GAME, {'revision': self.published['revision'], 'spec': spec})
+        published = self.publish(self.finish_test(saved))
+        self.revision = published['publishedRevision']
+        self.assertEqual(self.submit()['entries'][0]['points'], 100)
+        spec['multiplayer'] = {'mode': 'cooperative', 'maxPlayers': 2}
+        saved = games.update(self.api, self.claims, support.GAME, {'revision': self.revision, 'spec': spec})
+        published = self.publish(self.finish_test(saved))
+        self.revision = published['publishedRevision']
+        self.error(404, self.get)
+        self.error(404, self.submit)
+
     def test_public_board_is_readable_without_authorization_and_projects_only_safe_fields(self):
         empty = self.get()
         self.assertEqual(empty, {'scope': 'shared', 'publishedRevision': self.revision, 'limit': 10, 'entries': []})

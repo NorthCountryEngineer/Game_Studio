@@ -1,5 +1,7 @@
 export type GameRules = { goal: number; timeLimit: number; lives: number; difficulty: number };
 export type GameArcadeOptions = { rotation: boolean; shooting: boolean; splitAsteroids: boolean; scoring: boolean; highScores: boolean };
+export type GamePowerUpType = 'triple-shot' | 'rapid-fire' | 'shield' | 'speed-boost';
+export type GamePowerUps = { spawnInterval: number; duration: number; types: GamePowerUpType[] };
 export type GameLevel = {
   id: string;
   title: string;
@@ -9,7 +11,7 @@ export type GameLevel = {
   seed: number;
 };
 export type ArcadeGameSpec = {
-  version: 1 | 2 | 4;
+  version: 1 | 2 | 4 | 5;
   title: string;
   description: string;
   genre: 'collect' | 'dodge' | 'platformer';
@@ -22,10 +24,11 @@ export type ArcadeGameSpec = {
   progression?: string;
   levels?: GameLevel[];
   multiplayer?: { mode: 'cooperative'; maxPlayers: 2 };
+  powerUps?: GamePowerUps;
 };
 
-export type CooperativeGameSpec = ArcadeGameSpec & { version: 4; progression: string; levels: GameLevel[]; multiplayer: { mode: 'cooperative'; maxPlayers: 2 } };
-export function isCooperativeGameSpec(spec: GameSpec): spec is CooperativeGameSpec { return spec.version === 4; }
+export type CooperativeGameSpec = ArcadeGameSpec & { version: 4 | 5; progression: string; levels: GameLevel[]; multiplayer: { mode: 'cooperative'; maxPlayers: 2 } };
+export function isCooperativeGameSpec(spec: GameSpec): spec is CooperativeGameSpec { return spec.version === 4 || spec.version === 5 && !!spec.multiplayer; }
 
 export type WordGenre = 'crossword' | 'word-search' | 'mad-libs';
 type WordBase = { version: 3; title: string; description: string; instructions: string };

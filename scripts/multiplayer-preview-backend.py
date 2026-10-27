@@ -59,7 +59,8 @@ relay._games = games
 # the local URL; the frontend likewise explicitly allows WS only in preview.
 relay.socket_url = lambda: socket_url
 spec = games.design_game('Asteroids with one level. Collect 3 stars, 180 seconds, 5 lives, easy difficulty.')['spec']
-spec.update(version=4, multiplayer={'mode': 'cooperative', 'maxPlayers': 2}, title='Two-player synthetic flight')
+spec.update(version=5, multiplayer={'mode': 'cooperative', 'maxPlayers': 2}, title='Two-player synthetic prize flight',
+    powerUps={'spawnInterval': 5, 'duration': 10, 'types': ['triple-shot', 'rapid-fire', 'shield', 'speed-boost']})
 spec['arcade']['rotation'] = False
 spec['arcade']['highScores'] = False
 spec = games.validate_spec(spec)
