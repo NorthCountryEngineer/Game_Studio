@@ -13,6 +13,8 @@ The default is a pickup every 12 seconds with all four prize types enabled and t
 
 The normal shoot control continues to fire while held. The rapid-fire prize makes that stream faster. A shield is consumed only when a collision would otherwise remove a life; normal hit protection still applies. Collecting a prize does not itself award collection progress, arcade points or assignment credit. Existing collection goals and asteroid point values remain unchanged.
 
+In the optional version 6 **Endless survival** mode, effects last until a damaging impact instead of using the temporary-effect timer. Every damaging impact clears all boosts; a shield absorbs one hit and clears the other boosts too. The duration control is hidden while endless survival is enabled, retaining its saved value for finite play. Finite version 6 games retain the timed behavior described above. See [survival, asteroid stages and enemy ships](ASTEROID_CHALLENGES.md).
+
 Prizes work in solo and optional two-player cooperative games. In cooperative play, only the player collecting a pickup receives its effect. The shared world spawns each pickup once, projectiles retain their owner, and friendly fire remains disabled. Pause freezes the timers. New levels and restarts clear pickups, timed effects and shields. A player who has run out of lives cannot collect a prize to revive themselves.
 
 ## Compatibility and authoring
@@ -30,6 +32,8 @@ Prize-enabled games use GameSpec version 5, retaining the saved level plan, prog
 ```
 
 Version 5 can optionally include the existing two-player cooperative configuration. Turning cooperation off keeps the prizes and saved level plan. Turning prizes off returns to the ordinary solo or cooperative arcade format. Turning shooting off or switching away from the supported game style removes prizes; prize controls are available only while shooting is enabled. These changes require a fresh saved playtest and publication. Existing versions 1–4 are not rewritten or automatically given pickups. Unrelated text edits, layout planning and model proposals must preserve the creator's saved prize/cooperation choices.
+
+Version 6 may optionally include prizes. Turning its prizes off retains version 6, the advanced Asteroids settings, cooperation choice, and the complete authored level plan. Its endless review uses only the first saved level; turning endless survival off restores ordinary campaign review and saved timing.
 
 Version 5 solo games keep the normal solo completion report, bounded high scores and host-owned provisional point calculations. The full saved campaign supplies the scoring denominator. Cooperative editions remain outside the single-player scoreboard, completion and assignment-credit contracts. NCAcademy's current pinned importer continues to receive only its supported versions 1–2; it does not silently import a newer runtime format.
 

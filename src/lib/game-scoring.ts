@@ -1,6 +1,7 @@
 import { validateGameSpec } from './game-design';
 import { validateGameResult } from './game-runtime';
 import type { Game } from './game-types';
+import { isCooperativeGameSpec, isEndlessAsteroids } from './game-types';
 
 /** Host assignment rules, independent of game definitions and casual leaderboards. */
 export type ScoringPolicy = {
@@ -55,14 +56,16 @@ export function validateScoringPolicy(value: unknown): ScoringPolicy {
 /** A validated full definition supplies the denominator, never client-reported maxima. */
 export function gameObjectiveUnits(value: unknown): number {
   const spec = validateGameSpec(value);
-  if (spec.version === 4 || spec.version === 5 && spec.multiplayer) throw new Error('Cooperative-enabled editions require a future per-player scoring contract.');
+  if (isCooperativeGameSpec(spec)) throw new Error('Cooperative-enabled editions require a future per-player scoring contract.');
+  if (isEndlessAsteroids(spec)) throw new Error('Endless games have no finite objective total. Choose an explicit arcade target.');
   return spec.version === 3 ? spec.genre === 'crossword' ? spec.puzzle.entries.length : spec.genre === 'word-search' ? spec.puzzle.words.length : spec.puzzle.blanks.length : spec.version !== 1 ? spec.levels!.reduce((total, level) => total + level.rules.goal, 0) : spec.rules.goal;
 }
 
 /** Deterministic half-up arithmetic. This is a provisional observation, not a grade. */
 export function calculateProvisionalPoints(specValue: unknown, resultValue: unknown, policyValue: unknown): ProvisionalPoints {
   const spec = validateGameSpec(specValue), policy = validateScoringPolicy(policyValue);
-  if (spec.version === 4 || spec.version === 5 && spec.multiplayer) throw new Error('Cooperative-enabled editions do not award assignment points.');
+  if (isCooperativeGameSpec(spec)) throw new Error('Cooperative-enabled editions do not award assignment points.');
+  if (isEndlessAsteroids(spec) && policy.method !== 'arcade_target') throw new Error('Endless games require an explicit arcade target; finite completion and proportional scoring do not apply.');
   object(resultValue, ['outcome', 'elapsed', 'score', 'reviewedLevelIds', ...(spec.version !== 3 && spec.arcade?.scoring ? ['points'] : [])]);
   const result = validateGameResult(resultValue, spec);
   if (!result || result.outcome === 'level-complete') throw new Error('Finish one valid complete game attempt before calculating points.');

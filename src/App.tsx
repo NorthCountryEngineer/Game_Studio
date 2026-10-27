@@ -38,7 +38,7 @@ function EmbeddedGame({id,config}:{id:string;config:IntegrationConfig}) {
   if (!allowed) return <main className="service-main"><h1>Open this game from a connected application.</h1><p>The host must be approved for this deployment.</p><a href={`/games/${encodeURIComponent(id)}`} target="_blank" rel="noopener noreferrer">Open the standalone player ↗</a></main>;
   const report = (event:PublishedGameEvent) => {
     if(event.result.outcome === 'level-complete') return;
-    const clean = parseGameStudioEvent({...event,source:'nce-game-studio',version:1,channel});
+    const clean = parseGameStudioEvent({...event,source:'nce-game-studio',version:event.specVersion === 6 ? 2 : 1,channel});
     if (clean) window.parent.postMessage(clean, selected!.origin);
   };
   return <GamePage id={id} embedded signed={false} playerSigned={false} adminMode={false} navigate={async path => { window.open(path,'_blank','noopener,noreferrer'); }} onGameEvent={report}/>;

@@ -9,7 +9,7 @@ Exports:
 - `createEmbedURL(studioOrigin, gameId, {hostId?, channel?})`: public player URL.
 - `mountGame(container, {studioOrigin, hostId, gameId, title?, onEvent?})`: create the frame and validated event listener; returns `{iframe, destroy()}`.
 - `listPublishedGames(apiOrigin, {signal?})`: paginated public catalog.
-- `parseGameStudioEvent(value)`: strict version 1 event validation.
+- `parseGameStudioEvent(value)`: strict validation of version 1 events and the explicit version 2 completion envelope for advanced Asteroids (game format 6). Version 2 includes `specVersion: 6` and `mode: 'endless' | 'levels'`; endless runs report a loss when lives run out. Older hosts can keep playing embeds while ignoring unfamiliar completion events. Update the SDK before consuming these new observations.
 - `validateScoringPolicy(value)`: strict normalized version 1 host assignment rules.
 - `gameObjectiveUnits(spec)` and `calculateProvisionalPoints(spec, result, policy)`: full-game objective totals and deterministic provisional assignment points.
 - `selectScoringAttempt([{ordinal, earned_points}], policy)`: first/latest/best selection using host-issued ordinals.

@@ -47,16 +47,22 @@ export function readGameSelection(locationURL: string, expectedStudioOrigin: str
   return {gameId,publishedRevision:Number(revision)};
 }
 export type CompletionResult = { outcome: 'won' | 'lost'; elapsed: number; score: number; points?: number; reviewedLevelIds: string[] };
-export type GameStudioEvent = { version: 1; source: 'nce-game-studio'; channel: string; type: 'ready' | 'completed'; gameId: string; publishedRevision?: number; result?: CompletionResult };
+type GameStudioEventBase = { source: 'nce-game-studio'; channel: string; gameId: string; publishedRevision?: number; result?: CompletionResult };
+export type GameStudioEvent = GameStudioEventBase & ({ version: 1; type: 'ready' | 'completed' } | { version: 2; type: 'completed'; specVersion: 6; mode: 'endless' | 'levels' });
 export function parseGameStudioEvent(value: unknown): GameStudioEvent | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return;
   const v = value as Record<string, unknown>;
-  if (Object.keys(v).some(k => !['version', 'source', 'channel', 'type', 'gameId', 'publishedRevision', 'result'].includes(k)) || v.version !== 1 || v.source !== 'nce-game-studio' || typeof v.channel !== 'string' || !channelId.test(v.channel) || typeof v.gameId !== 'string' || !uuid.test(v.gameId) || !['ready', 'completed'].includes(String(v.type))) return;
+  const advanced = v.version === 2 && v.type === 'completed' && v.specVersion === 6 && typeof v.mode === 'string' && ['endless', 'levels'].includes(v.mode);
+  const fields = ['version', 'source', 'channel', 'type', 'gameId', 'publishedRevision', 'result', ...(advanced ? ['specVersion', 'mode'] : [])];
+  if (Object.keys(v).some(k => !fields.includes(k)) || v.version !== 1 && !advanced || v.source !== 'nce-game-studio' || typeof v.channel !== 'string' || !channelId.test(v.channel) || typeof v.gameId !== 'string' || !uuid.test(v.gameId) || typeof v.type !== 'string' || !['ready', 'completed'].includes(v.type)) return;
   if (v.type === 'ready' && (v.result !== undefined || v.publishedRevision !== undefined)) return;
   if (v.type === 'completed') {
     if (!Number.isSafeInteger(v.publishedRevision) || Number(v.publishedRevision) < 1 || !v.result || typeof v.result !== 'object' || Array.isArray(v.result)) return;
     const r = v.result as Record<string, unknown>;
-    if (Object.keys(r).some(k => !['outcome', 'elapsed', 'score', 'points', 'reviewedLevelIds'].includes(k)) || !['won', 'lost'].includes(String(r.outcome)) || typeof r.elapsed !== 'number' || !Number.isFinite(r.elapsed) || r.elapsed < 0 || r.elapsed > 86400 || !Number.isSafeInteger(r.score) || Number(r.score) < 0 || Number(r.score) > 320 || (r.points !== undefined && (!Number.isSafeInteger(r.points) || Number(r.points) < 0 || Number(r.points) > 1000000)) || !Array.isArray(r.reviewedLevelIds) || r.reviewedLevelIds.length > 8 || r.reviewedLevelIds.some(x => typeof x !== 'string' || !/^level-[1-8]$/.test(x)) || new Set(r.reviewedLevelIds).size !== r.reviewedLevelIds.length) return;
+    if (Object.keys(r).some(k => !['outcome', 'elapsed', 'score', 'points', 'reviewedLevelIds'].includes(k)) || typeof r.outcome !== 'string' || !['won', 'lost'].includes(r.outcome) || typeof r.elapsed !== 'number' || !Number.isFinite(r.elapsed) || r.elapsed < 0 || r.elapsed > (advanced ? 2_147_483_647 : 86400) || !Number.isSafeInteger(r.score) || Number(r.score) < 0 || Number(r.score) > (advanced ? 2_147_483_647 : 320) || (r.points !== undefined && (!Number.isSafeInteger(r.points) || Number(r.points) < 0 || Number(r.points) > (advanced ? 2_147_483_647 : 1000000))) || !Array.isArray(r.reviewedLevelIds) || r.reviewedLevelIds.length > 8 || r.reviewedLevelIds.some(x => typeof x !== 'string' || !/^level-[1-8]$/.test(x)) || new Set(r.reviewedLevelIds).size !== r.reviewedLevelIds.length) return;
+    // This envelope has no definition. The engine validates the actual first
+    // authored ID; reordering levels can legitimately make it level-2..8.
+    if (advanced && v.mode === 'endless' && (r.outcome !== 'lost' || r.reviewedLevelIds.length !== 1)) return;
   }
   return JSON.parse(JSON.stringify(v)) as GameStudioEvent;
 }

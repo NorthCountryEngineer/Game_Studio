@@ -2,6 +2,8 @@ export type GameRules = { goal: number; timeLimit: number; lives: number; diffic
 export type GameArcadeOptions = { rotation: boolean; shooting: boolean; splitAsteroids: boolean; scoring: boolean; highScores: boolean };
 export type GamePowerUpType = 'triple-shot' | 'rapid-fire' | 'shield' | 'speed-boost';
 export type GamePowerUps = { spawnInterval: number; duration: number; types: GamePowerUpType[] };
+export type GameAsteroidEnemies = { enabled: boolean; difficulty: 'easy' | 'medium' | 'hard'; hitPoints: number; spawnInterval: number; maxShips: number };
+export type GameAsteroidSettings = { endless: boolean; difficultyInterval: number; sizes: 2 | 3; enemies: GameAsteroidEnemies };
 export type GameLevel = {
   id: string;
   title: string;
@@ -11,7 +13,7 @@ export type GameLevel = {
   seed: number;
 };
 export type ArcadeGameSpec = {
-  version: 1 | 2 | 4 | 5;
+  version: 1 | 2 | 4 | 5 | 6;
   title: string;
   description: string;
   genre: 'collect' | 'dodge' | 'platformer';
@@ -25,10 +27,11 @@ export type ArcadeGameSpec = {
   levels?: GameLevel[];
   multiplayer?: { mode: 'cooperative'; maxPlayers: 2 };
   powerUps?: GamePowerUps;
+  asteroids?: GameAsteroidSettings;
 };
 
-export type CooperativeGameSpec = ArcadeGameSpec & { version: 4 | 5; progression: string; levels: GameLevel[]; multiplayer: { mode: 'cooperative'; maxPlayers: 2 } };
-export function isCooperativeGameSpec(spec: GameSpec): spec is CooperativeGameSpec { return spec.version === 4 || spec.version === 5 && !!spec.multiplayer; }
+export type CooperativeGameSpec = ArcadeGameSpec & { version: 4 | 5 | 6; progression: string; levels: GameLevel[]; multiplayer: { mode: 'cooperative'; maxPlayers: 2 } };
+export function isCooperativeGameSpec(spec: GameSpec): spec is CooperativeGameSpec { return spec.version === 4 || (spec.version === 5 || spec.version === 6) && !!spec.multiplayer; }
 
 export type WordGenre = 'crossword' | 'word-search' | 'mad-libs';
 type WordBase = { version: 3; title: string; description: string; instructions: string };
@@ -40,7 +43,8 @@ export type MadLibsSpec = WordBase & { genre: 'mad-libs'; puzzle: { template: st
 export type WordGameSpec = CrosswordSpec | WordSearchSpec | MadLibsSpec;
 export type GameSpec = ArcadeGameSpec | WordGameSpec;
 export function isWordGameSpec(spec: GameSpec): spec is WordGameSpec { return spec.version === 3; }
-export function gameReviewLevelIds(spec: GameSpec): string[] { return spec.version === 3 || spec.version === 1 ? ['level-1'] : (spec.levels || []).map(level => level.id); }
+export function isEndlessAsteroids(spec: GameSpec): boolean { return spec.version === 6 && !!spec.asteroids?.endless; }
+export function gameReviewLevelIds(spec: GameSpec): string[] { return spec.version === 3 || spec.version === 1 ? ['level-1'] : (isEndlessAsteroids(spec) ? (spec.levels || []).slice(0, 1) : spec.levels || []).map(level => level.id); }
 
 export type GameMessage = { id: string; role: 'user' | 'assistant'; text: string };
 export type Game = {

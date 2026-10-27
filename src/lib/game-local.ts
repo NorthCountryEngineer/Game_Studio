@@ -1,5 +1,5 @@
-import { designGame, getGameLevels, validateGameSpec } from './game-design';
-import type { Game, GameConfig, GameSettings, GameSpec } from './game-types';
+import { designGame, validateGameSpec } from './game-design';
+import { gameReviewLevelIds, type Game, type GameConfig, type GameSettings, type GameSpec } from './game-types';
 
 type StoragePort = Pick<Storage, 'getItem' | 'setItem'>;
 type Receipt = { id: string; message: string; revision: number };
@@ -87,7 +87,7 @@ export class LocalGameLibrary {
     const state = this.read(), game = this.draft(state, id, revision);
     validateGameSpec(game.spec);
     if (game.spec.version !== 1) {
-      const ids = game.spec.version === 3 ? ['level-1'] : getGameLevels(game.spec).map(level => level.id);
+      const ids = gameReviewLevelIds(game.spec);
       if (!Array.isArray(reviewedLevelIds) || reviewedLevelIds.length !== ids.length || new Set(reviewedLevelIds).size !== ids.length || reviewedLevelIds.some(id => !ids.includes(id))) throw new Error('Complete and review every level of this saved version before marking the playtest complete.');
     }
     game.testedRevision = game.revision + 1; return this.update(state, game);
