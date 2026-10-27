@@ -31,7 +31,7 @@ async function startOwned() {
   while (Date.now() < deadline && server.exitCode === null && server.signalCode === null) {
     try {
       const [health, fixture] = await Promise.all([fetch(`${api}/health`, { signal: AbortSignal.timeout(500) }), fetch(`${origin}/__multiplayer-fixture.json`, { signal: AbortSignal.timeout(500) })]);
-      if (health.ok && fixture.ok && (await health.json()).mode === 'synthetic-preview' && (await fixture.json()).spec.version === 5) return;
+      if (health.ok && fixture.ok && (await health.json()).mode === 'synthetic-preview' && (await fixture.json()).spec.version === 6) return;
     } catch { /* Local startup may need a brief retry. */ }
     await new Promise(accept => setTimeout(accept, 100));
   }
@@ -42,7 +42,8 @@ async function check() {
   
   const fixture = await (await fetch(`${origin}/__multiplayer-fixture.json`, { signal: AbortSignal.timeout(3000) })).json();
   const binding = await createPublicationBinding(fixture);
-  async function request(path, method, body, requestOrigin = origin) { return fetch(`${api}${path}`, { method, headers: { Origin: requestOrigin, 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(3000) }); }
+  async function request(path, method, body, requestOrigin = origin) { return fetch(`${api}${path}`, { method, headers: { Origin: requestOrigin, 'Content-Type': 'application/json' }, ...(method === 'GET' ? {} : { body: JSON.stringify(body) }), signal: AbortSignal.timeout(3000) }); }
+  async function lobby() { const response = await request('/multiplayer/lobby', 'GET'); assert.equal(response.status, 200); const value = await response.json(); assert.deepEqual(Object.keys(value), ['rooms']); assert.ok(Array.isArray(value.rooms) && value.rooms.length <= 20); return value.rooms; }
   const createdResponse = await request('/multiplayer/rooms', 'POST', { gameId: fixture.id, publishedRevision: fixture.publishedRevision }); assert.equal(createdResponse.status, 200);
   const created = await createdResponse.json();
   const joining = { inviteToken: created.inviteToken, gameId: binding.game_id, publishedRevision: binding.published_revision, specSha256: binding.spec_sha256 };
@@ -50,19 +51,22 @@ async function check() {
   assert.equal((await request(`/multiplayer/rooms/${created.roomId}/join`, 'POST', joining)).status, 403);
   assert.equal((await request('/multiplayer/rooms', 'POST', { gameId: fixture.id, publishedRevision: fixture.publishedRevision }, 'https://unapproved.example.test')).status, 403);
   const sockets = [];
-  function connect(token) {
-    const socket = new WebSocket(created.socketUrl, { origin }); sockets.push(socket); const messages = [], waits = [];
+  function connect(token, room = created, renewable = false) {
+    const socket = new WebSocket(room.socketUrl, { origin }); sockets.push(socket); const messages = [], waits = [];
     const receive = value => { messages.push(value); for (const wait of [...waits]) if (wait.predicate(value)) { clearTimeout(wait.timeout); waits.splice(waits.indexOf(wait), 1); wait.resolve(value); } };
     socket.on('error', () => {});
     socket.on('message', raw => receive(JSON.parse(raw.toString())));
-    socket.on('open', () => socket.send(JSON.stringify({ type: 'join', roomId: created.roomId, token })));
+    socket.on('open', () => socket.send(JSON.stringify({ type: 'join', roomId: room.roomId, token, ...(renewable ? { leaseVersion: 1 } : {}) })));
     const until = predicate => { const existing = messages.find(predicate); if (existing) return Promise.resolve(existing); return new Promise((resolve, reject) => { const wait = { predicate, resolve, timeout: setTimeout(() => reject(new Error('Timed out waiting for the local relay.')), 5000) }; waits.push(wait); }); };
-    return { socket, until, clear: () => { messages.length = 0; }, send: value => socket.send(JSON.stringify(value)) };
+    return { socket, until, observed: () => [...messages], clear: () => { messages.length = 0; }, send: value => socket.send(JSON.stringify(value)) };
   }
   try {
     const host = connect(created.hostToken), second = connect(guest.guestToken);
-    assert.equal((await host.until(m => m.type === 'ready')).seat, 0); assert.equal((await second.until(m => m.type === 'ready')).seat, 1);
+    const legacyReady = await host.until(m => m.type === 'ready'); assert.equal(legacyReady.seat, 0); assert.equal(legacyReady.expiresAt, created.expiresAt); assert.equal((await second.until(m => m.type === 'ready')).seat, 1);
     await Promise.all([host.until(m => m.type === 'peer' && m.connected), second.until(m => m.type === 'peer' && m.connected)]);
+    host.send({ type: 'ping' }); assert.deepEqual(await host.until(m => m.type === 'pong'), { type: 'pong' });
+    assert.equal(host.observed().some(message => message.type === 'lease'), false, 'old socket admission must not receive an unfamiliar lease frame');
+    assert.equal((await lobby()).some(room => room.roomId === created.roomId), false, 'default private rooms must never be advertised');
     const engine = createCooperativeEngine(), state = engine.create(fixture.spec); state.running = true; state.paused = false;
     host.send({ type: 'state', seq: 1, state: engine.snapshot(state) });
     assert.deepEqual((await second.until(m => m.type === 'state' && m.seq === 1)).state.players, engine.snapshot(state).players);
@@ -73,7 +77,7 @@ async function check() {
     assert.ok(advanced.players[0].x < positions[0]); assert.ok(advanced.players[1].x > positions[1]); assert.equal(advanced.elapsed, 0.05);
     // Place two pickups in this disposable fixture to exercise collection and
     // projectile effects over the real relay without waiting for random drops.
-    assert.equal(fixture.spec.version, 5); assert.ok(state.powerUps);
+    assert.equal(fixture.spec.version, 6); assert.equal(fixture.spec.asteroids.endless, true); assert.ok(state.powerUps);
     state.powerUps.pickups.push({ id: state.nextId++, type: 'shield', x: state.players[0].x, y: state.players[0].y, ttl: 12 });
     engine.step(state, fixture.spec, [0, 0], 1 / 20);
     host.send({ type: 'state', seq: 3, state: engine.snapshot(state) });
@@ -92,7 +96,55 @@ async function check() {
     host.clear(); second.socket.close(1000); await host.until(m => m.type === 'peer' && !m.connected);
     assert.equal((await request(`/multiplayer/rooms/${created.roomId}`, 'DELETE', { hostToken: created.hostToken })).status, 200);
     await host.until(m => m.type === 'closed');
-    console.log('PASS: two real WebSockets admitted separate seats, relayed independent input, shared physics, a player-owned shield and three owner-tagged triple-shot projectiles, rejected a third join and unapproved origin, and notified disconnect/room closure. Synthetic in-memory backend only.');
+
+    const publicResponse = await request('/multiplayer/rooms', 'POST', { gameId: fixture.id, publishedRevision: fixture.publishedRevision, visibility: 'public' });
+    assert.equal(publicResponse.status, 200); const publicRoom = await publicResponse.json();
+    assert.equal((await lobby()).some(room => room.roomId === publicRoom.roomId), false, 'a public room needs a live host before listing');
+    const publicHost = connect(publicRoom.hostToken, publicRoom, true); await publicHost.until(m => m.type === 'ready');
+    const listing = (await lobby()).find(room => room.roomId === publicRoom.roomId); assert.ok(listing);
+    assert.deepEqual(Object.keys(listing).sort(), ['expiresAt', 'gameId', 'publishedRevision', 'roomId', 'specSha256', 'title']);
+    assert.equal(listing.title, fixture.spec.title); assert.equal(listing.specSha256, binding.spec_sha256);
+    const listedJSON = JSON.stringify(listing); for (const capability of [publicRoom.hostToken, publicRoom.inviteToken, created.hostToken, created.inviteToken, guest.guestToken]) assert.equal(listedJSON.includes(capability), false);
+    assert.equal((await request('/multiplayer/lobby', 'GET', undefined, 'https://unapproved.example.test')).status, 403);
+    const otherResponse = await request('/multiplayer/rooms', 'POST', { gameId: fixture.id, publishedRevision: fixture.publishedRevision, visibility: 'public' }); assert.equal(otherResponse.status, 200); const otherRoom = await otherResponse.json();
+    assert.notEqual(otherRoom.roomId, publicRoom.roomId, 'a second public room must return its own new identity while another host is waiting');
+    assert.equal((await lobby()).some(room => room.roomId === otherRoom.roomId), false);
+    assert.equal((await request(`/multiplayer/rooms/${otherRoom.roomId}`, 'DELETE', { hostToken: otherRoom.hostToken })).status, 200);
+    const publicBinding = { gameId: binding.game_id, publishedRevision: binding.published_revision, specSha256: binding.spec_sha256 };
+    // Both admission paths contend for the same one guest seat.
+    const racing = await Promise.all([
+      request(`/multiplayer/rooms/${publicRoom.roomId}/lobby-join`, 'POST', publicBinding),
+      request(`/multiplayer/rooms/${publicRoom.roomId}/join`, 'POST', { ...publicBinding, inviteToken: publicRoom.inviteToken }),
+    ]);
+    assert.equal(racing.filter(response => response.status === 200).length, 1);
+    assert.ok(racing.filter(response => response.status !== 200).every(response => [403, 409].includes(response.status)));
+    const admittedGuest = await racing.find(response => response.status === 200).json();
+    assert.equal((await lobby()).some(room => room.roomId === publicRoom.roomId), false, 'claiming a guest seat removes its public listing');
+    const publicGuest = connect(admittedGuest.guestToken, publicRoom, true); await publicGuest.until(m => m.type === 'ready');
+    await Promise.all([publicHost.until(m => m.type === 'peer' && m.connected), publicGuest.until(m => m.type === 'peer' && m.connected)]);
+    let virtualNow = 0, lastLease = publicRoom.expiresAt;
+    for (let step = 0; step < 65; step++) {
+      const clockResponse = await request('/__multiplayer-preview/advance-clock', 'POST', { seconds: 30 }); assert.equal(clockResponse.status, 200); virtualNow = (await clockResponse.json()).now;
+      publicHost.clear(); publicGuest.clear(); publicHost.send({ type: 'ping' }); publicGuest.send({ type: 'ping' });
+      await Promise.all([publicHost.until(m => m.type === 'pong'), publicGuest.until(m => m.type === 'pong')]);
+      const [hostLease, guestLease] = await Promise.all([publicHost.until(m => m.type === 'lease' && m.expiresAt > lastLease), publicGuest.until(m => m.type === 'lease' && m.expiresAt > lastLease)]);
+      assert.ok(hostLease.expiresAt > virtualNow && guestLease.expiresAt > virtualNow); lastLease = Math.min(hostLease.expiresAt, guestLease.expiresAt);
+    }
+    assert.ok(virtualNow > publicRoom.expiresAt, 'active relay use must cross the original 30-minute deadline');
+    publicHost.send({ type: 'state', seq: 1, state: engine.snapshot(state) });
+    assert.deepEqual((await publicGuest.until(m => m.type === 'state' && m.seq === 1)).state, engine.snapshot(state), 'the same room still relays its retained world after renewal');
+    assert.equal((await request(`/multiplayer/rooms/${publicRoom.roomId}`, 'DELETE', { hostToken: publicRoom.hostToken })).status, 200);
+    await Promise.all([publicHost.until(m => m.type === 'closed'), publicGuest.until(m => m.type === 'closed')]);
+    assert.equal((await lobby()).some(room => room.roomId === publicRoom.roomId), false);
+
+    const absentResponse = await request('/multiplayer/rooms', 'POST', { gameId: fixture.id, publishedRevision: fixture.publishedRevision, visibility: 'public' }); assert.equal(absentResponse.status, 200); const absentRoom = await absentResponse.json();
+    const absentHost = connect(absentRoom.hostToken, absentRoom, true); await absentHost.until(m => m.type === 'ready');
+    assert.ok((await lobby()).some(room => room.roomId === absentRoom.roomId));
+    await new Promise(resolve => { absentHost.socket.once('close', resolve); absentHost.socket.close(1000); });
+    // The HTTP request queues behind the real socket disconnect in the adapter.
+    assert.equal((await lobby()).some(room => room.roomId === absentRoom.roomId), false, 'a disconnected host cannot advertise an available seat');
+    assert.equal((await request(`/multiplayer/rooms/${absentRoom.roomId}`, 'DELETE', { hostToken: absentRoom.hostToken })).status, 200);
+    console.log('PASS: real WebSockets relayed separate controls, shared physics and player-owned prizes; private rooms stayed hidden, explicit public rooms listed token-free only with a live host, competing joins admitted one guest, filled/disconnected/closed rooms vanished, and heartbeat renewal preserved the same room/world beyond its original 30-minute deadline. Synthetic in-memory backend only.');
   } finally { for (const socket of sockets) socket.close(1000); }
 
 }

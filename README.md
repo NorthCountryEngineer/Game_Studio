@@ -50,7 +50,7 @@ npm run build:preview
 
 These checks use synthetic state and mocked providers. They do not establish live AWS/Core acceptance. Infrastructure scripts default to local planning; live provisioning is a separate operator action that can incur AWS charges. Existing Axolotl games and its deployment remain unchanged by this extraction. Do not point this service at Axolotl's tables or credentials.
 
-Optional two-player cooperative arcade games preserve solo play and give each player their own character, lives, goals and points in one shared world. See [the multiplayer workflow, privacy and additive relay release](docs/MULTIPLAYER.md).
+Optional two-player cooperative arcade games preserve solo play and give each player their own character, lives, goals and points in one shared world. Private invitations remain the default. Hosts can explicitly choose **Find a partner** to offer one open seat in the Games homepage's **Looking for a partner** section. Active rooms renew their leases without a fixed 30-minute room-age cutoff. See [the multiplayer workflow, privacy and additive relay release](docs/MULTIPLAYER.md).
 
 Asteroids games can offer periodic collectible prizes: triple shot, rapid fire, a one-hit shield and a speed boost. Configure the selection and timing, then save, playtest and publish. Prizes work in solo and cooperative play. See [prize effects, configuration and testing](docs/ASTEROID_PRIZES.md).
 

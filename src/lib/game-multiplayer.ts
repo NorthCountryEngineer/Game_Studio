@@ -1,6 +1,7 @@
 /** Anonymous two-seat room capabilities live only in the current page's memory. */
 export type MultiplayerSeat = 0 | 1;
 export type MultiplayerRoom = { gameId: string; publishedRevision: number; specSha256: string; roomId: string; token: string; expiresAt: number; socketUrl: string; seat: MultiplayerSeat };
+export type MultiplayerLobbyRoom = { roomId: string; gameId: string; publishedRevision: number; specSha256: string; title: string; expiresAt: number };
 export type MultiplayerInvitation = { roomId: string; inviteToken: string };
 export type MultiplayerStatus = 'connecting' | 'waiting' | 'connected' | 'reconnecting' | 'ended' | 'expired';
 export type MultiplayerServerMessage =
@@ -9,13 +10,14 @@ export type MultiplayerServerMessage =
   | { type: 'input'; seq: number; mask: number }
   | { type: 'state'; seq: number; state: unknown }
   | { type: 'pong' }
+  | { type: 'lease'; expiresAt: number }
   | { type: 'closed'; reason: 'expired' | 'host-disconnected' | 'publication-changed' | 'closed' }
   | { type: 'error'; message: string };
 const roomPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const tokenPattern = /^[A-Za-z0-9_-]{43}$/;
 const maxMessageBytes = 25600;
 function publication(value: Record<string, unknown>): boolean { return typeof value.gameId === 'string' && roomPattern.test(value.gameId) && Number.isSafeInteger(value.publishedRevision) && Number(value.publishedRevision) >= 1 && Number(value.publishedRevision) <= 1000000000 && typeof value.specSha256 === 'string' && /^[a-f0-9]{64}$/.test(value.specSha256); }
-export function sameMultiplayerPublication(room: MultiplayerRoom, binding: { game_id: string; published_revision: number; spec_sha256: string }): boolean { return room.gameId === binding.game_id && room.publishedRevision === binding.published_revision && room.specSha256 === binding.spec_sha256; }
+export function sameMultiplayerPublication(room: Pick<MultiplayerRoom, 'gameId' | 'publishedRevision' | 'specSha256'>, binding: { game_id: string; published_revision: number; spec_sha256: string }): boolean { return room.gameId === binding.game_id && room.publishedRevision === binding.published_revision && room.specSha256 === binding.spec_sha256; }
 function object(value: unknown): value is Record<string, unknown> { return Boolean(value && typeof value === 'object' && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype); }
 function exact(value: Record<string, unknown>, keys: string[]) { return Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key)); }
 export function validMultiplayerSequence(value: unknown): value is number { return Number.isSafeInteger(value) && Number(value) >= 1 && Number(value) <= 10000000; }
@@ -57,7 +59,18 @@ export function validateMultiplayerSocketURL(value: unknown, localPreview = fals
   if (typeof value !== 'string' || value.length > 2048) return;
   try { const url = new URL(value); if (url.username || url.password || url.search || url.hash || !url.hostname || !url.pathname || (url.protocol !== 'wss:' && !(localPreview && url.protocol === 'ws:' && ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)))) return; return url.href; } catch { return; }
 }
-function expiry(value: unknown, now: number): value is number { return Number.isSafeInteger(value) && Number(value) > Math.floor(now / 1000) && Number(value) <= Math.floor(now / 1000) + 3600; }
+function expiry(value: unknown, now: number): value is number { return Number.isSafeInteger(value) && Number(value) > Math.floor(now / 1000) && Number(value) <= Math.floor(now / 1000) + 1860; }
+/** The public lobby carries publication bindings, never an invitation or seat capability. */
+export function validateMultiplayerLobby(value: unknown, now = Date.now()): MultiplayerLobbyRoom[] | undefined {
+  if (!object(value) || !exact(value, ['rooms']) || !Array.isArray(value.rooms) || value.rooms.length > 20) return;
+  const ids = new Set<string>(), rooms: MultiplayerLobbyRoom[] = [];
+  for (const room of value.rooms) {
+    if (!object(room) || !exact(room, ['roomId', 'gameId', 'publishedRevision', 'specSha256', 'title', 'expiresAt']) || typeof room.roomId !== 'string' || !roomPattern.test(room.roomId) || ids.has(room.roomId) || !publication(room) || !expiry(room.expiresAt, now) || typeof room.title !== 'string' || !room.title || room.title !== room.title.trim() || room.title.length > 80 || /[<>\u0000-\u001f\u007f-\u009f]/u.test(room.title)) return;
+    ids.add(room.roomId);
+    rooms.push({ roomId: room.roomId, gameId: room.gameId as string, publishedRevision: room.publishedRevision as number, specSha256: room.specSha256 as string, title: room.title, expiresAt: room.expiresAt });
+  }
+  return rooms;
+}
 export function validateMultiplayerRoom(value: unknown, seat: MultiplayerSeat, localPreview = false, now = Date.now()): MultiplayerRoom | undefined {
   if (!object(value) || !exact(value, ['roomId', seat === 0 ? 'hostToken' : 'guestToken', ...(seat === 0 ? ['inviteToken'] : []), 'expiresAt', 'socketUrl', 'gameId', 'publishedRevision', 'specSha256']) || typeof value.roomId !== 'string' || !roomPattern.test(value.roomId) || !expiry(value.expiresAt, now) || !publication(value)) return;
   const token = value[seat === 0 ? 'hostToken' : 'guestToken'];
@@ -73,6 +86,7 @@ export function validateMultiplayerServerMessage(raw: unknown, validateState: (s
   if (value.type === 'peer' && exact(value, ['type', 'connected']) && typeof value.connected === 'boolean') return value as MultiplayerServerMessage;
   if (value.type === 'input' && exact(value, ['type', 'seq', 'mask']) && validMultiplayerSequence(value.seq) && validMultiplayerInput(value.mask)) return value as MultiplayerServerMessage;
   if (value.type === 'state' && exact(value, ['type', 'seq', 'state']) && validMultiplayerSequence(value.seq) && validateState(value.state)) return value as MultiplayerServerMessage;
+  if (value.type === 'lease' && exact(value, ['type', 'expiresAt']) && Number.isSafeInteger(value.expiresAt) && Number(value.expiresAt) > 0) return value as MultiplayerServerMessage;
   if (value.type === 'pong' && exact(value, ['type'])) return { type: 'pong' };
   if (value.type === 'closed' && exact(value, ['type', 'reason']) && typeof value.reason === 'string' && ['expired', 'host-disconnected', 'publication-changed', 'closed'].includes(value.reason)) return value as MultiplayerServerMessage;
   if (value.type === 'error' && exact(value, ['type', 'message']) && typeof value.message === 'string' && value.message.length <= 200 && !/[\u0000-\u001f\u007f]/.test(value.message)) return value as MultiplayerServerMessage;
@@ -92,32 +106,45 @@ export function connectMultiplayer(room: MultiplayerRoom, options: {
 }): MultiplayerConnection {
   const now = options.now ?? Date.now;
   let socket: MultiplayerSocket | undefined, stopped = false, ready = false, hasPeer = false, peerDelivered = false, retryStarted = 0, retries = 0, inputSeq = 0, stateSeq = 0, sentInputSeq = 0, sentStateSeq = 0, lastPong = now();
-  let retry: ReturnType<typeof setTimeout> | undefined, handshake: ReturnType<typeof setTimeout> | undefined;
+  let retry: ReturnType<typeof setTimeout> | undefined, handshake: ReturnType<typeof setTimeout> | undefined, expiration: ReturnType<typeof setTimeout> | undefined;
+  let expiresAt = room.expiresAt;
   const factory = options.socketFactory ?? (url => new WebSocket(url));
   function clearHandshake() { if (handshake) clearTimeout(handshake); handshake = undefined; }
   function status(value: MultiplayerStatus, reason?: string) { options.onStatus(value, reason); }
   function peer(connected: boolean) { if (!peerDelivered || hasPeer !== connected) { hasPeer = connected; peerDelivered = true; options.onPeer(connected); } }
   function end(value: 'ended' | 'expired', reason?: string) { if (stopped) return; stopped = true; clearHandshake(); if (retry) clearTimeout(retry); clearInterval(heartbeat); clearTimeout(expiration); ready = false; peer(false); socket?.close(1000); status(value, reason); }
+  function armExpiration() {
+    if (expiration) clearTimeout(expiration);
+    expiration = setTimeout(() => { if (now() >= expiresAt * 1000) end('expired'); else armExpiration(); }, Math.max(0, expiresAt * 1000 - now()));
+  }
+  function renew(value: number): boolean {
+    if (!expiry(value, now())) return false;
+    // Concurrent server callbacks may arrive out of order; a valid older lease
+    // proves liveness but can never shorten or extend the newest accepted lease.
+    if (value > expiresAt) { expiresAt = value; armExpiration(); }
+    return true;
+  }
   function send(value: unknown) { if (ready && !stopped && socket?.readyState === 1) { try { socket.send(JSON.stringify(value)); } catch { socket.close(1000); } } }
   function open() {
     if (stopped) return;
-    if (now() >= room.expiresAt * 1000) { end('expired'); return; }
+    if (now() >= expiresAt * 1000) { end('expired'); return; }
     ready = false; peer(false); status(retryStarted ? 'reconnecting' : 'connecting');
     let current: MultiplayerSocket;
     try { current = factory(room.socketUrl); } catch { schedule(); return; }
     socket = current;
     handshake = setTimeout(() => { if (!stopped && socket === current && !ready) current.close(1000); }, 10000);
-    current.onopen = () => { if (!stopped && socket === current) current.send(JSON.stringify({ type: 'join', roomId: room.roomId, token: room.token })); };
+    current.onopen = () => { if (!stopped && socket === current) current.send(JSON.stringify({ type: 'join', roomId: room.roomId, token: room.token, leaseVersion: 1 })); };
     current.onmessage = event => {
       if (stopped || socket !== current) return;
       const message = validateMultiplayerServerMessage(event.data, options.validateState); if (!message) { end('ended', 'invalid-message'); return; }
       if (message.type === 'ready') {
-        if (ready || message.roomId !== room.roomId || message.seat !== room.seat || message.expiresAt !== room.expiresAt || message.gameId !== room.gameId || message.publishedRevision !== room.publishedRevision || message.specSha256 !== room.specSha256) { end('ended', 'invalid-room'); return; }
+        if (ready || message.roomId !== room.roomId || message.seat !== room.seat || message.gameId !== room.gameId || message.publishedRevision !== room.publishedRevision || message.specSha256 !== room.specSha256 || !renew(message.expiresAt)) { end('ended', 'invalid-room'); return; }
         clearHandshake(); ready = true; retryStarted = 0; retries = 0; lastPong = now(); status('waiting'); return;
       }
       if (!ready) { end('ended', 'invalid-message'); return; }
       if (message.type === 'closed') { end(message.reason === 'expired' ? 'expired' : 'ended', message.reason); return; }
       if (message.type === 'error') { end('ended', 'rejected'); return; }
+      if (message.type === 'lease') { if (!renew(message.expiresAt)) { end('ended', 'invalid-lease'); return; } lastPong = now(); return; }
       if (message.type === 'pong') { lastPong = now(); return; }
       if (message.type === 'peer') { peer(message.connected); status(message.connected ? 'connected' : 'waiting'); return; }
       if (message.type === 'input') { if (room.seat !== 0 || message.seq <= inputSeq) return; inputSeq = message.seq; options.onInput(message.seq, message.mask); }
@@ -134,20 +161,23 @@ export function connectMultiplayer(room: MultiplayerRoom, options: {
     status('reconnecting'); retry = setTimeout(open, Math.min(500 * 2 ** Math.min(retries++, 3), budget - elapsed));
   }
   const heartbeat = setInterval(() => { if (!ready || stopped) return; if (now() - lastPong > 30000) { socket?.close(1000); return; } send({ type: 'ping' }); }, 10000);
-  const expiration = setTimeout(() => end('expired'), Math.max(0, room.expiresAt * 1000 - now()));
-  open();
+  if (!expiry(expiresAt, now())) end('expired');
+  else { armExpiration(); open(); }
   return {
     sendInput(seq, mask) { if (room.seat !== 1 || !hasPeer || !validMultiplayerSequence(seq) || !validMultiplayerInput(mask) || seq <= sentInputSeq) return; sentInputSeq = seq; send({ type: 'input', seq, mask }); },
     sendState(seq, state) { if (room.seat !== 0 || !hasPeer || !validMultiplayerSequence(seq) || seq <= sentStateSeq || !options.validateState(state)) return; const envelope = { type: 'state', seq, state }; if (new TextEncoder().encode(JSON.stringify(envelope)).length > maxMessageBytes) return; sentStateSeq = seq; send(envelope); },
     close() { end('ended', 'closed'); },
   };
 }
-export async function multiplayerRequest(apiBase: string, path: string, method: 'POST' | 'DELETE', body: unknown): Promise<unknown> {
+export async function multiplayerRequest(apiBase: string, path: string, method: 'GET' | 'POST' | 'DELETE', body?: unknown): Promise<unknown> {
   let url: URL; try { url = new URL(apiBase); } catch { throw new Error('Live multiplayer needs the connected Game Studio service.'); }
   if (url.username || url.password || url.search || url.hash || (url.protocol !== 'https:' && !(url.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)))) throw new Error('Live multiplayer needs a secure Game Studio service.');
-  if (!/^\/multiplayer\/rooms(?:\/[0-9a-f-]{36}(?:\/join)?)?$/.test(path)) throw new Error('The game room request is invalid.');
+  if (!['GET', 'POST', 'DELETE'].includes(method)) throw new Error('The game room request is invalid.');
+  const roomPath = /^\/multiplayer\/rooms\/([0-9a-f-]{36})(?:\/(join|lobby-join))?$/.exec(path);
+  const validRoomPath = !!roomPath && roomPattern.test(roomPath[1]);
+  if (method === 'GET' ? path !== '/multiplayer/lobby' || body !== undefined : body === undefined || (method === 'POST' ? path !== '/multiplayer/rooms' && !(validRoomPath && roomPath[2]) : !(validRoomPath && !roomPath[2]))) throw new Error('The game room request is invalid.');
   try {
-    const response = await fetch(`${apiBase.replace(/\/$/, '')}${path}`, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), keepalive: method === 'DELETE', credentials: 'omit', redirect: 'error', referrerPolicy: 'no-referrer', signal: AbortSignal.timeout(12000) });
+    const response = await fetch(`${apiBase.replace(/\/$/, '')}${path}`, { method, ...(method === 'GET' ? { cache: 'no-store' as const } : { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }), keepalive: method === 'DELETE', credentials: 'omit', redirect: 'error', referrerPolicy: 'no-referrer', signal: AbortSignal.timeout(12000) });
     if (!response.ok) {
       if (response.status === 409) throw new Error('This room is full, or the published game has changed. Ask for a new invitation.');
       if ([404, 410, 401, 403].includes(response.status)) throw new Error('This invitation is unavailable or expired. Ask for a new invitation.');
