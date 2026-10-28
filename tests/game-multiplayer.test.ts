@@ -8,7 +8,12 @@ import { defaultWordGameSpec } from '../src/lib/word-game-design.ts';
 const id = '11111111-1111-4111-8111-111111111111', gameId = '22222222-2222-4222-8222-222222222222', token = 'A'.repeat(43), inviteToken = 'B'.repeat(43), now = 1793102400000;
 const publication = { gameId, publishedRevision: 1, specSha256: 'c'.repeat(64) };
 const room: MultiplayerRoom = { ...publication, roomId: id, token, expiresAt: Math.floor(now / 1000) + 1800, socketUrl: 'wss://relay.execute-api.us-east-1.amazonaws.com/production', seat: 0 };
-const strictState = (value: unknown) => Boolean(value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === 1 && (value as { tick?: unknown }).tick === 1);
+const activeState = (paused = false) => ({ tick: 1, running: !paused, paused, outcome: 'playing' });
+const strictState = (value: unknown) => {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || (value as { tick?: unknown }).tick !== 1) return false;
+  const state = value as Record<string, unknown>;
+  return Object.keys(state).length === 1 || (Object.keys(state).length === 4 && typeof state.running === 'boolean' && typeof state.paused === 'boolean' && state.outcome === 'playing');
+};
 class FakeSocket implements MultiplayerSocket {
   readyState = 0;
   onopen: WebSocket['onopen'] = null; onmessage: WebSocket['onmessage'] = null; onclose: WebSocket['onclose'] = null; onerror: WebSocket['onerror'] = null;
@@ -336,25 +341,34 @@ test('a stale reconnect ready preserves the newer accepted lease without admitti
   } finally { c.client.close(); }
 });
 
-test('flow control bounds eight packets in flight and coalesces pending snapshots without trusting bogus ACKs', t => {
+test('flow control starts at one, bounds the host at three and retains superseded capacity without trusting bogus ACKs', t => {
   t.mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'], now });
   const c = connection(0, 45000, () => Date.now());
   try {
     c.ready();
-    for (let seq = 1; seq <= 8; seq++) { c.client.sendState(seq, { tick: 1 }); t.mock.timers.tick(50); }
-    const snapshot = { tick: 1 };
-    for (let seq = 9; seq <= 1000; seq++) c.client.sendState(seq, snapshot);
-    snapshot.tick = 2;
-    assert.equal(c.socket.sent.length, 9, 'the join and eight unacknowledged states are the only writes');
+    c.client.sendState(1, activeState()); advance(t, 50); c.client.sendState(2, activeState());
+    assert.equal(c.socket.sent.length, 2, 'cold admission permits only one data request');
     for (const invalid of [{ type: 'ack', kind: 'input', seq: 1 }, { type: 'ack', kind: 'state', seq: 999 }]) c.socket.message(invalid);
-    assert.equal(c.socket.sent.length, 9, 'an unrelated ACK cannot free a window slot');
-    c.socket.message({ type: 'ack', kind: 'state', seq: 4 });
-    assert.deepEqual(c.socket.sent.at(-1), { type: 'state', seq: 1000, state: { tick: 1 } }, 'only the newest serialized snapshot is sent');
-    c.client.sendState(1001, { tick: 1 }); t.mock.timers.tick(50);
-    c.socket.message({ type: 'ack', kind: 'state', seq: 4 });
-    assert.equal(c.socket.sent.length, 10, 'a duplicate ACK cannot free another slot');
-    c.socket.message({ type: 'ack', kind: 'state', seq: 1000 });
-    assert.deepEqual(c.socket.sent.at(-1), { type: 'state', seq: 1001, state: { tick: 1 } });
+    assert.equal(c.socket.sent.length, 2, 'an unrelated ACK cannot free or grow the window');
+    advance(t, 50); c.socket.message({ type: 'ack', kind: 'state', seq: 1 });
+    advance(t, 50); c.client.sendState(3, activeState());
+    advance(t, 50); c.client.sendState(4, activeState());
+    assert.equal(c.socket.sent.length, 4, 'a timely busy ACK expands to two');
+    advance(t, 50); c.socket.message({ type: 'ack', kind: 'state', seq: 3 });
+    advance(t, 50); c.client.sendState(5, activeState());
+    advance(t, 50);
+    const snapshot = activeState();
+    for (let seq = 6; seq <= 1000; seq++) c.client.sendState(seq, snapshot);
+    snapshot.paused = true;
+    assert.equal(c.socket.sent.length, 6, 'host has three credits: seq2, seq4 and seq5');
+    c.socket.message({ type: 'ack', kind: 'state', seq: 3 });
+    assert.equal(c.socket.sent.length, 6, 'a duplicate cumulative ACK cannot free retained capacity');
+    c.socket.message({ type: 'ack', kind: 'state', seq: 5 });
+    assert.deepEqual(c.socket.sent.at(-1), { type: 'state', seq: 1000, state: activeState() }, 'only the newest immutable snapshot replaces the exact acknowledged credit');
+    advance(t, 50); c.client.sendState(1001, activeState());
+    assert.equal(c.socket.sent.length, 7, 'older superseded requests still occupy both other slots');
+    c.socket.message({ type: 'ack', kind: 'state', seq: 2 });
+    assert.deepEqual(c.socket.sent.at(-1), { type: 'state', seq: 1001, state: activeState() }, 'an older exact ACK releases its retained capacity');
   } finally { c.client.close(); }
 });
 
@@ -378,7 +392,7 @@ test('guest controls retain bounded recent transitions while paced coalescing an
   } finally { c.client.close(); }
 });
 
-test('400 ms ACK latency preserves 10 Hz host snapshots with a bounded window instead of 2.5 Hz stop-and-wait', t => {
+test('400 ms ACK latency sustains 7.5 Hz after slow start with at most three actual host handlers', t => {
   t.mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'], now });
   const host = connection(0, 45000, () => Date.now()), sentAt: number[] = [], outstanding = new Set<number>();
   let maximumOutstanding = 0;
@@ -390,15 +404,129 @@ test('400 ms ACK latency preserves 10 Hz host snapshots with a bounded window in
       maximumOutstanding = Math.max(maximumOutstanding, outstanding.size);
       setTimeout(() => { outstanding.delete(packet.seq as number); host.socket.message({ type: 'ack', kind: 'state', seq: packet.seq }); }, 400);
     };
-    for (let seq = 1; seq <= 20; seq++) { host.client.sendState(seq, { tick: 1 }); advance(t, 100); }
-    assert.deepEqual(sentAt, Array.from({ length: 20 }, (_, index) => index * 100));
-    assert.equal(sentAt.length / 2, 10, 'all 20 snapshots produced over two seconds leave at 10 Hz');
-    assert.ok(maximumOutstanding >= 4 && maximumOutstanding <= 8);
+    for (let seq = 1; seq <= 100; seq++) { host.client.sendState(seq, activeState()); advance(t, 100); }
+    assert.equal(sentAt.filter(time => time >= 2000 && time < 10000).length, 60, '60 snapshots over eight steady seconds, versus 20 with stop-and-wait');
+    assert.equal(maximumOutstanding, 3);
     assert.equal(host.sockets.length, 1); assert.equal(host.statuses.at(-1), 'connected');
   } finally { host.client.close(); }
 });
 
-test('a 60 ms tap behind a 180 ms ACK is preserved even when its newest release overtakes the press', t => {
+test('180 ms warm ACKs preserve 10 Hz snapshots and paused or zero-input traffic cannot grow a window', t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'], now });
+  const host = connection(0, 45000, () => Date.now()), idleHost = connection(0, 45000, () => Date.now()), idleGuest = connection(1, 45000, () => Date.now());
+  const times: number[][] = [[], [], []], outstanding = [0, 0, 0], maximum = [0, 0, 0];
+  try {
+    for (const [index, client] of [host, idleHost, idleGuest].entries()) {
+      client.ready();
+      client.socket.onSend = packet => {
+        if (packet.type !== 'state' && packet.type !== 'input') return;
+        times[index].push(Date.now() - now); maximum[index] = Math.max(maximum[index], ++outstanding[index]);
+        setTimeout(() => { outstanding[index]--; client.socket.message({ type: 'ack', kind: packet.type, seq: packet.seq }); }, index ? 400 : 180);
+      };
+    }
+    for (let seq = 1; seq <= 40; seq++) {
+      host.client.sendState(seq, activeState()); idleHost.client.sendState(seq, activeState(true)); idleGuest.client.sendInput(seq, 0); advance(t, 100);
+    }
+    assert.equal(times[0].filter(time => time >= 1000 && time < 4000).length, 30, 'healthy warm gameplay retains its 10 Hz production rate');
+    assert.deepEqual(maximum.slice(1), [1, 1], 'idle packets receive ACKs and have queued updates, but never expand');
+    assert.deepEqual(times[1], Array.from({ length: 11 }, (_, index) => index * 400));
+    assert.deepEqual(times[2], times[1]);
+  } finally { host.client.close(); idleHost.client.close(); idleGuest.client.close(); }
+});
+
+test('four-second cold ACKs and out-of-order physical handler tails fit the ten-slot account fixture', t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'], now });
+  const clients = [connection(0, 45000, () => Date.now()), connection(1, 45000, () => Date.now())];
+  const active = new Map<string, number>(), sent = [0, 0], maximumData = [0, 0];
+  let maximumAccount = 0, maximumPings = 0, hostTail = false, guestTail = false;
+  // Three independent background/control handlers reserve explicit headroom.
+  const accountCount = () => active.size + 3;
+  try {
+    for (const [seat, client] of clients.entries()) {
+      client.ready();
+      client.socket.onSend = packet => {
+        if (!['state', 'input', 'ping'].includes(String(packet.type))) return;
+        const kind = String(packet.type), isData = kind !== 'ping';
+        const key = `${seat}:${kind}:${packet.seq ?? Date.now()}`;
+        active.set(key, seat);
+        if (isData) sent[seat]++;
+        for (const index of [0, 1]) maximumData[index] = Math.max(maximumData[index], [...active.keys()].filter(value => value.startsWith(`${index}:`) && !value.includes(':ping:')).length);
+        maximumPings = Math.max(maximumPings, [...active.keys()].filter(value => value.includes(':ping:')).length);
+        maximumAccount = Math.max(maximumAccount, accountCount());
+        let duration = isData && sent[seat] === 1 ? 4000 : kind === 'ping' ? 4000 : 180;
+        // A newer ACK arrives while these older Lambda handlers keep running.
+        if (isData && Date.now() - now >= 9000 && !(seat === 0 ? hostTail : guestTail)) {
+          if (seat === 0) hostTail = true; else guestTail = true;
+          duration = 8000;
+        }
+        setTimeout(() => {
+          active.delete(key);
+          client.socket.message(kind === 'ping' ? { type: 'pong' } : { type: 'ack', kind, seq: packet.seq });
+        }, duration);
+      };
+    }
+    for (let seq = 1; seq <= 200; seq++) {
+      clients[0].client.sendState(seq, activeState()); clients[1].client.sendInput(seq, 32);
+      if (seq === 40) {
+        assert.deepEqual(sent, [1, 1], 'each cold seat has one outstanding call before its first ACK');
+        assert.equal(active.size, 2);
+      }
+      if (seq === 42) assert.deepEqual(sent, [2, 2], 'a four-second ACK does not expand either window');
+      advance(t, 100);
+    }
+    assert.deepEqual(maximumData, [3, 2], 'capacity counts actual handlers until completion, including superseded tails');
+    assert.equal(maximumPings, 2, 'both real heartbeat handlers overlap the running game');
+    assert.equal(maximumAccount, 10, 'five data handlers, two pings and three unrelated/control handlers fit the fixture');
+    assert.equal(hostTail && guestTail, true);
+    for (const client of clients) { assert.equal(client.sockets.length, 1); assert.equal(client.statuses.at(-1), 'connected'); }
+  } finally { for (const client of clients) client.client.close(); }
+});
+
+test('lost older ACKs retain capacity until the exact fifteen-second deadline without a false pause', t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'], now });
+  const host = connection(0, 45000, () => Date.now());
+  try {
+    host.ready();
+    host.socket.onSend = packet => { if (packet.type === 'ping') host.socket.message({ type: 'pong' }); };
+    host.client.sendState(1, activeState()); advance(t, 50); host.client.sendState(2, activeState());
+    advance(t, 50); host.socket.message({ type: 'ack', kind: 'state', seq: 1 }); // Seq2 sent at100.
+    advance(t, 50); host.client.sendState(3, activeState());
+    advance(t, 50); host.client.sendState(4, activeState());
+    advance(t, 50); host.socket.message({ type: 'ack', kind: 'state', seq: 3 }); // Seq4 sent at250.
+    advance(t, 50); host.client.sendState(5, activeState());
+    advance(t, 50); host.socket.message({ type: 'ack', kind: 'state', seq: 5 });
+    host.client.sendState(6, activeState()); advance(t, 150); host.socket.message({ type: 'ack', kind: 'state', seq: 6 });
+    advance(t, 14500); host.client.sendState(7, activeState()); advance(t, 99);
+    assert.equal(Date.now() - now, 15099);
+    assert.equal(host.sockets.length, 1, 'newer exact ACKs superseded both missing five-second failure timers');
+    host.client.sendState(8, activeState());
+    assert.equal(host.socket.sent.filter((packet: any) => packet.type === 'state').length, 7, 'two missing older ACKs still retain credits after14999ms');
+    advance(t, 1);
+    assert.deepEqual(host.socket.sent.at(-1), { type: 'state', seq: 8, state: activeState() }, 'the seq2 capacity credit expires at send+15000ms');
+    assert.equal(host.sockets.length, 1); assert.equal(host.statuses.at(-1), 'connected');
+  } finally { host.client.close(); }
+});
+
+test('peer loss and reconnect reset a healthy expanded guest window to one', t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'], now });
+  const guest = connection(1, 45000, () => Date.now());
+  try {
+    guest.ready(); guest.client.sendInput(1, 32); advance(t, 50); guest.client.sendInput(2, 32);
+    guest.socket.message({ type: 'ack', kind: 'input', seq: 1 }); advance(t, 50); guest.client.sendInput(3, 32);
+    assert.equal(guest.socket.sent.length, 4, 'healthy demand expanded the guest window to two');
+    guest.socket.message({ type: 'peer', connected: false }); guest.socket.message({ type: 'peer', connected: true });
+    advance(t, 50); guest.client.sendInput(4, 0); advance(t, 50); guest.client.sendInput(5, 32);
+    assert.equal(guest.socket.sent.length, 5, 'fresh peer has only one data credit');
+    guest.socket.message({ type: 'ack', kind: 'input', seq: 3 });
+    assert.equal(guest.socket.sent.length, 5, 'a cleared old ACK cannot grow or release the fresh window');
+    guest.socket.disconnect(); advance(t, 500);
+    const resumed = guest.sockets[1]; resumed.open(); resumed.message({ type: 'ready', ...publication, roomId: id, seat: 1, expiresAt: room.expiresAt }); resumed.message({ type: 'peer', connected: true });
+    guest.client.sendInput(6, 32); advance(t, 50); guest.client.sendInput(7, 32);
+    assert.equal(resumed.sent.length, 2, 'socket replacement also starts at one');
+  } finally { guest.client.close(); }
+});
+
+test('a 60 ms tap behind a cold 180 ms ACK survives in the coalesced release and cannot replay', t => {
   t.mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'], now });
   const guest = connection(1, 45000, () => Date.now()), host = connection(0, 45000, () => Date.now());
   const sentAt: { seq: number; mask: number; time: number; history: { seq: number; mask: number }[] }[] = [];
@@ -412,12 +540,12 @@ test('a 60 ms tap behind a 180 ms ACK is preserved even when its newest release 
     guest.client.sendInput(1, 0); advance(t, 20);
     guest.client.sendInput(2, 18); advance(t, 60); // Right + jump held from 20 to 80 ms.
     guest.client.sendInput(3, 0);
-    assert.deepEqual(sentAt.map(({ seq, mask, time }) => ({ seq, mask, time })), [
-      { seq: 1, mask: 0, time: 0 }, { seq: 2, mask: 18, time: 40 }, { seq: 3, mask: 0, time: 80 },
-    ]);
-    const release = sentAt[2];
+    assert.deepEqual(sentAt.map(({ seq, mask, time }) => ({ seq, mask, time })), [{ seq: 1, mask: 0, time: 0 }]);
+    advance(t, 100);
+    assert.deepEqual(sentAt.map(({ seq, mask, time }) => ({ seq, mask, time })), [{ seq: 1, mask: 0, time: 0 }, { seq: 3, mask: 0, time: 180 }]);
+    const release = sentAt[1];
     host.socket.message({ type: 'input', seq: release.seq, mask: release.mask, history: release.history });
-    host.socket.message({ type: 'input', seq: sentAt[1].seq, mask: sentAt[1].mask, history: sentAt[1].history });
+    host.socket.message({ type: 'input', seq: 2, mask: 18, history: [{ seq: 1, mask: 0 }, { seq: 2, mask: 18 }] });
     assert.deepEqual(host.inputs, [{ seq: 3, mask: 0 }]);
     assert.deepEqual(host.inputEdges, [18], 'newest packet preserves both press edges once; stale callbacks cannot replay them');
     advance(t, 200);
@@ -447,7 +575,7 @@ test('bursty queues and out-of-order ACKs respect state/input rates, byte bounds
       setTimeout(() => client.socket.message({ type: 'ack', kind, seq: packet.seq }), Number(packet.seq) % 2 ? 160 : 70);
     };
     for (let tick = 0; tick < 300; tick++) {
-      for (let burst = 0; burst < 10; burst++) { const seq = tick * 10 + burst + 1; host.client.sendState(seq, { tick: 1 }); guest.client.sendInput(seq, seq % 2 ? 63 : 0); }
+      for (let burst = 0; burst < 10; burst++) { const seq = tick * 10 + burst + 1; host.client.sendState(seq, activeState()); guest.client.sendInput(seq, seq % 2 ? 63 : 0); }
       advance(t, 10);
     }
     for (const [times, spacing, maximum] of [[stateTimes, 50, 20], [inputTimes, 40, 25]] as const) {
