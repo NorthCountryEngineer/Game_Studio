@@ -673,6 +673,23 @@ test('busy retries use fresh wire sequences so delayed duplicate busy and ACK ca
   } finally { host.client.close(); }
 });
 
+test('a shorter later busy cannot shorten another valid flight backoff and disconnect clears it', t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'], now });
+  const host = connection(0, 45000, () => Date.now());
+  try {
+    host.ready(); host.client.sendState(1, activeState()); advance(t, 50); host.client.sendState(2, activeState());
+    host.socket.message({ type: 'ack', kind: 'state', seq: 1 }); advance(t, 50); host.client.sendState(3, activeState());
+    host.socket.message({ type: 'busy', kind: 'state', seq: 2, retryAfterMs: 1000 });
+    advance(t, 20); host.socket.message({ type: 'busy', kind: 'state', seq: 3, retryAfterMs: 50 });
+    advance(t, 979); assert.equal(host.socket.sent.length, 4);
+    advance(t, 1); assert.deepEqual(host.socket.sent.at(-1), { type: 'state', seq: 4, state: activeState() });
+    host.socket.message({ type: 'busy', kind: 'state', seq: 4, retryAfterMs: 1000 });
+    host.socket.disconnect(); advance(t, 500);
+    const resumed = host.sockets[1]; resumed.open(); resumed.message({ type: 'ready', ...publication, roomId: id, seat: 0, expiresAt: room.expiresAt }); resumed.message({ type: 'peer', connected: true });
+    assert.deepEqual(resumed.sent.at(-1), { type: 'state', seq: 5, state: activeState() }, 'fresh socket admission clears the old backoff timer');
+  } finally { host.client.close(); }
+});
+
 test('fresh input retry preserves bounded press history and future caller release without replaying the edge', t => {
   t.mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'], now });
   const guest = connection(1, 45000, () => Date.now()), host = connection(0, 45000, () => Date.now());

@@ -138,7 +138,7 @@ export function connectMultiplayer(room: MultiplayerRoom, options: {
   type Flight = { packet: Data; sentAt: number; timeout?: ReturnType<typeof setTimeout>; expiry?: ReturnType<typeof setTimeout> };
   let socket: MultiplayerSocket | undefined, stopped = false, ready = false, hasPeer = false, peerDelivered = false, retryStarted: number | undefined, healthySince: number | undefined, retries = 0, inputSeq = 0, inputMask = 0, stateSeq = 0, sentInputSeq = 0, sentStateSeq = 0, wireInputSeq = 0, wireStateSeq = 0, lastPong = now(), pingPending = false;
   let retry: ReturnType<typeof setTimeout> | undefined, handshake: ReturnType<typeof setTimeout> | undefined, expiration: ReturnType<typeof setTimeout> | undefined, pacing: ReturnType<typeof setTimeout> | undefined, recovery: ReturnType<typeof setTimeout> | undefined, backoff: ReturnType<typeof setTimeout> | undefined;
-  let latest: Data | undefined, pending = false, window = 1, capacityBlocked = false, inputActiveAt: number | undefined;
+  let latest: Data | undefined, pending = false, window = 1, capacityBlocked = false, inputActiveAt: number | undefined, backoffUntil = 0;
   const maximumWindow = room.seat === 0 ? 3 : 2;
   const flights = new Map<number, Flight>();
   const history: MultiplayerInputSample[] = [];
@@ -146,7 +146,7 @@ export function connectMultiplayer(room: MultiplayerRoom, options: {
   const factory = options.socketFactory ?? (url => new WebSocket(url));
   function clearHandshake() { if (handshake) clearTimeout(handshake); handshake = undefined; }
   function clearFlight(flight: Flight) { clearTimeout(flight.timeout); clearTimeout(flight.expiry); }
-  function clearFlights(resetPacing = true) { for (const flight of flights.values()) clearFlight(flight); flights.clear(); window = 1; capacityBlocked = false; inputActiveAt = undefined; clearTimeout(backoff); backoff = undefined; if (resetPacing) { if (pacing) clearTimeout(pacing); pacing = undefined; } }
+  function clearFlights(resetPacing = true) { for (const flight of flights.values()) clearFlight(flight); flights.clear(); window = 1; capacityBlocked = false; inputActiveAt = undefined; clearTimeout(backoff); backoff = undefined; backoffUntil = 0; if (resetPacing) { if (pacing) clearTimeout(pacing); pacing = undefined; } }
   function status(value: MultiplayerStatus, reason?: string) { options.onStatus(value, reason); }
   function peer(connected: boolean) {
     if (!peerDelivered || hasPeer !== connected) {
@@ -268,7 +268,8 @@ export function connectMultiplayer(room: MultiplayerRoom, options: {
         if (flight?.packet.kind !== message.kind) return;
         clearFlight(flight); flights.delete(message.seq); window = 1; capacityBlocked = false;
         if ((!latest || latest.seq <= message.seq) && ![...flights.values()].some(value => value.packet.kind === message.kind && value.packet.seq > message.seq)) { const packet = retryPacket(flight.packet); if (!packet) return; latest = packet; pending = true; }
-        clearTimeout(backoff); backoff = setTimeout(() => { backoff = undefined; if (socket === current) flush(); }, message.retryAfterMs);
+        backoffUntil = Math.max(backoffUntil, now() + message.retryAfterMs);
+        clearTimeout(backoff); backoff = setTimeout(() => { backoff = undefined; backoffUntil = 0; if (socket === current) flush(); }, Math.max(0, backoffUntil - now()));
         return;
       }
       if (message.type === 'peer') { peer(message.connected); status(message.connected ? 'connected' : 'waiting'); if (message.connected) flush(); return; }
