@@ -69,27 +69,46 @@ async function check() {
     const hostRoom = validateMultiplayerRoom(rawHost, 0, true), guestRoom = validateMultiplayerRoom(rawGuest, 1, true);
     assert.ok(hostRoom && guestRoom);
     const timers = new Set(), clients = [], received = [], controls = [], statuses = [], started = Date.now();
-    let mask = 0, production = 0;
+    const traffic = [0, 1].map(() => ({ sent: [], outstanding: new Set(), maxOutstanding: 0, firstAckScheduled: false, firstAckDelivered: false }));
+    let mask = 0, pressed = 0, production = 0, acknowledgmentDelay = 240;
     const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
-    async function until(predicate) { const deadline = Date.now() + 5000; while (!predicate() && Date.now() < deadline) await pause(5); assert.ok(predicate(), 'delayed real-client rehearsal reached its expected state'); }
+    async function until(predicate, budgetMs = 5000) { const deadline = Date.now() + budgetMs; while (!predicate() && Date.now() < deadline) await pause(5); assert.ok(predicate(), 'delayed real-client rehearsal reached its expected state'); }
     function later(fn, ms) { const timer = setTimeout(() => { timers.delete(timer); fn(); }, ms); timers.add(timer); }
-    function delayedSocket(url) {
+    function delayedSocket(url, seat) {
       const socket = new WebSocket(url, { origin }); sockets.push(socket);
       const view = { get readyState() { return socket.readyState; }, onopen: null, onmessage: null, onclose: null, onerror: null,
-        send(raw) { const message = JSON.parse(raw); if (message.type === 'join') socket.send(raw); else later(() => { if (socket.readyState === 1) socket.send(raw); }, 80); },
+        send(raw) {
+          const message = JSON.parse(raw);
+          if (message.type === 'join') socket.send(raw);
+          else {
+            if (['state', 'input'].includes(message.type)) {
+              const key = `${message.type}:${message.seq}`, stats = traffic[seat];
+              stats.sent.push({ key, at: Date.now() - started }); stats.outstanding.add(key); stats.maxOutstanding = Math.max(stats.maxOutstanding, stats.outstanding.size);
+            }
+            later(() => { if (socket.readyState === 1) socket.send(raw); }, 80);
+          }
+        },
         close(code) { socket.close(code); },
       };
       socket.on('open', () => view.onopen?.({})); socket.on('error', () => view.onerror?.({})); socket.on('close', () => view.onclose?.({}));
-      socket.on('message', raw => { const data = raw.toString(), message = JSON.parse(data); later(() => view.onmessage?.({ data }), message.type === 'ack' ? 480 : 80); });
+      socket.on('message', raw => {
+        const data = raw.toString(), message = JSON.parse(data), stats = traffic[seat];
+        const firstAck = message.type === 'ack' && !stats.firstAckScheduled;
+        if (firstAck) stats.firstAckScheduled = true;
+        later(() => {
+          if (message.type === 'ack') { stats.outstanding.delete(`${message.kind}:${message.seq}`); if (firstAck) stats.firstAckDelivered = true; }
+          view.onmessage?.({ data });
+        }, message.type === 'ack' ? firstAck ? 1200 : acknowledgmentDelay : 80);
+      });
       return view;
     }
     const engine = createCooperativeEngine(), world = engine.create(fixture.spec); world.running = true; world.paused = false;
     // Stable synthetic space keeps this transport measurement independent of collisions.
     world.entities = []; world.nextSnack = world.nextHazard = 1;
     function client(room) { const value = connectMultiplayer(room, { validateState: value => Boolean(validateCooperativeState(value, fixture.spec)),
-      socketFactory: delayedSocket, onStatus: status => statuses.push([room.seat, status]), onPeer: () => {},
-      onInput: (seq, value, pressedMask) => { mask = value; controls.push({ seq, mask: value, pressedMask, at: Date.now() - started }); },
-      onState: (seq, value) => { received.push({ seq, state: value }); },
+      socketFactory: url => delayedSocket(url, room.seat), onStatus: status => statuses.push([room.seat, status]), onPeer: () => {},
+      onInput: (seq, value, pressedMask) => { mask = value; pressed |= pressedMask || 0; controls.push({ seq, mask: value, pressedMask, at: Date.now() - started }); },
+      onState: (seq, value) => { received.push({ seq, state: value, at: Date.now() }); },
     }); clients.push(value); return value; }
     const hostClient = client(hostRoom), guestClient = client(guestRoom);
     let physics, snapshots;
@@ -98,16 +117,47 @@ async function check() {
       guestClient.sendInput(1, 0);
       later(() => guestClient.sendInput(2, 2), 20);
       later(() => guestClient.sendInput(3, 0), 80);
-      physics = setInterval(() => { engine.step(world, fixture.spec, [0, mask], 1 / 60); }, 1000 / 60);
+      const originalPlayer = { x: world.players[1].x, y: world.players[1].y, angle: world.players[1].angle };
+      physics = setInterval(() => {
+        // Keep the network measurement independent of random collisions.
+        world.entities = []; world.nextSnack = world.nextHazard = 1;
+        if (world.advanced) { world.advanced.enemies = []; world.advanced.enemyBullets = []; }
+        engine.step(world, fixture.spec, [0, mask | pressed], 1 / 60); pressed = 0;
+      }, 1000 / 60);
       snapshots = setInterval(() => hostClient.sendState(++production, engine.snapshot(world)), 100);
+      await pause(900);
+      traffic.forEach((stats, seat) => {
+        assert.equal(stats.firstAckDelivered, false, `seat ${seat} still awaits its cold acknowledgment`);
+        assert.equal(stats.sent.length, 1, `seat ${seat} slow-starts with one gameplay request`);
+        assert.equal(stats.maxOutstanding, 1, `seat ${seat} cannot fill a larger window during cold start`);
+      });
+      await until(() => traffic.every(stats => stats.firstAckDelivered));
       await until(() => controls.some(value => value.seq >= 3));
       assert.ok(controls.some(value => value.mask & 2 || value.pressedMask & 2), 'a 60 ms tap survives an outstanding ACK and reaches the real host client');
       assert.equal(controls.at(-1).mask, 0, 'the newest release reaches the host');
-      await pause(1600);
-      assert.ok(received.length >= 12, `delayed ACKs must not collapse the 10 Hz snapshot stream: ${received.length} snapshots`);
+      await until(() => fixture.spec.arcade?.rotation
+        ? Math.abs(Math.atan2(Math.sin(world.players[1].angle - originalPlayer.angle), Math.cos(world.players[1].angle - originalPlayer.angle))) > 0.001
+        : Math.hypot(world.players[1].x - originalPlayer.x, world.players[1].y - originalPlayer.y) > 0.01);
+      await until(() => traffic[0].maxOutstanding === 3); // A healthy 320 ms ACK round trip exercises the full bounded host window.
+      acknowledgmentDelay = 480; // 80 ms outbound + 80 ms return + 400 ms extra ACK delay.
+      const beforeThrust = { x: world.players[1].x, y: world.players[1].y };
+      guestClient.sendInput(4, 4); later(() => guestClient.sendInput(5, 0), 60);
+      await until(() => controls.some(value => value.seq >= 5));
+      assert.ok(controls.some(value => value.seq >= 4 && (value.mask & 4 || value.pressedMask & 4)), 'a queued held-input release preserves its press during the warmed delayed-ACK phase');
+      assert.equal(controls.at(-1).mask, 0, 'the warmed pending input finishes released');
+      await until(() => Math.hypot(world.players[1].x - beforeThrust.x, world.players[1].y - beforeThrust.y) > 0.01);
+      await pause(1000); // Drain the healthy phase before measuring the delayed pipeline.
+      received.length = 0;
+      await until(() => received.length > 0);
+      const measuredAt = received[0].at;
+      await pause(2000);
+      if (received.length < 10) await until(() => received.length >= 10, 400); // Small scheduler tolerance; never wait through stop-and-wait throughput.
+      assert.ok(received.length >= 10, `the bounded warmed window must preserve useful snapshot throughput: ${received.length} snapshots in ${Date.now() - measuredAt} ms`);
       assert.ok(received.every((value, index) => index === 0 || value.seq > received[index - 1].seq));
+      assert.ok(traffic[0].maxOutstanding <= 3, `host gameplay requests stay at or below three: ${traffic[0].maxOutstanding}`);
+      assert.ok(traffic[1].maxOutstanding <= 2, `guest gameplay requests stay at or below two: ${traffic[1].maxOutstanding}`);
       assert.equal(statuses.some(([, status]) => ['ended', 'expired', 'reconnecting'].includes(status)), false, 'supported latency keeps the same room connected');
-      console.log(`PASS: actual connectMultiplayer clients over real loopback WebSockets preserved a 60 ms tap/release and received ${received.length} host snapshots with 80 ms each-way delay and 400 ms additional ACK delay.`);
+      console.log(`PASS: actual connectMultiplayer clients over real loopback WebSockets held cold start to one request per seat, preserved 60 ms taps/releases, bounded host/guest flights to ${traffic[0].maxOutstanding}/${traffic[1].maxOutstanding}, and received ${received.length} host snapshots in ${Date.now() - measuredAt} ms after healthy warm-up with 80 ms each-way delay and 400 ms additional ACK delay.`);
     } finally {
       clearInterval(physics); clearInterval(snapshots); for (const value of clients) value.close(); for (const timer of timers) clearTimeout(timer);
       assert.equal((await request(`/multiplayer/rooms/${rawHost.roomId}`, 'DELETE', { hostToken: rawHost.hostToken })).status, 200);

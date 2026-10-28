@@ -128,16 +128,19 @@ export function connectMultiplayer(room: MultiplayerRoom, options: {
   reconnectWindowMs?: number;
 }): MultiplayerConnection {
   const now = options.now ?? Date.now;
-  type Data = { kind: 'state' | 'input'; seq: number; raw: string };
+  type Data = { kind: 'state' | 'input'; seq: number; raw: string; active: boolean };
+  type Flight = { packet: Data; sentAt: number; timeout?: ReturnType<typeof setTimeout>; expiry?: ReturnType<typeof setTimeout> };
   let socket: MultiplayerSocket | undefined, stopped = false, ready = false, hasPeer = false, peerDelivered = false, retryStarted: number | undefined, healthySince: number | undefined, retries = 0, inputSeq = 0, inputMask = 0, stateSeq = 0, sentInputSeq = 0, sentStateSeq = 0, lastPong = now(), pingPending = false;
   let retry: ReturnType<typeof setTimeout> | undefined, handshake: ReturnType<typeof setTimeout> | undefined, expiration: ReturnType<typeof setTimeout> | undefined, pacing: ReturnType<typeof setTimeout> | undefined, recovery: ReturnType<typeof setTimeout> | undefined;
-  let latest: Data | undefined, pending = false;
-  const flights = new Map<number, { packet: Data; timeout: ReturnType<typeof setTimeout> }>();
+  let latest: Data | undefined, pending = false, window = 1, capacityBlocked = false, inputActiveAt: number | undefined;
+  const maximumWindow = room.seat === 0 ? 3 : 2;
+  const flights = new Map<number, Flight>();
   const history: MultiplayerInputSample[] = [];
   let expiresAt = room.expiresAt;
   const factory = options.socketFactory ?? (url => new WebSocket(url));
   function clearHandshake() { if (handshake) clearTimeout(handshake); handshake = undefined; }
-  function clearFlights(resetPacing = true) { for (const flight of flights.values()) clearTimeout(flight.timeout); flights.clear(); if (resetPacing) { if (pacing) clearTimeout(pacing); pacing = undefined; } }
+  function clearFlight(flight: Flight) { clearTimeout(flight.timeout); clearTimeout(flight.expiry); }
+  function clearFlights(resetPacing = true) { for (const flight of flights.values()) clearFlight(flight); flights.clear(); window = 1; capacityBlocked = false; inputActiveAt = undefined; if (resetPacing) { if (pacing) clearTimeout(pacing); pacing = undefined; } }
   function status(value: MultiplayerStatus, reason?: string) { options.onStatus(value, reason); }
   function peer(connected: boolean) {
     if (!peerDelivered || hasPeer !== connected) {
@@ -171,21 +174,24 @@ export function connectMultiplayer(room: MultiplayerRoom, options: {
   function send(value: unknown) { const current = socket; if (ready && !stopped && current?.readyState === 1) { try { current.send(JSON.stringify(value)); } catch { interrupt(current); } } }
   function flush() {
     const current = socket;
-    if (stopped || !ready || !hasPeer || current?.readyState !== 1 || pacing || flights.size >= 8 || !pending || !latest) return;
+    if (stopped || !ready || !hasPeer || current?.readyState !== 1 || !pending || !latest) return;
+    if (flights.size >= window) { capacityBlocked = true; return; }
+    if (pacing) return;
     const outgoing = latest; pending = false;
-    const timeout = setTimeout(() => { if (socket === current && flights.get(outgoing.seq)?.packet === outgoing) interrupt(current); }, 5000);
-    flights.set(outgoing.seq, { packet: outgoing, timeout });
-    // A bounded window avoids a round-trip stall on every packet. Spacing also
-    // applies to ACK-driven queue flushes, below the relay's existing limits.
+    const flight: Flight = { packet: outgoing, sentAt: now() };
+    flight.timeout = setTimeout(() => { if (socket === current && flights.get(outgoing.seq) === flight) interrupt(current); }, 5000);
+    flights.set(outgoing.seq, flight);
+    // Start conservatively, then pipeline only measured healthy, busy traffic.
+    // ACK-driven queue flushes retain the relay's existing per-seat pacing.
     pacing = setTimeout(() => { pacing = undefined; flush(); }, outgoing.kind === 'state' ? 50 : 40);
     try { current.send(outgoing.raw); } catch { interrupt(current); }
   }
-  function queue(kind: 'state' | 'input', seq: number, value: unknown) {
+  function queue(kind: 'state' | 'input', seq: number, value: unknown, active: boolean) {
     let raw: string; try { raw = JSON.stringify(value); } catch { return; }
     if (new TextEncoder().encode(raw).length > maxMessageBytes) return;
     // Store serialized snapshots, so caller mutations cannot change queued data.
     if (kind === 'input') sentInputSeq = seq; else sentStateSeq = seq;
-    latest = { kind, seq, raw }; pending = true; flush();
+    latest = { kind, seq, raw, active }; pending = true; flush();
   }
   function open() {
     if (stopped) return;
@@ -211,7 +217,21 @@ export function connectMultiplayer(room: MultiplayerRoom, options: {
       if (message.type === 'pong') { lastPong = now(); pingPending = false; healthy(); return; }
       if (message.type === 'ack') {
         const flight = flights.get(message.seq);
-        if (flight?.packet.kind === message.kind) { clearTimeout(flight.timeout); flights.delete(message.seq); healthy(); flush(); }
+        if (flight?.packet.kind === message.kind) {
+          const roundTrip = now() - flight.sentAt;
+          if (capacityBlocked && pending && latest?.active && roundTrip >= 0 && roundTrip <= 500) window = Math.min(maximumWindow, window + 1);
+          capacityBlocked = false; clearFlight(flight); flights.delete(message.seq);
+          for (const [seq, older] of flights) {
+            if (seq >= message.seq || older.packet.kind !== message.kind || !older.timeout) continue;
+            // Newer accepted data proves progress, so an older missing ACK must
+            // not pause play. It does not prove that older Lambda has finished:
+            // retain its capacity credit until its ACK or a 15-second deadline
+            // (the relay's 10-second timeout plus a bounded network allowance).
+            clearTimeout(older.timeout); older.timeout = undefined;
+            older.expiry = setTimeout(() => { if (socket === current && flights.get(seq) === older) { flights.delete(seq); flush(); } }, Math.max(0, older.sentAt + 15000 - now()));
+          }
+          healthy(); flush();
+        }
         return;
       }
       if (message.type === 'peer') { peer(message.connected); status(message.connected ? 'connected' : 'waiting'); if (message.connected) flush(); return; }
@@ -248,9 +268,10 @@ export function connectMultiplayer(room: MultiplayerRoom, options: {
       if (stopped || room.seat !== 1 || !ready || !hasPeer || !validMultiplayerSequence(seq) || !validMultiplayerInput(mask) || seq <= sentInputSeq) return;
       if (!history.length || history[history.length - 1].mask !== mask) { history.push({ seq, mask }); if (history.length > 8) history.shift(); }
       const samples = history[history.length - 1].seq === seq ? history : [...history, { seq, mask }].slice(-8);
-      queue('input', seq, { type: 'input', seq, mask, history: samples });
+      if (mask) inputActiveAt = now();
+      queue('input', seq, { type: 'input', seq, mask, history: samples }, inputActiveAt !== undefined && now() - inputActiveAt <= 500);
     },
-    sendState(seq, state) { if (stopped || room.seat !== 0 || !validMultiplayerSequence(seq) || seq <= sentStateSeq || !options.validateState(state)) return; queue('state', seq, { type: 'state', seq, state }); },
+    sendState(seq, state) { if (stopped || room.seat !== 0 || !validMultiplayerSequence(seq) || seq <= sentStateSeq || !options.validateState(state)) return; queue('state', seq, { type: 'state', seq, state }, object(state) && state.running === true && state.paused === false && state.outcome === 'playing'); },
     close() { end('ended', 'closed'); },
   };
 }
