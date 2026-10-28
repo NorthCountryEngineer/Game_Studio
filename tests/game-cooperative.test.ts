@@ -123,7 +123,7 @@ test('fixed cooperative sandbox serializes tested functions, denies network and 
 function sandboxHarness(seat: 0 | 1) {
   type Element = { textContent: string; disabled: boolean; hidden: boolean; handlers: Record<string, () => void>; addEventListener(name: string, fn: () => void): void; focus(): void; getContext(): unknown };
   const spec = game(), elements = new Map<string, Element>(), messages: { type: string; seq?: number; mask?: number; state?: CooperativeState }[] = [], frames: ((now: number) => void)[] = [], listeners: Record<string, (value: unknown) => void> = {};
-  const getElement = (id: string) => { if (!elements.has(id)) elements.set(id, { textContent: '', disabled: false, hidden: false, handlers: {}, addEventListener(name, fn) { this.handlers[name] = fn; }, focus() {}, getContext: () => new Proxy({}, { get: () => () => {} }) }); return elements.get(id)!; };
+  const getElement = (id: string) => { if (!elements.has(id)) elements.set(id, { textContent: '', disabled: id === 'start' || id === 'pause', hidden: false, handlers: {}, addEventListener(name, fn) { this.handlers[name] = fn; }, focus() {}, getContext: () => new Proxy({}, { get: () => () => {} }) }); return elements.get(id)!; };
   const parent = { postMessage(value: typeof messages[number]) { messages.push(structuredClone(value)); } };
   const document = { hidden: false, getElementById: getElement, querySelectorAll: () => [], addEventListener(name: string, fn: typeof listeners[string]) { listeners[`document:${name}`] = fn; } };
   new Script(`const __name = fn => fn; (${startCooperativeSandbox.toString()})(engine, validate, validateState, '1234567890abcdef');`).runInNewContext({
@@ -187,4 +187,24 @@ test('idle rooms avoid gameplay packet floods while active worlds and held contr
   assert.ok(held.length >= 4 && held.length <= 6, `held refreshes: ${held.length}`);
   guest.send({ type: 'game-coop-peer', connected: false }); guest.send({ type: 'game-coop-peer', connected: true }); guest.tick();
   assert.equal(guest.messages.at(-1)!.mask, 0, 'a reconnect sends fresh released controls');
+});
+
+test('connection and host controls update immediately even before the next animation frame', () => {
+  const host = sandboxHarness(0);
+  assert.equal(host.elements.get('start')!.disabled, true);
+  host.send({ type: 'game-coop-peer', connected: true });
+  assert.equal(host.elements.get('start')!.disabled, false, 'A connected host must be able to start without waiting for RAF');
+  host.click('start');
+  assert.equal(host.elements.get('start')!.textContent, 'Restart level');
+  assert.equal(host.elements.get('pause')!.disabled, false);
+  host.send({ type: 'game-coop-peer', connected: false });
+  assert.equal(host.elements.get('start')!.disabled, true);
+  assert.equal(host.elements.get('pause')!.disabled, true);
+  host.send({ type: 'game-coop-peer', connected: true });
+  assert.equal(host.elements.get('pause')!.textContent, 'Resume together');
+  const guest = sandboxHarness(1), state = createCooperativeEngine().create(guest.spec);
+  guest.send({ type: 'game-coop-peer', connected: true });
+  state.players[1].score = 2;
+  guest.send({ type: 'game-coop-state', seq: 10, state });
+  assert.match(guest.elements.get('player-2')!.textContent, /2\/3 goal/);
 });
