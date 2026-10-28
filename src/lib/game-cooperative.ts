@@ -208,9 +208,9 @@ export function startCooperativeSandbox(engine: ReturnType<typeof createCooperat
   const mask = () => Number(keys.has('arrowleft') || keys.has('a') || pressed.has('left')) | Number(keys.has('arrowright') || keys.has('d') || pressed.has('right')) * 2 | Number(keys.has('arrowup') || keys.has('w') || pressed.has('up')) * 4 | Number(keys.has('arrowdown') || keys.has('s') || pressed.has('down')) * 8 | Number(keys.has(' ') || pressed.has('jump')) * 16 | Number(keys.has(' ') || keys.has('z') || pressed.has('fire')) * 32;
   function clear() { keys.clear(); pressed.clear(); remoteMask = 0; }
   function emitState() { if (seat === 0 && state) parent.postMessage({ type: 'game-coop-state', nonce, seq: ++seq, state: engine.snapshot(state) }, '*'); }
-  function reset(level = state?.levelIndex || 0) { if (!spec || seat !== 0 || !connected) return; state = engine.create(spec, level); state.running = true; state.paused = false; clear(); accumulator = 0; emitState(); canvas.focus(); }
+  function reset(level = state?.levelIndex || 0) { if (!spec || seat !== 0 || !connected) return; state = engine.create(spec, level); state.running = true; state.paused = false; clear(); accumulator = 0; emitState(); draw(); canvas.focus(); }
   start.addEventListener('click', () => reset());
-  pause.addEventListener('click', () => { if (seat !== 0 || !state || !connected || !state.running || state.outcome !== 'playing') return; state.paused = !state.paused; clear(); emitState(); if (!state.paused) canvas.focus(); });
+  pause.addEventListener('click', () => { if (seat !== 0 || !state || !connected || !state.running || state.outcome !== 'playing') return; state.paused = !state.paused; clear(); emitState(); draw(); if (!state.paused) canvas.focus(); });
   next.addEventListener('click', () => { if (seat === 0 && state?.outcome === 'won' && spec && state.levelIndex + 1 < spec.levels.length) reset(state.levelIndex + 1); });
   document.addEventListener('keydown', event => { const key = event.key.toLowerCase(); if (['arrowleft', 'arrowright', 'arrowup', 'arrowdown', 'a', 'd', 'w', 's', ' ', 'z'].includes(key)) { if ((event.target as HTMLElement)?.tagName === 'BUTTON') return; event.preventDefault(); keys.add(key); } });
   document.addEventListener('keyup', event => { keys.delete(event.key.toLowerCase()); });
@@ -247,14 +247,17 @@ export function startCooperativeSandbox(engine: ReturnType<typeof createCooperat
         document.getElementById('controls-help')!.textContent = spec.arcade?.rotation ? 'Left / Right turn · Up thrusts · Down reverses · Space / Z fires' : spec.genre === 'platformer' ? 'Arrows / WASD move · Space / Up jumps' : `Arrows / WASD move${spec.arcade?.shooting ? ' · Space / Z fires' : ''}`;
         if (spec.powerUps) instruction.textContent += ` Falling prizes: 3 triple shot, » rapid fire, S one-hit shield, ↑ speed boost. Pickups affect only the ship that collects them.${engine.endless(spec) ? ' Any damaging impact clears that ship’s prizes; a shield absorbs one hit and also clears every prize.' : ''}`;
         if (spec.version === 6) instruction.textContent += `${spec.arcade?.splitAsteroids ? spec.asteroids!.sizes === 3 ? ' Asteroids split large → two medium → four small pieces.' : ' Large asteroids split into two small pieces.' : ''}${spec.asteroids!.enemies.enabled ? ` Enemy ships take ${spec.asteroids!.enemies.hitPoints} hits; ${spec.asteroids!.enemies.difficulty === 'easy' ? 'easy enemies wander' : spec.asteroids!.enemies.difficulty === 'medium' ? 'medium enemies track gradually' : 'hard enemies pursue and fire aimed shots'}.` : ''}`;
-        start.hidden = pause.hidden = seat !== 0; parent.postMessage({ type: 'game-coop-loaded', nonce }, '*');
+        start.hidden = pause.hidden = seat !== 0; draw(); parent.postMessage({ type: 'game-coop-loaded', nonce }, '*');
       } catch { announce.textContent = 'This cooperative game could not be loaded safely.'; }
     } else if (data.type === 'game-coop-peer' && exact(['type', 'nonce', 'connected']) && typeof data.connected === 'boolean') {
       connected = data.connected; clear(); lastMask = -1; inputTimer = 0;
       if (state && seat === 0) { if (!connected) state.paused = true; emitState(); }
       announce.textContent = connected ? seat === 0 ? 'Partner connected. Start or resume when ready.' : 'Connected. The host starts or resumes the game.' : 'Waiting for your partner. Play is paused.';
+      // Connection callbacks can arrive while the browser defers this frame's
+      // animation loop. Admission must update controls and canvas immediately.
+      draw();
     } else if (spec && data.type === 'game-coop-input' && seat === 0 && exact(['type', 'nonce', 'seq', 'mask']) && Number.isInteger(data.seq) && data.seq > remoteSeq && data.seq <= 10000000 && Number.isInteger(data.mask) && data.mask >= 0 && data.mask <= 63) { remoteSeq = data.seq; remoteMask = connected ? data.mask : 0; remoteAge = 0; }
-    else if (spec && data.type === 'game-coop-state' && seat === 1 && exact(['type', 'nonce', 'seq', 'state']) && Number.isInteger(data.seq) && data.seq > remoteSeq && data.seq <= 10000000) { const checked = validateState(data.state, spec); if (checked) { remoteSeq = data.seq; state = checked; } }
+    else if (spec && data.type === 'game-coop-state' && seat === 1 && exact(['type', 'nonce', 'seq', 'state']) && Number.isInteger(data.seq) && data.seq > remoteSeq && data.seq <= 10000000) { const checked = validateState(data.state, spec); if (checked) { remoteSeq = data.seq; state = checked; draw(); } }
   });
   function draw() {
     if (!ctx || !state || !spec) return;
