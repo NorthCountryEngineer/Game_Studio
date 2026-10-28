@@ -13,6 +13,8 @@ export type MultiplayerServerMessage =
   | { type: 'pong' }
   | { type: 'lease'; expiresAt: number }
   | { type: 'ack'; kind: 'state' | 'input'; seq: number }
+  | { type: 'busy'; kind: 'state' | 'input'; seq: number; retryAfterMs: number }
+  | { type: 'busy'; kind: 'ping'; retryAfterMs: number }
   | { type: 'closed'; reason: 'expired' | 'host-disconnected' | 'publication-changed' | 'closed' }
   | { type: 'error'; message: string };
 const roomPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -101,6 +103,10 @@ export function validateMultiplayerServerMessage(raw: unknown, validateState: (s
   if (value.type === 'state' && exact(value, ['type', 'seq', 'state']) && validMultiplayerSequence(value.seq) && validateState(value.state)) return value as MultiplayerServerMessage;
   if (value.type === 'lease' && exact(value, ['type', 'expiresAt']) && Number.isSafeInteger(value.expiresAt) && Number(value.expiresAt) > 0) return value as MultiplayerServerMessage;
   if (value.type === 'ack' && exact(value, ['type', 'kind', 'seq']) && (value.kind === 'state' || value.kind === 'input') && validMultiplayerSequence(value.seq)) return value as MultiplayerServerMessage;
+  if (value.type === 'busy' && Number.isInteger(value.retryAfterMs) && Number(value.retryAfterMs) >= 50 && Number(value.retryAfterMs) <= 1000) {
+    if (value.kind === 'ping' && exact(value, ['type', 'kind', 'retryAfterMs'])) return value as MultiplayerServerMessage;
+    if ((value.kind === 'state' || value.kind === 'input') && exact(value, ['type', 'kind', 'seq', 'retryAfterMs']) && validMultiplayerSequence(value.seq)) return value as MultiplayerServerMessage;
+  }
   if (value.type === 'pong' && exact(value, ['type'])) return { type: 'pong' };
   if (value.type === 'closed' && exact(value, ['type', 'reason']) && typeof value.reason === 'string' && ['expired', 'host-disconnected', 'publication-changed', 'closed'].includes(value.reason)) return value as MultiplayerServerMessage;
   if (value.type === 'error' && exact(value, ['type', 'message']) && typeof value.message === 'string' && value.message.length <= 200 && !/[\u0000-\u001f\u007f]/.test(value.message)) return value as MultiplayerServerMessage;
@@ -130,9 +136,9 @@ export function connectMultiplayer(room: MultiplayerRoom, options: {
   const now = options.now ?? Date.now;
   type Data = { kind: 'state' | 'input'; seq: number; raw: string; active: boolean };
   type Flight = { packet: Data; sentAt: number; timeout?: ReturnType<typeof setTimeout>; expiry?: ReturnType<typeof setTimeout> };
-  let socket: MultiplayerSocket | undefined, stopped = false, ready = false, hasPeer = false, peerDelivered = false, retryStarted: number | undefined, healthySince: number | undefined, retries = 0, inputSeq = 0, inputMask = 0, stateSeq = 0, sentInputSeq = 0, sentStateSeq = 0, lastPong = now(), pingPending = false;
-  let retry: ReturnType<typeof setTimeout> | undefined, handshake: ReturnType<typeof setTimeout> | undefined, expiration: ReturnType<typeof setTimeout> | undefined, pacing: ReturnType<typeof setTimeout> | undefined, recovery: ReturnType<typeof setTimeout> | undefined;
-  let latest: Data | undefined, pending = false, window = 1, capacityBlocked = false, inputActiveAt: number | undefined;
+  let socket: MultiplayerSocket | undefined, stopped = false, ready = false, hasPeer = false, peerDelivered = false, retryStarted: number | undefined, healthySince: number | undefined, retries = 0, inputSeq = 0, inputMask = 0, stateSeq = 0, sentInputSeq = 0, sentStateSeq = 0, wireInputSeq = 0, wireStateSeq = 0, lastPong = now(), pingPending = false;
+  let retry: ReturnType<typeof setTimeout> | undefined, handshake: ReturnType<typeof setTimeout> | undefined, expiration: ReturnType<typeof setTimeout> | undefined, pacing: ReturnType<typeof setTimeout> | undefined, recovery: ReturnType<typeof setTimeout> | undefined, backoff: ReturnType<typeof setTimeout> | undefined;
+  let latest: Data | undefined, pending = false, window = 1, capacityBlocked = false, inputActiveAt: number | undefined, backoffUntil = 0;
   const maximumWindow = room.seat === 0 ? 3 : 2;
   const flights = new Map<number, Flight>();
   const history: MultiplayerInputSample[] = [];
@@ -140,7 +146,7 @@ export function connectMultiplayer(room: MultiplayerRoom, options: {
   const factory = options.socketFactory ?? (url => new WebSocket(url));
   function clearHandshake() { if (handshake) clearTimeout(handshake); handshake = undefined; }
   function clearFlight(flight: Flight) { clearTimeout(flight.timeout); clearTimeout(flight.expiry); }
-  function clearFlights(resetPacing = true) { for (const flight of flights.values()) clearFlight(flight); flights.clear(); window = 1; capacityBlocked = false; inputActiveAt = undefined; if (resetPacing) { if (pacing) clearTimeout(pacing); pacing = undefined; } }
+  function clearFlights(resetPacing = true) { for (const flight of flights.values()) clearFlight(flight); flights.clear(); window = 1; capacityBlocked = false; inputActiveAt = undefined; clearTimeout(backoff); backoff = undefined; backoffUntil = 0; if (resetPacing) { if (pacing) clearTimeout(pacing); pacing = undefined; } }
   function status(value: MultiplayerStatus, reason?: string) { options.onStatus(value, reason); }
   function peer(connected: boolean) {
     if (!peerDelivered || hasPeer !== connected) {
@@ -172,11 +178,28 @@ export function connectMultiplayer(room: MultiplayerRoom, options: {
     peer(false); if (close) current.close(1000); schedule();
   }
   function send(value: unknown) { const current = socket; if (ready && !stopped && current?.readyState === 1) { try { current.send(JSON.stringify(value)); } catch { interrupt(current); } } }
+  function ping() { if (!ready || stopped || pingPending) return; pingPending = true; send({ type: 'ping' }); }
+  function sequence(kind: 'state' | 'input', caller = 0): number | undefined {
+    const value = Math.max(caller, (kind === 'input' ? wireInputSeq : wireStateSeq) + 1);
+    if (!validMultiplayerSequence(value)) { end('ended', 'sequence-exhausted'); return; }
+    if (kind === 'input') wireInputSeq = value; else wireStateSeq = value;
+    return value;
+  }
+  function retryPacket(packet: Data): Data | undefined {
+    const seq = sequence(packet.kind); if (seq === undefined) return;
+    const value = JSON.parse(packet.raw); value.seq = seq;
+    // Rebuild from transitions, not previous retry tails, so repeated
+    // contention cannot evict a short press behind copies of its release.
+    if (packet.kind === 'input') value.history = [...history, { seq, mask: value.mask }].slice(-8);
+    const raw = JSON.stringify(value);
+    if (new TextEncoder().encode(raw).length > maxMessageBytes) { end('ended', 'invalid-message'); return; }
+    return { ...packet, seq, raw };
+  }
   function flush() {
     const current = socket;
     if (stopped || !ready || !hasPeer || current?.readyState !== 1 || !pending || !latest) return;
     if (flights.size >= window) { capacityBlocked = true; return; }
-    if (pacing) return;
+    if (pacing || backoff) return;
     const outgoing = latest; pending = false;
     const flight: Flight = { packet: outgoing, sentAt: now() };
     flight.timeout = setTimeout(() => { if (socket === current && flights.get(outgoing.seq) === flight) interrupt(current); }, 5000);
@@ -190,8 +213,8 @@ export function connectMultiplayer(room: MultiplayerRoom, options: {
     let raw: string; try { raw = JSON.stringify(value); } catch { return; }
     if (new TextEncoder().encode(raw).length > maxMessageBytes) return;
     // Store serialized snapshots, so caller mutations cannot change queued data.
-    if (kind === 'input') sentInputSeq = seq; else sentStateSeq = seq;
     latest = { kind, seq, raw, active }; pending = true; flush();
+    return true;
   }
   function open() {
     if (stopped) return;
@@ -201,7 +224,7 @@ export function connectMultiplayer(room: MultiplayerRoom, options: {
     try { current = factory(room.socketUrl); } catch { schedule(); return; }
     socket = current;
     handshake = setTimeout(() => { if (!stopped && socket === current && !ready) interrupt(current); }, 10000);
-    current.onopen = () => { if (!stopped && socket === current) { try { current.send(JSON.stringify({ type: 'join', roomId: room.roomId, token: room.token, leaseVersion: 1, flowVersion: 2 })); } catch { interrupt(current); } } };
+    current.onopen = () => { if (!stopped && socket === current) { try { current.send(JSON.stringify({ type: 'join', roomId: room.roomId, token: room.token, leaseVersion: 1, flowVersion: 3 })); } catch { interrupt(current); } } };
     current.onmessage = event => {
       if (stopped || socket !== current) return;
       if (isTransientMultiplayerServiceError(event.data)) { interrupt(current); return; }
@@ -219,7 +242,7 @@ export function connectMultiplayer(room: MultiplayerRoom, options: {
         const flight = flights.get(message.seq);
         if (flight?.packet.kind === message.kind) {
           const roundTrip = now() - flight.sentAt;
-          if (capacityBlocked && pending && latest?.active && roundTrip >= 0 && roundTrip <= 500) window = Math.min(maximumWindow, window + 1);
+          if (!backoff && capacityBlocked && pending && latest?.active && roundTrip >= 0 && roundTrip <= 500) window = Math.min(maximumWindow, window + 1);
           capacityBlocked = false; clearFlight(flight); flights.delete(message.seq);
           for (const [seq, older] of flights) {
             if (seq >= message.seq || older.packet.kind !== message.kind || !older.timeout) continue;
@@ -232,6 +255,21 @@ export function connectMultiplayer(room: MultiplayerRoom, options: {
           }
           healthy(); flush();
         }
+        return;
+      }
+      if (message.type === 'busy') {
+        if (message.kind === 'ping') {
+          // Ping busy has no sequence to distinguish delayed duplicates. Leave
+          // retries to the regular heartbeat; it grants no liveness or lease.
+          if (pingPending) pingPending = false;
+          return;
+        }
+        const flight = flights.get(message.seq);
+        if (flight?.packet.kind !== message.kind) return;
+        clearFlight(flight); flights.delete(message.seq); window = 1; capacityBlocked = false;
+        if ((!latest || latest.seq <= message.seq) && ![...flights.values()].some(value => value.packet.kind === message.kind && value.packet.seq > message.seq)) { const packet = retryPacket(flight.packet); if (!packet) return; latest = packet; pending = true; }
+        backoffUntil = Math.max(backoffUntil, now() + message.retryAfterMs);
+        clearTimeout(backoff); backoff = setTimeout(() => { backoff = undefined; backoffUntil = 0; if (socket === current) flush(); }, Math.max(0, backoffUntil - now()));
         return;
       }
       if (message.type === 'peer') { peer(message.connected); status(message.connected ? 'connected' : 'waiting'); if (message.connected) flush(); return; }
@@ -260,18 +298,19 @@ export function connectMultiplayer(room: MultiplayerRoom, options: {
     if (elapsed >= budget) { end('ended', 'connection-lost'); return; }
     status('reconnecting'); retry = setTimeout(open, Math.min(500 * 2 ** Math.min(retries++, 3), budget - elapsed));
   }
-  const heartbeat = setInterval(() => { if (!ready || stopped) return; if (now() - lastPong > 30000) { if (socket) interrupt(socket); return; } if (!pingPending) { pingPending = true; send({ type: 'ping' }); } }, 10000);
+  const heartbeat = setInterval(() => { if (!ready || stopped) return; if (now() - lastPong > 30000) { if (socket) interrupt(socket); return; } ping(); }, 10000);
   if (!expiry(expiresAt, now())) end('expired');
   else { armExpiration(); open(); }
   return {
     sendInput(seq, mask) {
       if (stopped || room.seat !== 1 || !ready || !hasPeer || !validMultiplayerSequence(seq) || !validMultiplayerInput(mask) || seq <= sentInputSeq) return;
-      if (!history.length || history[history.length - 1].mask !== mask) { history.push({ seq, mask }); if (history.length > 8) history.shift(); }
-      const samples = history[history.length - 1].seq === seq ? history : [...history, { seq, mask }].slice(-8);
+      const wire = sequence('input', seq); if (wire === undefined) return;
+      if (!history.length || history[history.length - 1].mask !== mask) { history.push({ seq: wire, mask }); if (history.length > 8) history.shift(); }
+      const samples = history[history.length - 1].seq === wire ? history : [...history, { seq: wire, mask }].slice(-8);
       if (mask) inputActiveAt = now();
-      queue('input', seq, { type: 'input', seq, mask, history: samples }, inputActiveAt !== undefined && now() - inputActiveAt <= 500);
+      if (queue('input', wire, { type: 'input', seq: wire, mask, history: samples }, inputActiveAt !== undefined && now() - inputActiveAt <= 500)) sentInputSeq = seq;
     },
-    sendState(seq, state) { if (stopped || room.seat !== 0 || !validMultiplayerSequence(seq) || seq <= sentStateSeq || !options.validateState(state)) return; queue('state', seq, { type: 'state', seq, state }, object(state) && state.running === true && state.paused === false && state.outcome === 'playing'); },
+    sendState(seq, state) { if (stopped || room.seat !== 0 || !validMultiplayerSequence(seq) || seq <= sentStateSeq || !options.validateState(state)) return; const wire = sequence('state', seq); if (wire !== undefined && queue('state', wire, { type: 'state', seq: wire, state }, object(state) && state.running === true && state.paused === false && state.outcome === 'playing')) sentStateSeq = seq; },
     close() { end('ended', 'closed'); },
   };
 }

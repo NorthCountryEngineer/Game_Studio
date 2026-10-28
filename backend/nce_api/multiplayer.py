@@ -133,7 +133,16 @@ def transaction(api, operations):
     try:
         client.transact_write_items(TransactItems=operations)
         return True
-    except client.exceptions.TransactionCanceledException:
+    except client.exceptions.TransactionCanceledException as error:
+        reasons = getattr(error, 'response', {}).get('CancellationReasons')
+        if reasons is not None:
+            # Validation and unknown service failures are not contention. Never
+            # disguise them as a successful commit or a recoverable busy frame.
+            if (not isinstance(reasons, list) or len(reasons) != len(operations)
+                    or any(not isinstance(reason, dict) or reason.get('Code') not in
+                        {None, 'None', 'ConditionalCheckFailed', 'TransactionConflict'} for reason in reasons)
+                    or not any(reason.get('Code') in {'ConditionalCheckFailed', 'TransactionConflict'} for reason in reasons)):
+                raise
         return False
 
 
@@ -699,7 +708,7 @@ def admit(api, connection, body):
     fields(body, ('type', 'roomId', 'token'), ('leaseVersion', 'flowVersion'))
     if 'leaseVersion' in body and (type(body['leaseVersion']) is not int or body['leaseVersion'] != 1):
         fail('Unsupported multiplayer lease protocol.')
-    if 'flowVersion' in body and (type(body['flowVersion']) is not int or body['flowVersion'] not in {1, 2}):
+    if 'flowVersion' in body and (type(body['flowVersion']) is not int or body['flowVersion'] not in {1, 2, 3}):
         fail('Unsupported multiplayer flow protocol.')
     renewable = body.get('leaseVersion') == 1
     identifier(body['roomId'])
@@ -768,7 +777,7 @@ def disconnect(api, value):
 
 
 def acknowledge(api, connection, kind, seq):
-    if connection.get('flowVersion') in {1, 2} and not post(api, connection['connectionId'], {'type': 'ack', 'kind': kind, 'seq': seq}):
+    if connection.get('flowVersion') in {1, 2, 3} and not post(api, connection['connectionId'], {'type': 'ack', 'kind': kind, 'seq': seq}):
         # Gone is definitive. An undeliverable acknowledgment must not leave
         # this generation looking connected while the peer keeps simulating.
         disconnect(api, connection['connectionId'])
@@ -801,7 +810,11 @@ def message(api, event):
         fail('Invalid multiplayer JSON.')
     if not isinstance(body, dict) or not isinstance(body.get('type'), str):
         fail('Invalid multiplayer message.')
-    for _ in range(5):
+    for attempt in range(5):
+        if attempt:
+            # Shared publication/room condition checks can conflict even when
+            # neither request modifies those rows. Avoid retrying in lockstep.
+            time.sleep((5 + secrets.randbelow(16)) / 1000)
         connection = load(api, 'connection', value)
         if not connection or int(connection['expiresAt']) <= int(time.time()):
             fail('This relay connection expired. Reconnect.', 410)
@@ -824,16 +837,16 @@ def message(api, event):
             fields(body, ('type',))
             maximum = 2
         elif kind == 'input' and seat == 1:
-            fields(body, ('type', 'seq', 'mask') + (('history',) if connection.get('flowVersion') == 2 else ()))
+            fields(body, ('type', 'seq', 'mask') + (('history',) if connection.get('flowVersion') in {2, 3} else ()))
             integer(body['mask'], 0, 63)
-            seq = integer(body['seq'], 0, 2147483647)
-            if connection.get('flowVersion') == 2:
+            seq = integer(body['seq'], 1, 10000000) if connection.get('flowVersion') == 3 else integer(body['seq'], 0, 2147483647)
+            if connection.get('flowVersion') in {2, 3}:
                 input_history(body)
             maximum = 30
         elif kind == 'state' and seat == 0:
             fields(body, ('type', 'seq', 'state'))
             validate_state(body['state'], spec)
-            seq = integer(body['seq'], 0, 2147483647)
+            seq = integer(body['seq'], 1, 10000000) if connection.get('flowVersion') == 3 else integer(body['seq'], 0, 2147483647)
             maximum = 20
         else:
             fail('This player cannot send that multiplayer message.', 403)
@@ -867,7 +880,7 @@ def message(api, event):
                 peer_id = room.get('connection' + str(1 - seat))
                 peer = connection_record(api, peer_id, loaded)
                 forwarded = body
-                if kind == 'input' and 'history' in body and (not peer or peer.get('flowVersion') != 2):
+                if kind == 'input' and 'history' in body and (not peer or peer.get('flowVersion') not in {2, 3}):
                     forwarded = {name: item for name, item in body.items() if name != 'history'}
                 if not connected(api, room, 1 - seat, int(time.time()), loaded=loaded) or not post(api, peer_id, forwarded):
                     if peer_id:
@@ -878,6 +891,14 @@ def message(api, event):
                     post(api, value, {'type': 'peer', 'connected': False})
                 acknowledge(api, connection, kind, requested_seq)
             return
+    if connection.get('flowVersion') == 3:
+        # A cancelled transaction forwarded nothing and established no lease or
+        # sequence progress. Only an opted-in sender can interpret this retry
+        # hint; legacy clients keep their original terminal response.
+        response = {'type': 'busy', 'kind': kind, 'retryAfterMs': 200}
+        if kind != 'ping': response['seq'] = requested_seq
+        if not post(api, value, response): disconnect(api, value)
+        return
     fail('The relay is busy. Reconnect shortly.', 409)
 
 
