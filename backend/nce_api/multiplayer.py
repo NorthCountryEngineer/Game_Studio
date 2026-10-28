@@ -9,6 +9,7 @@ import importlib.util
 import json
 import math
 import os
+from collections import OrderedDict
 from pathlib import Path
 import re
 import secrets
@@ -23,12 +24,15 @@ HEARTBEAT_SECONDS = 45
 DISCONNECT_GRACE = 60
 MAX_STATE_BYTES = 24576
 MAX_MESSAGE_BYTES = MAX_STATE_BYTES + 1024
+PUBLICATION_VALIDATION_LIMIT = 32
+INPUT_HISTORY_LIMIT = 8
 UUID = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
 TOKEN = re.compile(r'^[A-Za-z0-9_-]{43}$')
 CONNECTION = re.compile(r'^[A-Za-z0-9_=+\-]{1,128}$')
 _games = None
 _callback = None
 _database = None
+_publication_validations = OrderedDict()
 
 
 class MultiplayerError(Exception):
@@ -156,13 +160,27 @@ def publication(api, game_id, edition, expected_hash=None):
         fail('Published multiplayer game not found.', 404)
     if state.get('publishedRevision') != edition or state.get('revision') != edition:
         fail('The published game changed. Start a new room.', 409)
-    try:
-        spec = games().validate_spec(state['spec'])
-    except (games().GameError, KeyError):
-        fail('This edition does not support multiplayer.', 409)
-    if spec.get('version') not in {4, 5, 6} or spec.get('multiplayer') != {'mode': 'cooperative', 'maxPlayers': 2}:
-        fail('Two-player play is not enabled for this game.', 409)
-    spec_hash = hashlib.sha256(canonical(spec).encode('utf-8')).hexdigest()
+    # Cache validation results, never publication authority or mutable specs.
+    # The live record is still read and its exact payload fenced on every call.
+    cache_key = (os.environ['CORE_ORGANIZATION_ID'], os.environ['CORE_SERVICE_ID'], game_id, edition,
+        hashlib.sha256(public['payload'].encode('utf-8')).hexdigest())
+    spec_hash = _publication_validations.get(cache_key)
+    if spec_hash is None:
+        try:
+            spec = games().validate_spec(state['spec'])
+        except (games().GameError, KeyError):
+            fail('This edition does not support multiplayer.', 409)
+        if spec.get('version') not in {4, 5, 6} or spec.get('multiplayer') != {'mode': 'cooperative', 'maxPlayers': 2}:
+            fail('Two-player play is not enabled for this game.', 409)
+        spec_hash = hashlib.sha256(canonical(spec).encode('utf-8')).hexdigest()
+        _publication_validations[cache_key] = spec_hash
+        if len(_publication_validations) > PUBLICATION_VALIDATION_LIMIT:
+            _publication_validations.popitem(last=False)
+    else:
+        # json.loads above created a fresh object; callers cannot mutate a
+        # cached object or another request's validated definition.
+        spec = state['spec']
+        _publication_validations.move_to_end(cache_key)
     if expected_hash is not None and not hmac.compare_digest(spec_hash, expected_hash):
         fail('The published game changed. Start a new room.', 409)
     check = {'ConditionCheck': {'TableName': os.environ['GAME_PUBLIC_TABLE'], 'Key': {'id': public['id']},
@@ -271,10 +289,20 @@ def socket_url():
     return value
 
 
-def connected(api, room, seat, now=None):
+def connection_record(api, connection_id, loaded=None):
+    if not connection_id:
+        return None
+    if loaded is None:
+        return load(api, 'connection', connection_id)
+    if connection_id not in loaded:
+        loaded[connection_id] = load(api, 'connection', connection_id)
+    return loaded[connection_id]
+
+
+def connected(api, room, seat, now=None, *, loaded=None):
     now = int(time.time()) if now is None else now
     connection_id = room.get('connection' + str(seat))
-    connection = load(api, 'connection', connection_id) if connection_id else None
+    connection = connection_record(api, connection_id, loaded)
     if not connection or connection.get('roomId') != room['roomId'] or connection.get('generation') != room.get('generation' + str(seat)):
         return False
     return int(connection.get('lastSeen', 0)) + HEARTBEAT_SECONDS > now and int(connection['expiresAt']) > now
@@ -300,7 +328,8 @@ def terminate(api, room, reason):
             disconnect_socket(api, connection_id)
 
 
-def active_room(api, room_id):
+def active_room(api, room_id, *, loaded=None):
+    loaded = {} if loaded is None else loaded
     room = load(api, 'room', identifier(room_id))
     if not room:
         fail('This multiplayer room is unavailable.', 410)
@@ -312,8 +341,8 @@ def active_room(api, room_id):
         fail('This multiplayer room expired. Start a new room.', 410)
     if room.get('hostConnected'):
         absent = int(room.get('disconnectedAt0', 0))
-        if not absent and not connected(api, room, 0, now):
-            host = load(api, 'connection', room['connection0']) if room.get('connection0') else None
+        if not absent and not connected(api, room, 0, now, loaded=loaded):
+            host = connection_record(api, room.get('connection0'), loaded)
             absent = int(host.get('lastSeen', room['createdAt'])) + HEARTBEAT_SECONDS if host else int(room['createdAt'])
         if absent and absent + DISCONNECT_GRACE <= now:
             terminate(api, room, 'host-disconnected')
@@ -670,7 +699,7 @@ def admit(api, connection, body):
     fields(body, ('type', 'roomId', 'token'), ('leaseVersion', 'flowVersion'))
     if 'leaseVersion' in body and (type(body['leaseVersion']) is not int or body['leaseVersion'] != 1):
         fail('Unsupported multiplayer lease protocol.')
-    if 'flowVersion' in body and (type(body['flowVersion']) is not int or body['flowVersion'] != 1):
+    if 'flowVersion' in body and (type(body['flowVersion']) is not int or body['flowVersion'] not in {1, 2}):
         fail('Unsupported multiplayer flow protocol.')
     renewable = body.get('leaseVersion') == 1
     identifier(body['roomId'])
@@ -704,7 +733,7 @@ def admit(api, connection, body):
             **({'hostConnected': True} if seat == 0 else {'guestAdmitted': True}))
         changed_connection = revision(connection, roomId=room['roomId'], seat=seat, generation=generation,
             lastSeen=now, expiresAt=connection_expiry, seq=-1, **({'leaseVersion': 1} if renewable else {}),
-            **({'flowVersion': 1} if body.get('flowVersion') == 1 else {}))
+            **({'flowVersion': body['flowVersion']} if 'flowVersion' in body else {}))
         lobby_operations = lobby_advertise(api, changed_room, expires_at) if seat == 0 else lobby_remove(api, changed_room)
         if transaction(api, [check, put(changed_room, room), put(changed_connection, connection), *lobby_operations]):
             if old_id and old_id != connection['connectionId']:
@@ -739,10 +768,26 @@ def disconnect(api, value):
 
 
 def acknowledge(api, connection, kind, seq):
-    if connection.get('flowVersion') == 1 and not post(api, connection['connectionId'], {'type': 'ack', 'kind': kind, 'seq': seq}):
+    if connection.get('flowVersion') in {1, 2} and not post(api, connection['connectionId'], {'type': 'ack', 'kind': kind, 'seq': seq}):
         # Gone is definitive. An undeliverable acknowledgment must not leave
         # this generation looking connected while the peer keeps simulating.
         disconnect(api, connection['connectionId'])
+
+
+def input_history(body):
+    history = body['history']
+    if not isinstance(history, list) or not 1 <= len(history) <= INPUT_HISTORY_LIMIT:
+        fail('Multiplayer input history is outside its allowed range.')
+    previous = 0
+    for item in history:
+        fields(item, ('seq', 'mask'))
+        seq = integer(item['seq'], 1, 2147483647)
+        integer(item['mask'], 0, 63)
+        if seq <= previous:
+            fail('Multiplayer input history must be ordered and unique.')
+        previous = seq
+    if history[-1]['seq'] != body['seq'] or history[-1]['mask'] != body['mask']:
+        fail('Multiplayer input history must end with the current controls.')
 
 
 def message(api, event):
@@ -765,7 +810,10 @@ def message(api, event):
             return admit(api, connection, body)
         if 'roomId' not in connection:
             fail('Join a room before playing.', 403)
-        room, spec, check = active_room(api, connection['roomId'])
+        # Request-local reuse does not retain leases across messages. The room
+        # generation and publication remain fenced in the transaction below.
+        loaded = {value: connection}
+        room, spec, check = active_room(api, connection['roomId'], loaded=loaded)
         seat = int(connection['seat'])
         if room.get('connection' + str(seat)) != value or room.get('generation' + str(seat)) != connection['generation']:
             fail('This player reconnected in another session.', 403)
@@ -776,9 +824,11 @@ def message(api, event):
             fields(body, ('type',))
             maximum = 2
         elif kind == 'input' and seat == 1:
-            fields(body, ('type', 'seq', 'mask'))
+            fields(body, ('type', 'seq', 'mask') + (('history',) if connection.get('flowVersion') == 2 else ()))
             integer(body['mask'], 0, 63)
             seq = integer(body['seq'], 0, 2147483647)
+            if connection.get('flowVersion') == 2:
+                input_history(body)
             maximum = 30
         elif kind == 'state' and seat == 0:
             fields(body, ('type', 'seq', 'state'))
@@ -815,7 +865,11 @@ def message(api, event):
                 post(api, value, {'type': 'peer', 'connected': connected(api, room, 1 - seat, now)})
             else:
                 peer_id = room.get('connection' + str(1 - seat))
-                if not connected(api, room, 1 - seat, now) or not post(api, peer_id, body):
+                peer = connection_record(api, peer_id, loaded)
+                forwarded = body
+                if kind == 'input' and 'history' in body and (not peer or peer.get('flowVersion') != 2):
+                    forwarded = {name: item for name, item in body.items() if name != 'history'}
+                if not connected(api, room, 1 - seat, int(time.time()), loaded=loaded) or not post(api, peer_id, forwarded):
                     if peer_id:
                         # API Gateway can report Gone before its best-effort
                         # disconnect event arrives. Clear only that generation;

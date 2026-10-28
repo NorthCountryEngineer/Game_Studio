@@ -3,11 +3,12 @@ export type MultiplayerSeat = 0 | 1;
 export type MultiplayerRoom = { gameId: string; publishedRevision: number; specSha256: string; roomId: string; token: string; expiresAt: number; socketUrl: string; seat: MultiplayerSeat };
 export type MultiplayerLobbyRoom = { roomId: string; gameId: string; publishedRevision: number; specSha256: string; title: string; expiresAt: number };
 export type MultiplayerInvitation = { roomId: string; inviteToken: string };
+export type MultiplayerInputSample = { seq: number; mask: number };
 export type MultiplayerStatus = 'connecting' | 'waiting' | 'connected' | 'reconnecting' | 'ended' | 'expired';
 export type MultiplayerServerMessage =
   | { type: 'ready'; gameId: string; publishedRevision: number; specSha256: string; roomId: string; seat: MultiplayerSeat; expiresAt: number }
   | { type: 'peer'; connected: boolean }
-  | { type: 'input'; seq: number; mask: number }
+  | { type: 'input'; seq: number; mask: number; history?: MultiplayerInputSample[] }
   | { type: 'state'; seq: number; state: unknown }
   | { type: 'pong' }
   | { type: 'lease'; expiresAt: number }
@@ -85,7 +86,18 @@ export function validateMultiplayerServerMessage(raw: unknown, validateState: (s
   if (!object(value)) return;
   if (value.type === 'ready' && exact(value, ['type', 'roomId', 'seat', 'expiresAt', 'gameId', 'publishedRevision', 'specSha256']) && typeof value.roomId === 'string' && roomPattern.test(value.roomId) && (value.seat === 0 || value.seat === 1) && Number.isSafeInteger(value.expiresAt) && Number(value.expiresAt) > 0 && publication(value)) return value as MultiplayerServerMessage;
   if (value.type === 'peer' && exact(value, ['type', 'connected']) && typeof value.connected === 'boolean') return value as MultiplayerServerMessage;
-  if (value.type === 'input' && exact(value, ['type', 'seq', 'mask']) && validMultiplayerSequence(value.seq) && validMultiplayerInput(value.mask)) return value as MultiplayerServerMessage;
+  if (value.type === 'input' && validMultiplayerSequence(value.seq) && validMultiplayerInput(value.mask)) {
+    if (exact(value, ['type', 'seq', 'mask'])) return value as MultiplayerServerMessage;
+    if (exact(value, ['type', 'seq', 'mask', 'history']) && Array.isArray(value.history) && value.history.length >= 1 && value.history.length <= 8) {
+      let previous = 0;
+      for (const sample of value.history) {
+        if (!object(sample) || !exact(sample, ['seq', 'mask']) || !validMultiplayerSequence(sample.seq) || !validMultiplayerInput(sample.mask) || sample.seq <= previous || sample.seq > value.seq) return;
+        previous = sample.seq;
+      }
+      const last = value.history[value.history.length - 1];
+      if (last.seq === value.seq && last.mask === value.mask) return value as MultiplayerServerMessage;
+    }
+  }
   if (value.type === 'state' && exact(value, ['type', 'seq', 'state']) && validMultiplayerSequence(value.seq) && validateState(value.state)) return value as MultiplayerServerMessage;
   if (value.type === 'lease' && exact(value, ['type', 'expiresAt']) && Number.isSafeInteger(value.expiresAt) && Number(value.expiresAt) > 0) return value as MultiplayerServerMessage;
   if (value.type === 'ack' && exact(value, ['type', 'kind', 'seq']) && (value.kind === 'state' || value.kind === 'input') && validMultiplayerSequence(value.seq)) return value as MultiplayerServerMessage;
@@ -109,7 +121,7 @@ export function connectMultiplayer(room: MultiplayerRoom, options: {
   validateState: (value: unknown) => boolean;
   onStatus: (status: MultiplayerStatus, reason?: string) => void;
   onPeer: (connected: boolean) => void;
-  onInput: (seq: number, mask: number) => void;
+  onInput: (seq: number, mask: number, pressedMask?: number) => void;
   onState: (seq: number, state: unknown) => void;
   socketFactory?: (url: string) => MultiplayerSocket;
   now?: () => number;
@@ -117,22 +129,24 @@ export function connectMultiplayer(room: MultiplayerRoom, options: {
 }): MultiplayerConnection {
   const now = options.now ?? Date.now;
   type Data = { kind: 'state' | 'input'; seq: number; raw: string };
-  let socket: MultiplayerSocket | undefined, stopped = false, ready = false, hasPeer = false, peerDelivered = false, retryStarted: number | undefined, healthySince: number | undefined, retries = 0, inputSeq = 0, stateSeq = 0, sentInputSeq = 0, sentStateSeq = 0, lastPong = now(), pingPending = false;
-  let retry: ReturnType<typeof setTimeout> | undefined, handshake: ReturnType<typeof setTimeout> | undefined, expiration: ReturnType<typeof setTimeout> | undefined, acknowledgment: ReturnType<typeof setTimeout> | undefined, recovery: ReturnType<typeof setTimeout> | undefined;
-  let latest: Data | undefined, flight: Data | undefined, pending = false;
+  let socket: MultiplayerSocket | undefined, stopped = false, ready = false, hasPeer = false, peerDelivered = false, retryStarted: number | undefined, healthySince: number | undefined, retries = 0, inputSeq = 0, inputMask = 0, stateSeq = 0, sentInputSeq = 0, sentStateSeq = 0, lastPong = now(), pingPending = false;
+  let retry: ReturnType<typeof setTimeout> | undefined, handshake: ReturnType<typeof setTimeout> | undefined, expiration: ReturnType<typeof setTimeout> | undefined, pacing: ReturnType<typeof setTimeout> | undefined, recovery: ReturnType<typeof setTimeout> | undefined;
+  let latest: Data | undefined, pending = false;
+  const flights = new Map<number, { packet: Data; timeout: ReturnType<typeof setTimeout> }>();
+  const history: MultiplayerInputSample[] = [];
   let expiresAt = room.expiresAt;
   const factory = options.socketFactory ?? (url => new WebSocket(url));
   function clearHandshake() { if (handshake) clearTimeout(handshake); handshake = undefined; }
-  function clearFlight() { if (acknowledgment) clearTimeout(acknowledgment); acknowledgment = undefined; flight = undefined; }
+  function clearFlights(resetPacing = true) { for (const flight of flights.values()) clearTimeout(flight.timeout); flights.clear(); if (resetPacing) { if (pacing) clearTimeout(pacing); pacing = undefined; } }
   function status(value: MultiplayerStatus, reason?: string) { options.onStatus(value, reason); }
   function peer(connected: boolean) {
     if (!peerDelivered || hasPeer !== connected) {
       hasPeer = connected; peerDelivered = true;
-      if (!connected) { clearFlight(); if (room.seat === 1) { latest = undefined; pending = false; } else pending = Boolean(latest); }
+      if (!connected) { clearFlights(false); history.length = 0; inputMask = 0; if (room.seat === 1) { latest = undefined; pending = false; } else pending = Boolean(latest); }
       options.onPeer(connected);
     }
   }
-  function end(value: 'ended' | 'expired', reason?: string) { if (stopped) return; stopped = true; clearHandshake(); clearFlight(); if (retry) clearTimeout(retry); if (recovery) clearTimeout(recovery); clearInterval(heartbeat); clearTimeout(expiration); ready = false; peer(false); const previous = socket; socket = undefined; previous?.close(1000); status(value, reason); }
+  function end(value: 'ended' | 'expired', reason?: string) { if (stopped) return; stopped = true; clearHandshake(); clearFlights(); if (retry) clearTimeout(retry); if (recovery) clearTimeout(recovery); clearInterval(heartbeat); clearTimeout(expiration); ready = false; peer(false); const previous = socket; socket = undefined; previous?.close(1000); status(value, reason); }
   function armExpiration() {
     if (expiration) clearTimeout(expiration);
     expiration = setTimeout(() => { if (now() >= expiresAt * 1000) end('expired'); else armExpiration(); }, Math.max(0, expiresAt * 1000 - now()));
@@ -150,16 +164,20 @@ export function connectMultiplayer(room: MultiplayerRoom, options: {
   }
   function interrupt(current: MultiplayerSocket, close = true) {
     if (stopped || socket !== current) return;
-    socket = undefined; clearHandshake(); clearFlight(); ready = false; healthySince = undefined; pingPending = false;
+    socket = undefined; clearHandshake(); clearFlights(); history.length = 0; inputMask = 0; ready = false; healthySince = undefined; pingPending = false;
     if (room.seat === 1) { latest = undefined; pending = false; } else pending = Boolean(latest);
     peer(false); if (close) current.close(1000); schedule();
   }
   function send(value: unknown) { const current = socket; if (ready && !stopped && current?.readyState === 1) { try { current.send(JSON.stringify(value)); } catch { interrupt(current); } } }
   function flush() {
     const current = socket;
-    if (stopped || !ready || !hasPeer || current?.readyState !== 1 || flight || !pending || !latest) return;
-    const outgoing = latest; flight = outgoing; pending = false;
-    acknowledgment = setTimeout(() => { if (socket === current && flight === outgoing) interrupt(current); }, 5000);
+    if (stopped || !ready || !hasPeer || current?.readyState !== 1 || pacing || flights.size >= 8 || !pending || !latest) return;
+    const outgoing = latest; pending = false;
+    const timeout = setTimeout(() => { if (socket === current && flights.get(outgoing.seq)?.packet === outgoing) interrupt(current); }, 5000);
+    flights.set(outgoing.seq, { packet: outgoing, timeout });
+    // A bounded window avoids a round-trip stall on every packet. Spacing also
+    // applies to ACK-driven queue flushes, below the relay's existing limits.
+    pacing = setTimeout(() => { pacing = undefined; flush(); }, outgoing.kind === 'state' ? 50 : 40);
     try { current.send(outgoing.raw); } catch { interrupt(current); }
   }
   function queue(kind: 'state' | 'input', seq: number, value: unknown) {
@@ -172,12 +190,12 @@ export function connectMultiplayer(room: MultiplayerRoom, options: {
   function open() {
     if (stopped) return;
     if (now() >= expiresAt * 1000) { end('expired'); return; }
-    ready = false; clearFlight(); peer(false); status(retryStarted !== undefined ? 'reconnecting' : 'connecting');
+    ready = false; clearFlights(); peer(false); status(retryStarted !== undefined ? 'reconnecting' : 'connecting');
     let current: MultiplayerSocket;
     try { current = factory(room.socketUrl); } catch { schedule(); return; }
     socket = current;
     handshake = setTimeout(() => { if (!stopped && socket === current && !ready) interrupt(current); }, 10000);
-    current.onopen = () => { if (!stopped && socket === current) { try { current.send(JSON.stringify({ type: 'join', roomId: room.roomId, token: room.token, leaseVersion: 1, flowVersion: 1 })); } catch { interrupt(current); } } };
+    current.onopen = () => { if (!stopped && socket === current) { try { current.send(JSON.stringify({ type: 'join', roomId: room.roomId, token: room.token, leaseVersion: 1, flowVersion: 2 })); } catch { interrupt(current); } } };
     current.onmessage = event => {
       if (stopped || socket !== current) return;
       if (isTransientMultiplayerServiceError(event.data)) { interrupt(current); return; }
@@ -191,9 +209,22 @@ export function connectMultiplayer(room: MultiplayerRoom, options: {
       if (message.type === 'error') { end('ended', 'rejected'); return; }
       if (message.type === 'lease') { if (!renew(message.expiresAt)) { end('ended', 'invalid-lease'); return; } lastPong = now(); return; }
       if (message.type === 'pong') { lastPong = now(); pingPending = false; healthy(); return; }
-      if (message.type === 'ack') { if (flight?.kind === message.kind && flight.seq === message.seq) { clearFlight(); healthy(); flush(); } return; }
+      if (message.type === 'ack') {
+        const flight = flights.get(message.seq);
+        if (flight?.packet.kind === message.kind) { clearTimeout(flight.timeout); flights.delete(message.seq); healthy(); flush(); }
+        return;
+      }
       if (message.type === 'peer') { peer(message.connected); status(message.connected ? 'connected' : 'waiting'); if (message.connected) flush(); return; }
-      if (message.type === 'input') { if (room.seat !== 0 || message.seq <= inputSeq) return; inputSeq = message.seq; options.onInput(message.seq, message.mask); }
+      if (message.type === 'input') {
+        if (room.seat !== 0 || message.seq <= inputSeq) return;
+        let pressedMask = 0, previousMask = inputMask;
+        for (const sample of message.history ?? [{ seq: message.seq, mask: message.mask }]) {
+          if (sample.seq <= inputSeq) continue;
+          pressedMask |= sample.mask & ~previousMask; previousMask = sample.mask;
+        }
+        inputSeq = message.seq; inputMask = message.mask;
+        options.onInput(message.seq, message.mask, pressedMask);
+      }
       if (message.type === 'state') { if (room.seat !== 1 || message.seq <= stateSeq) return; stateSeq = message.seq; options.onState(message.seq, message.state); }
     };
     current.onclose = () => interrupt(current, false);
@@ -213,7 +244,12 @@ export function connectMultiplayer(room: MultiplayerRoom, options: {
   if (!expiry(expiresAt, now())) end('expired');
   else { armExpiration(); open(); }
   return {
-    sendInput(seq, mask) { if (stopped || room.seat !== 1 || !ready || !hasPeer || !validMultiplayerSequence(seq) || !validMultiplayerInput(mask) || seq <= sentInputSeq) return; queue('input', seq, { type: 'input', seq, mask }); },
+    sendInput(seq, mask) {
+      if (stopped || room.seat !== 1 || !ready || !hasPeer || !validMultiplayerSequence(seq) || !validMultiplayerInput(mask) || seq <= sentInputSeq) return;
+      if (!history.length || history[history.length - 1].mask !== mask) { history.push({ seq, mask }); if (history.length > 8) history.shift(); }
+      const samples = history[history.length - 1].seq === seq ? history : [...history, { seq, mask }].slice(-8);
+      queue('input', seq, { type: 'input', seq, mask, history: samples });
+    },
     sendState(seq, state) { if (stopped || room.seat !== 0 || !validMultiplayerSequence(seq) || seq <= sentStateSeq || !options.validateState(state)) return; queue('state', seq, { type: 'state', seq, state }); },
     close() { end('ended', 'closed'); },
   };

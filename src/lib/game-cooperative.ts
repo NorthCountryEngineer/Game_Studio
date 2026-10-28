@@ -17,8 +17,124 @@ export type CooperativeState = {
   players: [CooperativePlayer, CooperativePlayer]; entities: GameEntity[]; bullets: CooperativeBullet[]; platforms: GamePlatform[];
 };
 
+/** Drawing-only motion. Host snapshots still own every gameplay decision. */
+export function createCooperativePresentation(spec: CooperativeGameSpec) {
+  type Pose = Pick<CooperativePlayer, 'x' | 'y' | 'angle' | 'vy' | 'grounded' | 'previousJump'>;
+  type Correction = { x: number; y: number; angle: number; left: number };
+  type Actor = { x: number; y: number; vx: number; vy: number; correction: Correction };
+  const horizon = 0.2, reconciliation = 0.08;
+  let latest: CooperativeState | undefined, poses: [Pose, Pose] | undefined;
+  let corrections: [Correction, Correction] = [emptyCorrection(), emptyCorrection()], actors = new Map<string, Actor>();
+  let lastTime = 0, progressAt = 0, inputChangedAt = -Infinity, localMask = 0, stale = false;
+  let remoteVelocity = { x: 0, y: 0, angle: 0 };
+  function emptyCorrection(): Correction { return { x: 0, y: 0, angle: 0, left: 0 }; }
+  function active(value: CooperativeState) { return value.running && !value.paused && value.outcome === 'playing'; }
+  function angleDifference(to: number, from: number) { return ((to - from + Math.PI * 3) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) - Math.PI; }
+  function pose(player: CooperativePlayer): Pose { return { x: player.x, y: player.y, angle: player.angle, vy: player.vy, grounded: player.grounded, previousJump: player.previousJump }; }
+  function speed(player: CooperativePlayer) { return (110 + spec.player.speed * 32) * (player.effects?.speedBoost ? 1.6 : 1); }
+  function correction(from: { x: number; y: number; angle?: number }, to: { x: number; y: number; angle?: number }): Correction {
+    return { x: to.x - from.x, y: to.y - from.y, angle: angleDifference(to.angle || 0, from.angle || 0), left: reconciliation };
+  }
+  function correct(value: { x: number; y: number; angle?: number }, adjustment: Correction, dt: number, maxSpeed?: number, maxTurn?: number) {
+    if (!adjustment.left) return;
+    let fraction = Math.min(1, dt / adjustment.left);
+    const distance = Math.hypot(adjustment.x * fraction, adjustment.y * fraction);
+    if (maxSpeed !== undefined && distance > maxSpeed * dt) fraction *= maxSpeed * dt / distance;
+    value.x += adjustment.x * fraction; value.y += adjustment.y * fraction;
+    const turn = maxTurn === undefined ? adjustment.angle * fraction : Math.max(-maxTurn * dt, Math.min(maxTurn * dt, adjustment.angle * fraction));
+    if (value.angle !== undefined) value.angle += turn;
+    adjustment.x *= 1 - fraction; adjustment.y *= 1 - fraction; adjustment.angle -= turn; adjustment.left = Math.max(0, adjustment.left - dt);
+  }
+  function moving(value: CooperativeState): [string, { x: number; y: number; vx: number; vy: number }][] {
+    return [...value.entities.map(item => [`entity:${item.id}`, item] as [string, typeof item]), ...value.bullets.map(item => [`bullet:${item.id}`, item] as [string, typeof item]), ...(value.advanced?.enemies.map(item => [`enemy:${item.id}`, item] as [string, typeof item]) || []), ...(value.advanced?.enemyBullets.map(item => [`enemy-bullet:${item.id}`, item] as [string, typeof item]) || [])];
+  }
+  function moveLocal(player: Pose, input: number, dt: number) {
+    if (!latest || !latest.players[1].lives) return;
+    const movementSpeed = speed(latest.players[1]);
+    let dx = Number(Boolean(input & 2)) - Number(Boolean(input & 1)), dy = Number(Boolean(input & 8)) - Number(Boolean(input & 4));
+    if (spec.genre === 'platformer') {
+      const jump = Boolean(input & 20);
+      if (jump && !player.previousJump && player.grounded) { player.vy = -(300 + spec.player.jump * 17); player.grounded = false; }
+      player.previousJump = jump;
+      const oldBottom = player.y + 34;
+      player.x = Math.max(0, Math.min(918, player.x + dx * movementSpeed * dt));
+      player.vy += 900 * dt; player.y += player.vy * dt; player.grounded = false;
+      if (player.vy >= 0) for (const platform of latest.platforms) if (oldBottom <= platform.y + 0.5 && player.y + 34 >= platform.y && player.x + 42 > platform.x && player.x < platform.x + platform.w) { player.y = platform.y - 34; player.vy = 0; player.grounded = true; break; }
+      // A visual fall cannot remove a life or invent a respawn.
+      player.y = Math.min(566, player.y);
+    } else if (spec.arcade?.rotation) {
+      player.angle = ((player.angle + dx * 2.8 * dt) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2);
+      const thrust = Number(Boolean(input & 4)) - Number(Boolean(input & 8));
+      player.x = Math.max(0, Math.min(918, player.x + Math.cos(player.angle) * thrust * movementSpeed * dt));
+      player.y = Math.max(12, Math.min(491, player.y + Math.sin(player.angle) * thrust * movementSpeed * dt));
+    } else {
+      if (dx && dy) { dx /= Math.SQRT2; dy /= Math.SQRT2; }
+      player.x = Math.max(0, Math.min(918, player.x + dx * movementSpeed * dt)); player.y = Math.max(12, Math.min(491, player.y + dy * movementSpeed * dt));
+    }
+  }
+  function advance(now: number) {
+    if (!latest || !poses || !Number.isFinite(now)) return;
+    const end = Math.min(Math.max(lastTime, now), progressAt + horizon * 1000);
+    let remaining = active(latest) && !stale ? Math.max(0, (end - lastTime) / 1000) : 0;
+    while (remaining > 0.000001) {
+      const dt = Math.min(remaining, 1 / 60); remaining -= dt;
+      moveLocal(poses[1], localMask, dt);
+      poses[0].x = Math.max(0, Math.min(918, poses[0].x + remoteVelocity.x * dt));
+      poses[0].y = Math.max(-100, Math.min(600, poses[0].y + remoteVelocity.y * dt)); poses[0].angle += remoteVelocity.angle * dt;
+      correct(poses[0], corrections[0], dt);
+      // Reconciliation may slow held movement briefly, but cannot reverse it.
+      correct(poses[1], corrections[1], dt, localMask & 15 ? speed(latest.players[1]) * 0.35 : undefined, localMask & 3 ? 1.4 : undefined);
+      // No acknowledgement timeline is available, so never draw unlimited lead.
+      const anchor = latest.players[1], limit = Math.max(speed(anchor), spec.genre === 'platformer' ? Math.abs(poses[1].vy) : 0) * horizon + 8;
+      const lead = Math.hypot(poses[1].x - anchor.x, poses[1].y - anchor.y);
+      if (lead > limit) { const scale = limit / lead; poses[1].x = anchor.x + (poses[1].x - anchor.x) * scale; poses[1].y = anchor.y + (poses[1].y - anchor.y) * scale; }
+      for (const actor of actors.values()) { actor.x += actor.vx * dt; actor.y += actor.vy * dt; correct(actor, actor.correction, dt); }
+    }
+    lastTime = Math.max(lastTime, now);
+    if (active(latest) && now - progressAt >= horizon * 1000) { stale = true; corrections = [emptyCorrection(), emptyCorrection()]; }
+  }
+  function receive(value: CooperativeState, now: number) {
+    if (!Number.isFinite(now)) return;
+    advance(now);
+    const previous = latest, delta = previous ? value.elapsed - previous.elapsed : 0, wasStale = stale;
+    const progressed = delta > 0.000001;
+    const hard = !previous || !poses || stale && progressed || !active(value) || !active(previous) || value.levelIndex !== previous.levelIndex || delta < -0.000001 || value.nextId < previous.nextId || value.players.some((player, index) => player.lives !== previous.players[index].lives || Math.hypot(player.x - previous.players[index].x, player.y - previous.players[index].y) > Math.max(speed(player), 1000) * Math.max(0, delta) + 80);
+    if (hard || delta > 0.000001) progressAt = now;
+    if (hard) {
+      poses = [pose(value.players[0]), pose(value.players[1])]; corrections = [emptyCorrection(), emptyCorrection()]; remoteVelocity = { x: 0, y: 0, angle: 0 }; inputChangedAt = now;
+    } else {
+      corrections[0] = correction(poses![0], value.players[0]);
+      // Give a new press or release its bounded local feedback window. Once
+      // the host has caught up, one short correction resolves any remaining lead.
+      corrections[1] = now - inputChangedAt < horizon * 1000 ? emptyCorrection() : correction(poses![1], value.players[1]);
+      if (delta > 0.000001 && delta <= 0.5) {
+        const limit = speed(value.players[0]);
+        remoteVelocity = { x: Math.max(-limit, Math.min(limit, (value.players[0].x - previous!.players[0].x) / delta)), y: Math.max(-1000, Math.min(1000, (value.players[0].y - previous!.players[0].y) / delta)), angle: Math.max(-2.8, Math.min(2.8, angleDifference(value.players[0].angle, previous!.players[0].angle) / delta)) };
+      }
+    }
+    const nextActors = new Map<string, Actor>();
+    for (const [key, item] of moving(value)) {
+      const old = hard ? undefined : actors.get(key);
+      nextActors.set(key, { x: old?.x ?? item.x, y: old?.y ?? item.y, vx: item.vx, vy: item.vy, correction: old ? correction(old, item) : emptyCorrection() });
+    }
+    actors = nextActors; latest = structuredClone(value); lastTime = now; stale = wasStale && !progressed && !hard;
+  }
+  function render(input: number, now: number): CooperativeState | undefined {
+    advance(now);
+    if (input !== localMask) { localMask = input; inputChangedAt = now; corrections[1] = emptyCorrection(); }
+    if (!latest || !poses) return;
+    const view = structuredClone(latest);
+    if (!active(latest)) return view;
+    for (const seat of [0, 1] as const) Object.assign(view.players[seat], poses[seat]);
+    for (const [key, item] of moving(view)) { const actor = actors.get(key); if (actor) { item.x = actor.x; item.y = actor.y; } }
+    return view;
+  }
+  function reset() { latest = undefined; poses = undefined; actors.clear(); corrections = [emptyCorrection(), emptyCorrection()]; remoteVelocity = { x: 0, y: 0, angle: 0 }; localMask = 0; inputChangedAt = -Infinity; stale = false; }
+  return { receive, render, reset, isStale: () => stale };
+}
+
 /** The host advances one world exactly once. A guest sends only its own controls. */
-export function createCooperativeEngine(base = createGameEngine()) {
+export function createCooperativeEngine(base = createGameEngine(), presentation = createCooperativePresentation) {
   const width = 960, height = 540;
   function create(spec: CooperativeGameSpec, levelIndex = 0): CooperativeState {
     const single = base.create(spec, levelIndex);
@@ -139,7 +255,7 @@ export function createCooperativeEngine(base = createGameEngine()) {
   }
   /** Round snapshots without feeding network precision back into host physics. */
   function snapshot(state: CooperativeState): CooperativeState { return JSON.parse(JSON.stringify(state, (_key, value) => typeof value === 'number' && !Number.isInteger(value) ? Math.round(value * 1000) / 1000 : value)) as CooperativeState; }
-  return { spritePainter: base.spritePainter, create, step, snapshot, drawPrizes: base.drawPrizes, effectLabel: base.effectLabel, drawAdvanced: base.drawAdvanced, endless: base.endless, width, height };
+  return { spritePainter: base.spritePainter, create, step, snapshot, presentation, drawPrizes: base.drawPrizes, effectLabel: base.effectLabel, drawAdvanced: base.drawAdvanced, endless: base.endless, width, height };
 }
 
 /** Untrusted relay data is bounded before entering the opaque drawing frame. */
@@ -206,26 +322,36 @@ export function startCooperativeSandbox(engine: ReturnType<typeof createCooperat
   const title = document.getElementById('title')!, status = document.getElementById('status')!, announce = document.getElementById('announce')!, instruction = document.getElementById('instruction')!;
   const start = document.getElementById('start') as HTMLButtonElement, pause = document.getElementById('pause') as HTMLButtonElement, next = document.getElementById('next') as HTMLButtonElement;
   let paintSprite = engine.spritePainter();
-  let spec: CooperativeGameSpec | undefined, seat: 0 | 1 = 0, state: CooperativeState | undefined, connected = false, previous = 0, accumulator = 0, broadcast = 0, inputTimer = 0, seq = 0, remoteSeq = 0, remoteMask = 0, remoteAge = 0, lastMask = -1;
+  let spec: CooperativeGameSpec | undefined, seat: 0 | 1 = 0, state: CooperativeState | undefined, connected = false, previous = 0, accumulator = 0, broadcast = 0, inputTimer = 0, seq = 0, remoteSeq = 0, remoteMask = 0, remotePressed = 0, remoteAge = 0, lastMask = -1;
+  let presentation: ReturnType<typeof createCooperativePresentation> | undefined, delayAnnounced = false;
+  const clock = () => typeof performance !== 'undefined' ? performance.now() : Date.now();
   const keys = new Set<string>(), pressed = new Set<string>();
   const mask = () => Number(keys.has('arrowleft') || keys.has('a') || pressed.has('left')) | Number(keys.has('arrowright') || keys.has('d') || pressed.has('right')) * 2 | Number(keys.has('arrowup') || keys.has('w') || pressed.has('up')) * 4 | Number(keys.has('arrowdown') || keys.has('s') || pressed.has('down')) * 8 | Number(keys.has(' ') || pressed.has('jump')) * 16 | Number(keys.has(' ') || keys.has('z') || pressed.has('fire')) * 32;
-  function clear() { keys.clear(); pressed.clear(); remoteMask = 0; }
+  function clear() { keys.clear(); pressed.clear(); remoteMask = 0; remotePressed = 0; presentation?.reset(); }
+  function emitInput(force = false) {
+    if (seat !== 1 || !spec || !connected && !force) return;
+    const current = mask();
+    if (!force && current === lastMask) return;
+    inputTimer = 0; lastMask = current;
+    parent.postMessage({ type: 'game-coop-input', nonce, seq: ++seq, mask: current }, '*');
+    draw();
+  }
   function emitState() { if (seat === 0 && state) parent.postMessage({ type: 'game-coop-state', nonce, seq: ++seq, state: engine.snapshot(state) }, '*'); }
   function reset(level = state?.levelIndex || 0) { if (!spec || seat !== 0 || !connected) return; state = engine.create(spec, level); state.running = true; state.paused = false; clear(); accumulator = 0; emitState(); draw(); canvas.focus(); }
   start.addEventListener('click', () => reset());
   pause.addEventListener('click', () => { if (seat !== 0 || !state || !connected || !state.running || state.outcome !== 'playing') return; state.paused = !state.paused; clear(); emitState(); draw(); if (!state.paused) canvas.focus(); });
   next.addEventListener('click', () => { if (seat === 0 && state?.outcome === 'won' && spec && state.levelIndex + 1 < spec.levels.length) reset(state.levelIndex + 1); });
-  document.addEventListener('keydown', event => { const key = event.key.toLowerCase(); if (['arrowleft', 'arrowright', 'arrowup', 'arrowdown', 'a', 'd', 'w', 's', ' ', 'z'].includes(key)) { if ((event.target as HTMLElement)?.tagName === 'BUTTON') return; event.preventDefault(); keys.add(key); } });
-  document.addEventListener('keyup', event => { keys.delete(event.key.toLowerCase()); });
+  document.addEventListener('keydown', event => { const key = event.key.toLowerCase(); if (['arrowleft', 'arrowright', 'arrowup', 'arrowdown', 'a', 'd', 'w', 's', ' ', 'z'].includes(key)) { if ((event.target as HTMLElement)?.tagName === 'BUTTON') return; event.preventDefault(); keys.add(key); emitInput(); } });
+  document.addEventListener('keyup', event => { keys.delete(event.key.toLowerCase()); emitInput(); });
   for (const button of document.querySelectorAll<HTMLButtonElement>('[data-control]')) {
     const control = button.dataset.control!;
-    button.addEventListener('pointerdown', event => { event.preventDefault(); button.setPointerCapture(event.pointerId); pressed.add(control); });
-    for (const name of ['pointerup', 'pointercancel', 'lostpointercapture', 'blur']) button.addEventListener(name, () => { pressed.delete(control); });
-    button.addEventListener('keydown', event => { if (event.key === ' ' || event.key === 'Enter') { event.preventDefault(); pressed.add(control); } }); button.addEventListener('keyup', () => pressed.delete(control));
+    button.addEventListener('pointerdown', event => { event.preventDefault(); button.setPointerCapture(event.pointerId); pressed.add(control); emitInput(); });
+    for (const name of ['pointerup', 'pointercancel', 'lostpointercapture', 'blur']) button.addEventListener(name, () => { pressed.delete(control); emitInput(); });
+    button.addEventListener('keydown', event => { if (event.key === ' ' || event.key === 'Enter') { event.preventDefault(); pressed.add(control); emitInput(); } }); button.addEventListener('keyup', () => { pressed.delete(control); emitInput(); });
   }
   // Focusing the invitation or another window releases this player's controls;
   // it must not freeze the other player's still-connected adventure.
-  function blur() { keys.clear(); pressed.clear(); if (seat === 1) parent.postMessage({ type: 'game-coop-input', nonce, seq: ++seq, mask: 0 }, '*'); }
+  function blur() { keys.clear(); pressed.clear(); presentation?.reset(); emitInput(true); }
   window.addEventListener('blur', blur);
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden) return;
@@ -243,7 +369,7 @@ export function startCooperativeSandbox(engine: ReturnType<typeof createCooperat
     const data = event.data, exact = (fields: string[]) => Object.keys(data).length === fields.length && fields.every(key => Object.prototype.hasOwnProperty.call(data, key));
     if (data.type === 'game-coop-load' && !spec && exact(['type', 'nonce', 'spec', 'seat']) && (data.seat === 0 || data.seat === 1)) {
       try {
-        const loaded = validate(data.spec); if (loaded.version !== 4 && !((loaded.version === 5 || loaded.version === 6) && loaded.multiplayer)) return; spec = loaded as CooperativeGameSpec; paintSprite = engine.spritePainter(spec.sprites); seat = data.seat;
+        const loaded = validate(data.spec); if (loaded.version !== 4 && !((loaded.version === 5 || loaded.version === 6) && loaded.multiplayer)) return; spec = loaded as CooperativeGameSpec; paintSprite = engine.spritePainter(spec.sprites); seat = data.seat; if (seat === 1) presentation = engine.presentation(spec);
         state = engine.create(spec); title.textContent = `${spec.title} · Cooperative play`; instruction.textContent = `You are Player ${seat + 1}. Both players collect their own goal. Shared world; separate lives and points. No friendly fire. The host starts and pauses each level. If a player runs out of lives before finishing their goal, restart the level to try together again.`;
         if (engine.endless(spec)) instruction.textContent = `You are Player ${seat + 1}. Survive together for as long as possible. Difficulty rises every ${spec.asteroids!.difficultyInterval} active seconds. The run ends when both ships lose all lives. Shared world; separate lives and points; no friendly fire. The authored treasure goal and timer do not end this run.`;
         document.getElementById('jump')!.hidden = spec.genre !== 'platformer'; document.getElementById('fire')!.hidden = !spec.arcade?.shooting;
@@ -255,25 +381,29 @@ export function startCooperativeSandbox(engine: ReturnType<typeof createCooperat
     } else if (data.type === 'game-coop-peer' && exact(['type', 'nonce', 'connected']) && typeof data.connected === 'boolean') {
       connected = data.connected; clear(); lastMask = -1; inputTimer = 0;
       if (state && seat === 0) { if (!connected) state.paused = true; emitState(); }
+      else if (connected) emitInput(true);
       announce.textContent = connected ? seat === 0 ? 'Partner connected. Start or resume when ready.' : 'Connected. The host starts or resumes the game.' : 'Waiting for your partner. Play is paused.';
       // Connection callbacks can arrive while the browser defers this frame's
       // animation loop. Admission must update controls and canvas immediately.
       draw();
-    } else if (spec && data.type === 'game-coop-input' && seat === 0 && exact(['type', 'nonce', 'seq', 'mask']) && Number.isInteger(data.seq) && data.seq > remoteSeq && data.seq <= 10000000 && Number.isInteger(data.mask) && data.mask >= 0 && data.mask <= 63) { remoteSeq = data.seq; remoteMask = connected ? data.mask : 0; remoteAge = 0; }
-    else if (spec && data.type === 'game-coop-state' && seat === 1 && exact(['type', 'nonce', 'seq', 'state']) && Number.isInteger(data.seq) && data.seq > remoteSeq && data.seq <= 10000000) { const checked = validateState(data.state, spec); if (checked) { remoteSeq = data.seq; state = checked; draw(); } }
+    } else if (spec && data.type === 'game-coop-input' && seat === 0 && exact(['type', 'nonce', 'seq', 'mask', ...(Object.prototype.hasOwnProperty.call(data, 'pressedMask') ? ['pressedMask'] : [])]) && Number.isInteger(data.seq) && data.seq > remoteSeq && data.seq <= 10000000 && Number.isInteger(data.mask) && data.mask >= 0 && data.mask <= 63 && (!Object.prototype.hasOwnProperty.call(data, 'pressedMask') || Number.isInteger(data.pressedMask) && data.pressedMask >= 0 && data.pressedMask <= 63)) { remoteSeq = data.seq; remoteMask = connected ? data.mask : 0; remotePressed |= connected ? data.pressedMask || 0 : 0; remoteAge = 0; }
+    else if (spec && data.type === 'game-coop-state' && seat === 1 && exact(['type', 'nonce', 'seq', 'state']) && Number.isInteger(data.seq) && data.seq > remoteSeq && data.seq <= 10000000) { const checked = validateState(data.state, spec); if (checked) { remoteSeq = data.seq; state = checked; presentation?.receive(checked, clock()); draw(); } }
   });
   function draw() {
-    if (!ctx || !state || !spec) return;
-    const level = spec.levels[state.levelIndex], dark = level.theme === 'space';
+    const view = seat === 1 && connected ? presentation?.render(mask(), clock()) ?? state : state;
+    if (seat === 1 && connected && presentation?.isStale()) { announce.textContent = 'Live updates are delayed. Waiting for a fresh host update.'; delayAnnounced = true; }
+    else if (delayAnnounced && connected) { announce.textContent = 'Connected. The host starts or resumes the game.'; delayAnnounced = false; }
+    if (!ctx || !view || !spec) return;
+    const level = spec.levels[view.levelIndex], dark = level.theme === 'space';
     ctx.fillStyle = dark ? '#211d3e' : level.theme === 'garden' ? '#f6f1cf' : '#e4f2e8'; ctx.fillRect(0, 0, 960, 540);
     ctx.fillStyle = dark ? '#baaddb' : '#38796c'; for (let i = 0; i < 25; i++) { ctx.beginPath(); ctx.arc((i * 139 + 31) % 960, (i * 83 + 57) % 520, dark ? 2 : 3, 0, Math.PI * 2); ctx.fill(); }
-    ctx.fillStyle = dark ? '#887da5' : '#6a8547'; for (const platform of state.platforms) ctx.fillRect(platform.x, platform.y, platform.w, platform.h);
-    for (const entity of state.entities) { if (paintSprite(ctx, entity.kind === 'snack' ? 'reward' : 'asteroid', entity.x, entity.y, entity.w, entity.h)) continue; ctx.fillStyle = entity.kind === 'snack' ? '#ecc96b' : entity.asteroid === 'medium' ? '#bc9382' : entity.asteroid === 'small' ? '#8eabb0' : '#9b82a7'; ctx.strokeStyle = '#4b4458'; ctx.lineWidth = 2; ctx.beginPath(); if (entity.kind === 'snack') { const x = entity.x + entity.w / 2, y = entity.y + entity.h / 2; ctx.moveTo(x, y - 12); ctx.lineTo(x + 11, y); ctx.lineTo(x, y + 12); ctx.lineTo(x - 11, y); ctx.closePath(); } else ctx.ellipse(entity.x + entity.w / 2, entity.y + entity.h / 2, entity.w / 2, entity.h / 2, 0.3, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); }
-    if (state.advanced) engine.drawAdvanced(ctx,state.advanced,paintSprite);
-    if (state.powerUps) engine.drawPrizes(ctx, state.powerUps.pickups, paintSprite);
-    for (const bullet of state.bullets) { ctx.strokeStyle = bullet.owner === 0 ? '#f6c6de' : '#7edbed'; ctx.lineWidth = 5; ctx.beginPath(); ctx.moveTo(bullet.x - bullet.vx / 60, bullet.y - bullet.vy / 60); ctx.lineTo(bullet.x, bullet.y); ctx.stroke(); }
-    state.players.forEach((player, index) => {
-      if (!player.lives || player.invulnerable > 0 && Math.floor(state!.elapsed * 9) % 2) return;
+    ctx.fillStyle = dark ? '#887da5' : '#6a8547'; for (const platform of view.platforms) ctx.fillRect(platform.x, platform.y, platform.w, platform.h);
+    for (const entity of view.entities) { if (paintSprite(ctx, entity.kind === 'snack' ? 'reward' : 'asteroid', entity.x, entity.y, entity.w, entity.h)) continue; ctx.fillStyle = entity.kind === 'snack' ? '#ecc96b' : entity.asteroid === 'medium' ? '#bc9382' : entity.asteroid === 'small' ? '#8eabb0' : '#9b82a7'; ctx.strokeStyle = '#4b4458'; ctx.lineWidth = 2; ctx.beginPath(); if (entity.kind === 'snack') { const x = entity.x + entity.w / 2, y = entity.y + entity.h / 2; ctx.moveTo(x, y - 12); ctx.lineTo(x + 11, y); ctx.lineTo(x, y + 12); ctx.lineTo(x - 11, y); ctx.closePath(); } else ctx.ellipse(entity.x + entity.w / 2, entity.y + entity.h / 2, entity.w / 2, entity.h / 2, 0.3, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); }
+    if (view.advanced) engine.drawAdvanced(ctx,view.advanced,paintSprite);
+    if (view.powerUps) engine.drawPrizes(ctx, view.powerUps.pickups, paintSprite);
+    for (const bullet of view.bullets) { ctx.strokeStyle = bullet.owner === 0 ? '#f6c6de' : '#7edbed'; ctx.lineWidth = 5; ctx.beginPath(); ctx.moveTo(bullet.x - bullet.vx / 60, bullet.y - bullet.vy / 60); ctx.lineTo(bullet.x, bullet.y); ctx.stroke(); }
+    view.players.forEach((player, index) => {
+      if (!player.lives || player.invulnerable > 0 && Math.floor(view!.elapsed * 9) % 2) return;
       if (player.effects?.shield) { ctx.strokeStyle = '#36cad7'; ctx.lineWidth = 4; ctx.beginPath(); ctx.arc(player.x + 21, player.y + 17, 34, 0, Math.PI * 2); ctx.stroke(); }
       ctx.save(); ctx.translate(player.x + 21, player.y + 17); ctx.fillStyle = index === 0 ? spec!.player.color : '#63cadd'; ctx.strokeStyle = dark ? '#fffaf0' : '#254e45'; ctx.lineWidth = index === seat ? 4 : 2;
       if (spec!.arcade?.shooting || spec!.arcade?.rotation) ctx.rotate(player.angle + Math.PI / 2);
@@ -282,18 +412,18 @@ export function startCooperativeSandbox(engine: ReturnType<typeof createCooperat
       else { ctx.beginPath(); ctx.ellipse(0, 0, 21, 17, 0, 0, Math.PI * 2); } ctx.fill(); ctx.stroke(); ctx.restore(); }
       ctx.fillStyle = dark ? '#fffaf0' : '#254e45'; ctx.font = 'bold 16px system-ui'; ctx.textAlign = 'center'; ctx.fillText(`P${index + 1}`, player.x + 21, player.y - 12);
     });
-    if (!connected || !state.running || state.paused || state.outcome !== 'playing') {
-      ctx.fillStyle = dark ? '#211d3ed9' : '#fffaf0df'; ctx.fillRect(0, 0, 960, 540); ctx.fillStyle = dark ? '#fffaf0' : '#254e45'; ctx.textAlign = 'center'; ctx.font = 'bold 34px system-ui'; ctx.fillText(!connected ? 'Waiting for your partner' : !state.running ? 'Two explorers. One adventure.' : state.paused ? 'Cooperative play paused' : state.outcome === 'won' ? 'Both goals complete!' : 'Try this adventure again', 480, 245); ctx.font = '20px system-ui'; ctx.fillText(seat === 0 ? 'Use the host controls below.' : 'The host starts or resumes the level.', 480, 285);
+    if (!connected || !view.running || view.paused || view.outcome !== 'playing') {
+      ctx.fillStyle = dark ? '#211d3ed9' : '#fffaf0df'; ctx.fillRect(0, 0, 960, 540); ctx.fillStyle = dark ? '#fffaf0' : '#254e45'; ctx.textAlign = 'center'; ctx.font = 'bold 34px system-ui'; ctx.fillText(!connected ? 'Waiting for your partner' : !view.running ? 'Two explorers. One adventure.' : view.paused ? 'Cooperative play paused' : view.outcome === 'won' ? 'Both goals complete!' : 'Try this adventure again', 480, 245); ctx.font = '20px system-ui'; ctx.fillText(seat === 0 ? 'Use the host controls below.' : 'The host starts or resumes the level.', 480, 285);
     }
-    const labels = state.players.map((p, index) => `Player ${index + 1}${index === seat ? ' (you)' : ''}: ${engine.endless(spec!) ? `${p.score} collected` : `${p.score}/${level.rules.goal} goal`} · ${p.lives} lives${spec!.arcade?.scoring ? ` · ${p.points} points` : ''}${p.effects ? ` · ${engine.effectLabel(p.effects,engine.endless(spec!))}` : ''}`);
-    status.textContent = engine.endless(spec) ? `Survival ${Math.floor(state.elapsed / 60)}:${String(Math.floor(state.elapsed%60)).padStart(2,'0')} · Difficulty ${state.advanced!.difficulty}` : `Level ${state.levelIndex + 1}/${spec.levels.length} · ${Math.max(0, Math.ceil(level.rules.timeLimit - state.elapsed))}s remaining`;
+    const labels = view.players.map((p, index) => `Player ${index + 1}${index === seat ? ' (you)' : ''}: ${engine.endless(spec!) ? `${p.score} collected` : `${p.score}/${level.rules.goal} goal`} · ${p.lives} lives${spec!.arcade?.scoring ? ` · ${p.points} points` : ''}${p.effects ? ` · ${engine.effectLabel(p.effects,engine.endless(spec!))}` : ''}`);
+    status.textContent = engine.endless(spec) ? `Survival ${Math.floor(view.elapsed / 60)}:${String(Math.floor(view.elapsed%60)).padStart(2,'0')} · Difficulty ${view.advanced!.difficulty}` : `Level ${view.levelIndex + 1}/${spec.levels.length} · ${Math.max(0, Math.ceil(level.rules.timeLimit - view.elapsed))}s remaining`;
     document.getElementById('player-1')!.textContent = labels[0]; document.getElementById('player-2')!.textContent = labels[1];
-    start.disabled = !connected; start.textContent = state.running ? 'Restart level' : 'Start together'; pause.disabled = !connected || !state.running || state.outcome !== 'playing'; pause.textContent = state.paused ? 'Resume together' : 'Pause together'; next.hidden = seat !== 0 || state.outcome !== 'won' || state.levelIndex + 1 >= spec.levels.length;
+    start.disabled = !connected; start.textContent = view.running ? 'Restart level' : 'Start together'; pause.disabled = !connected || !view.running || view.outcome !== 'playing'; pause.textContent = view.paused ? 'Resume together' : 'Pause together'; next.hidden = seat !== 0 || view.outcome !== 'won' || view.levelIndex + 1 >= spec.levels.length;
   }
   function frame(now: number) {
     const dt = previous ? Math.min((now - previous) / 1000, 0.1) : 0; previous = now;
     remoteAge += dt;
-    if (seat === 0 && state && spec && connected && state.running && !state.paused && state.outcome === 'playing') { accumulator += dt; while (accumulator >= 1 / 60) { engine.step(state, spec, [mask(), remoteAge <= 0.5 ? remoteMask : 0], 1 / 60); accumulator -= 1 / 60; } } else accumulator = 0;
+    if (seat === 0 && state && spec && connected && state.running && !state.paused && state.outcome === 'playing') { accumulator += dt; while (accumulator >= 1 / 60) { engine.step(state, spec, [mask(), remoteAge <= 0.5 ? remoteMask | remotePressed : 0], 1 / 60); remotePressed = 0; accumulator -= 1 / 60; } } else { accumulator = 0; remotePressed = 0; }
     broadcast += dt; inputTimer += dt;
     // Active worlds stay responsive; a paused world needs only an occasional
     // resync. Changes to start, pause and connection state emit immediately.
@@ -301,7 +431,7 @@ export function startCooperativeSandbox(engine: ReturnType<typeof createCooperat
     if (seat === 0 && connected && broadcast >= stateInterval) { broadcast = 0; emitState(); }
     // Released controls do not need continuous zero packets. Held controls
     // refresh before the host's existing half-second stale-input watchdog.
-    if (seat === 1 && connected && spec && (mask() !== lastMask || mask() !== 0 && inputTimer >= 0.2)) { inputTimer = 0; lastMask = mask(); parent.postMessage({ type: 'game-coop-input', nonce, seq: ++seq, mask: lastMask }, '*'); }
+    if (seat === 1 && connected && spec && (mask() !== lastMask || mask() !== 0 && inputTimer >= 0.2)) emitInput(true);
     draw(); requestAnimationFrame(frame);
   }
   parent.postMessage({ type: 'game-coop-ready', nonce }, '*'); requestAnimationFrame(frame);
@@ -309,5 +439,5 @@ export function startCooperativeSandbox(engine: ReturnType<typeof createCooperat
 
 export function cooperativeGameSandboxDocument(nonce: string): string {
   if (!/^[a-zA-Z0-9_-]{16,100}$/u.test(nonce)) throw new Error('A safe random game nonce is required.');
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-${nonce}'; style-src 'unsafe-inline'; connect-src 'none'; img-src 'none'; media-src 'none'; font-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'; worker-src 'none'"><style>*{box-sizing:border-box}body{margin:0;background:#fffaf0;color:#254e45;font:15px/1.4 system-ui}main{padding:12px}h2{font-size:20px;margin:0 0 6px}canvas{display:block;width:100%;aspect-ratio:16/9;border-radius:10px;outline-offset:3px}button{font:inherit;min-height:44px;min-width:56px;padding:8px 15px;border:1px solid #497267;border-radius:8px;background:#fffaf0;color:#254e45;cursor:pointer;touch-action:none;user-select:none}button:disabled{opacity:.5;cursor:default}button:focus-visible,canvas:focus-visible{outline:3px solid #a94c7b}.buttons,.touch,.players{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin:10px 0}.players>div{flex:1;min-width:240px;padding:8px;border-radius:8px;border:2px solid #b96e98;font-weight:600}.players>div+div{border-color:#2995aa}#status{font-weight:700}#instruction,#controls-help{font-size:13px}#announce{text-align:center;min-height:24px}[hidden]{display:none!important}${gameCanvasViewportStyles}</style></head><body><main><h2 id="title">Loading cooperative game…</h2><div id="status"></div><div class="players"><div id="player-1"></div><div id="player-2"></div></div><p id="instruction"></p><canvas id="game" width="960" height="540" tabindex="0" aria-label="Cooperative game. Separate Player 1 and Player 2 characters share this world."></canvas><div class="buttons"><button id="start" disabled>Start together</button><button id="pause" disabled>Pause together</button><button id="next" hidden>Next level</button></div><div class="touch" aria-label="Your movement controls"><button data-control="left" aria-label="Move left">←</button><button data-control="up" aria-label="Move up or jump">↑</button><button data-control="down" aria-label="Move down">↓</button><button data-control="right" aria-label="Move right">→</button><button data-control="jump" id="jump">Jump</button><button data-control="fire" id="fire" hidden>Fire</button></div><p id="announce" role="status" aria-live="polite">Waiting for your partner.</p><p id="controls-help"></p></main><script nonce="${nonce}">const __name=(fn)=>fn;(${installGameDisplayKeyboardBridge.toString()})("${nonce}");(${startCooperativeSandbox.toString()})((${createCooperativeEngine.toString()})((${createGameEngine.toString()})()),(${validateArcadeGameSpec.toString()}),(${validateCooperativeState.toString()}),"${nonce}");</script></body></html>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-${nonce}'; style-src 'unsafe-inline'; connect-src 'none'; img-src 'none'; media-src 'none'; font-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'; worker-src 'none'"><style>*{box-sizing:border-box}body{margin:0;background:#fffaf0;color:#254e45;font:15px/1.4 system-ui}main{padding:12px}h2{font-size:20px;margin:0 0 6px}canvas{display:block;width:100%;aspect-ratio:16/9;border-radius:10px;outline-offset:3px}button{font:inherit;min-height:44px;min-width:56px;padding:8px 15px;border:1px solid #497267;border-radius:8px;background:#fffaf0;color:#254e45;cursor:pointer;touch-action:none;user-select:none}button:disabled{opacity:.5;cursor:default}button:focus-visible,canvas:focus-visible{outline:3px solid #a94c7b}.buttons,.touch,.players{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin:10px 0}.players>div{flex:1;min-width:240px;padding:8px;border-radius:8px;border:2px solid #b96e98;font-weight:600}.players>div+div{border-color:#2995aa}#status{font-weight:700}#instruction,#controls-help{font-size:13px}#announce{text-align:center;min-height:24px}[hidden]{display:none!important}${gameCanvasViewportStyles}</style></head><body><main><h2 id="title">Loading cooperative game…</h2><div id="status"></div><div class="players"><div id="player-1"></div><div id="player-2"></div></div><p id="instruction"></p><canvas id="game" width="960" height="540" tabindex="0" aria-label="Cooperative game. Separate Player 1 and Player 2 characters share this world."></canvas><div class="buttons"><button id="start" disabled>Start together</button><button id="pause" disabled>Pause together</button><button id="next" hidden>Next level</button></div><div class="touch" aria-label="Your movement controls"><button data-control="left" aria-label="Move left">←</button><button data-control="up" aria-label="Move up or jump">↑</button><button data-control="down" aria-label="Move down">↓</button><button data-control="right" aria-label="Move right">→</button><button data-control="jump" id="jump">Jump</button><button data-control="fire" id="fire" hidden>Fire</button></div><p id="announce" role="status" aria-live="polite">Waiting for your partner.</p><p id="controls-help"></p></main><script nonce="${nonce}">const __name=(fn)=>fn;(${installGameDisplayKeyboardBridge.toString()})("${nonce}");(${startCooperativeSandbox.toString()})((${createCooperativeEngine.toString()})((${createGameEngine.toString()})(),(${createCooperativePresentation.toString()})),(${validateArcadeGameSpec.toString()}),(${validateCooperativeState.toString()}),"${nonce}");</script></body></html>`;
 }

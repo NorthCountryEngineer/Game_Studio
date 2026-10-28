@@ -5,8 +5,9 @@ import WebSocket from 'ws';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
 import { fileURLToPath } from 'node:url';
-import { createCooperativeEngine } from '../src/lib/game-cooperative.ts';
+import { createCooperativeEngine, validateCooperativeState } from '../src/lib/game-cooperative.ts';
 import { createPublicationBinding } from '../src/lib/game-scoring.ts';
+import { connectMultiplayer, validateMultiplayerRoom } from '../src/lib/game-multiplayer.ts';
 
 
 const reuse = process.argv.includes('--reuse');
@@ -60,6 +61,58 @@ async function check() {
     const until = predicate => { const existing = messages.find(predicate); if (existing) return Promise.resolve(existing); return new Promise((resolve, reject) => { const wait = { predicate, resolve, timeout: setTimeout(() => reject(new Error('Timed out waiting for the local relay.')), 5000) }; waits.push(wait); }); };
     return { socket, until, observed: () => [...messages], clear: () => { messages.length = 0; }, send: value => socket.send(JSON.stringify(value)) };
   }
+  async function delayedClientRehearsal() {
+    const response = await request('/multiplayer/rooms', 'POST', { gameId: fixture.id, publishedRevision: fixture.publishedRevision });
+    assert.equal(response.status, 200); const rawHost = await response.json();
+    const joined = await request(`/multiplayer/rooms/${rawHost.roomId}/join`, 'POST', { ...joining, inviteToken: rawHost.inviteToken });
+    assert.equal(joined.status, 200); const rawGuest = await joined.json();
+    const hostRoom = validateMultiplayerRoom(rawHost, 0, true), guestRoom = validateMultiplayerRoom(rawGuest, 1, true);
+    assert.ok(hostRoom && guestRoom);
+    const timers = new Set(), clients = [], received = [], controls = [], statuses = [], started = Date.now();
+    let mask = 0, production = 0;
+    const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
+    async function until(predicate) { const deadline = Date.now() + 5000; while (!predicate() && Date.now() < deadline) await pause(5); assert.ok(predicate(), 'delayed real-client rehearsal reached its expected state'); }
+    function later(fn, ms) { const timer = setTimeout(() => { timers.delete(timer); fn(); }, ms); timers.add(timer); }
+    function delayedSocket(url) {
+      const socket = new WebSocket(url, { origin }); sockets.push(socket);
+      const view = { get readyState() { return socket.readyState; }, onopen: null, onmessage: null, onclose: null, onerror: null,
+        send(raw) { const message = JSON.parse(raw); if (message.type === 'join') socket.send(raw); else later(() => { if (socket.readyState === 1) socket.send(raw); }, 80); },
+        close(code) { socket.close(code); },
+      };
+      socket.on('open', () => view.onopen?.({})); socket.on('error', () => view.onerror?.({})); socket.on('close', () => view.onclose?.({}));
+      socket.on('message', raw => { const data = raw.toString(), message = JSON.parse(data); later(() => view.onmessage?.({ data }), message.type === 'ack' ? 480 : 80); });
+      return view;
+    }
+    const engine = createCooperativeEngine(), world = engine.create(fixture.spec); world.running = true; world.paused = false;
+    // Stable synthetic space keeps this transport measurement independent of collisions.
+    world.entities = []; world.nextSnack = world.nextHazard = 1;
+    function client(room) { const value = connectMultiplayer(room, { validateState: value => Boolean(validateCooperativeState(value, fixture.spec)),
+      socketFactory: delayedSocket, onStatus: status => statuses.push([room.seat, status]), onPeer: () => {},
+      onInput: (seq, value, pressedMask) => { mask = value; controls.push({ seq, mask: value, pressedMask, at: Date.now() - started }); },
+      onState: (seq, value) => { received.push({ seq, state: value }); },
+    }); clients.push(value); return value; }
+    const hostClient = client(hostRoom), guestClient = client(guestRoom);
+    let physics, snapshots;
+    try {
+      await until(() => statuses.some(([seat, status]) => seat === 0 && status === 'connected') && statuses.some(([seat, status]) => seat === 1 && status === 'connected'));
+      guestClient.sendInput(1, 0);
+      later(() => guestClient.sendInput(2, 2), 20);
+      later(() => guestClient.sendInput(3, 0), 80);
+      physics = setInterval(() => { engine.step(world, fixture.spec, [0, mask], 1 / 60); }, 1000 / 60);
+      snapshots = setInterval(() => hostClient.sendState(++production, engine.snapshot(world)), 100);
+      await until(() => controls.some(value => value.seq >= 3));
+      assert.ok(controls.some(value => value.mask & 2 || value.pressedMask & 2), 'a 60 ms tap survives an outstanding ACK and reaches the real host client');
+      assert.equal(controls.at(-1).mask, 0, 'the newest release reaches the host');
+      await pause(1600);
+      assert.ok(received.length >= 12, `delayed ACKs must not collapse the 10 Hz snapshot stream: ${received.length} snapshots`);
+      assert.ok(received.every((value, index) => index === 0 || value.seq > received[index - 1].seq));
+      assert.equal(statuses.some(([, status]) => ['ended', 'expired', 'reconnecting'].includes(status)), false, 'supported latency keeps the same room connected');
+      console.log(`PASS: actual connectMultiplayer clients over real loopback WebSockets preserved a 60 ms tap/release and received ${received.length} host snapshots with 80 ms each-way delay and 400 ms additional ACK delay.`);
+    } finally {
+      clearInterval(physics); clearInterval(snapshots); for (const value of clients) value.close(); for (const timer of timers) clearTimeout(timer);
+      assert.equal((await request(`/multiplayer/rooms/${rawHost.roomId}`, 'DELETE', { hostToken: rawHost.hostToken })).status, 200);
+    }
+  }
   try {
     const host = connect(created.hostToken), second = connect(guest.guestToken);
     const legacyReady = await host.until(m => m.type === 'ready'); assert.equal(legacyReady.seat, 0); assert.equal(legacyReady.expiresAt, created.expiresAt); assert.equal((await second.until(m => m.type === 'ready')).seat, 1);
@@ -98,6 +151,8 @@ async function check() {
     host.clear(); second.socket.close(1000); await host.until(m => m.type === 'peer' && !m.connected);
     assert.equal((await request(`/multiplayer/rooms/${created.roomId}`, 'DELETE', { hostToken: created.hostToken })).status, 200);
     await host.until(m => m.type === 'closed');
+
+    await delayedClientRehearsal();
 
     const publicResponse = await request('/multiplayer/rooms', 'POST', { gameId: fixture.id, publishedRevision: fixture.publishedRevision, visibility: 'public' });
     assert.equal(publicResponse.status, 200); const publicRoom = await publicResponse.json();
