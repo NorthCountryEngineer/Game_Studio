@@ -39,17 +39,40 @@ def binding(stack, resources, application):
             raise RuntimeError('The existing application identity is invalid.')
     return {'ApplicationIdentifier': application,
             'ApplicationOrigin': deployment.exact_origin(values.get('ApplicationOrigin', '')),
+            'LegacyApplicationOrigin': '',
             'CoreOrganizationId': values['CoreOrganizationId'], 'CoreServiceId': values['CoreServiceId'],
             'PublishedGamesTable': table[0], 'LambdaCodeBucket': values['LambdaCodeBucket']}
 
 
 def preserve_binding(previous, values):
     if not previous:
+        if values.get('LegacyApplicationOrigin'):
+            raise RuntimeError('A compatibility origin requires a separately reviewed origin migration.')
+        values['LegacyApplicationOrigin'] = ''
         return
     old = {row['ParameterKey']: row['ParameterValue'] for row in previous.get('Parameters', [])}
     for key in ['ApplicationIdentifier', 'ApplicationOrigin', 'CoreOrganizationId', 'CoreServiceId', 'PublishedGamesTable']:
         if old.get(key) != values[key]:
             raise RuntimeError('An extension cannot be reassigned to a different application, origin or table.')
+    legacy = old.get('LegacyApplicationOrigin', '')
+    if not isinstance(legacy, str):
+        raise RuntimeError('The existing compatibility origin is invalid.')
+    if legacy:
+        deployment.exact_origin(legacy)
+        if legacy == values['ApplicationOrigin']:
+            raise RuntimeError('The compatibility origin must differ from the primary origin.')
+    if values.get('LegacyApplicationOrigin', '') not in {'', legacy}:
+        raise RuntimeError('A compatibility origin requires a separately reviewed origin migration.')
+    # Routine code releases retain an already reviewed alias; they cannot add,
+    # change or silently remove the domain-migration binding.
+    values['LegacyApplicationOrigin'] = legacy
+
+
+def public_configuration(outputs, values):
+    result = {'version': 1, 'apiUrl': outputs['ApiUrl']}
+    if values.get('LegacyApplicationOrigin'):
+        result['legacyApplicationOrigin'] = deployment.exact_origin(values['LegacyApplicationOrigin'])
+    return result
 
 
 def parser():
@@ -115,7 +138,7 @@ def main(argv=None):
         raise RuntimeError('The existing Core application stack changed during this isolated extension release.')
     receipt = {'status': 'VERIFIED', 'sourceCommit': commit, 'archiveSha256': digest,
                'coreStackUnchanged': True, 'applicationId': args.application_id, 'outputs': outputs,
-               'publicConfig': {'version': 1, 'apiUrl': outputs['ApiUrl']}}
+               'publicConfig': public_configuration(outputs, values)}
     deployment.save(operation.directory / 'multiplayer-release.json', receipt)
     print('Relay verified. Review and copy receipt.publicConfig to public/multiplayer-config.json, then release the frontend through Core.')
     return 0

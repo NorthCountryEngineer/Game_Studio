@@ -29,6 +29,13 @@
       "AllowedPattern": "^https://[a-z0-9.-]+$",
       "Description": "Exact existing Game Studio frontend; WebSocket Origin and HTTP CORS allowlist."
     },
+    "LegacyApplicationOrigin": {
+      "Type": "String",
+      "Default": "",
+      "MaxLength": 255,
+      "AllowedPattern": "^$|^https://[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*$",
+      "Description": "Optional exact prior frontend origin retained by a reviewed domain migration; no wildcard, port or path."
+    },
     "CoreOrganizationId": {
       "Type": "String",
       "AllowedPattern": "^[a-f0-9-]{36}$",
@@ -53,6 +60,19 @@
       "Type": "String",
       "AllowedPattern": "^code/multiplayer/[a-f0-9]{40}/[a-f0-9]{64}/api.zip$",
       "Description": "Immutable exact reviewed source archive path."
+    }
+  },
+  "Conditions": {
+    "HasLegacyApplicationOrigin": {
+      "Fn::Not": [{"Fn::Equals": [{"Ref": "LegacyApplicationOrigin"}, ""]}]
+    }
+  },
+  "Rules": {
+    "DistinctFrontendOrigins": {
+      "Assertions": [{
+        "Assert": {"Fn::Not": [{"Fn::Equals": [{"Ref": "ApplicationOrigin"}, {"Ref": "LegacyApplicationOrigin"}]}]},
+        "AssertDescription": "The optional legacy frontend origin must differ from the primary frontend origin."
+      }]
     }
   },
   "Resources": {
@@ -221,7 +241,8 @@
           "why": "Shares the exact reviewed declarative game validator with the app; only ephemeral network coordination.",
           "must": [
             "No live provider calls or private identity/client credentials.",
-            "Fixed callback URL from this stack, never event-supplied."
+            "Fixed callback URL from this stack, never event-supplied.",
+            "Primary frontend binding and optional distinct legacy alias must agree with exact origin admission; no request-selected aliases."
           ]
         }
       },
@@ -263,6 +284,9 @@
             },
             "APPLICATION_ORIGIN": {
               "Ref": "ApplicationOrigin"
+            },
+            "LEGACY_FRONTEND_ORIGIN": {
+              "Ref": "LegacyApplicationOrigin"
             },
             "MULTIPLAYER_TABLE": {
               "Ref": "Rooms"
@@ -489,7 +513,8 @@
         "com.aws.cloudformation.Context": {
           "why": "Public capability-scoped room coordination at the exact application origin.",
           "must": [
-            "No cookies, Core bearer credentials or broad CORS allowlist."
+            "No cookies, Core bearer credentials or broad CORS allowlist.",
+            "Only the primary origin and one separately reviewed legacy origin may use room HTTP and WebSocket admission."
           ]
         }
       },
@@ -499,11 +524,7 @@
         },
         "ProtocolType": "HTTP",
         "CorsConfiguration": {
-          "AllowOrigins": [
-            {
-              "Ref": "ApplicationOrigin"
-            }
-          ],
+          "AllowOrigins": {"Fn::If": ["HasLegacyApplicationOrigin", [{"Ref": "ApplicationOrigin"}, {"Ref": "LegacyApplicationOrigin"}], [{"Ref": "ApplicationOrigin"}]]},
           "AllowMethods": [
             "POST",
             "DELETE",
