@@ -7,7 +7,7 @@ Exports:
 - `createCreatorURL(studioOrigin, {hostId?, gameId?, autoLogin?})`: full-page administrative creator link. `autoLogin: true` requires a configured host ID and requests one bounded Core SSO redirect, using Game Studio's own audience and permissions.
 - `createHostSelectionURL(hostOrigin, returnPath, studioOrigin, gameId, publishedRevision)` and `readGameSelection(locationURL, expectedStudioOrigin)`: public game selection handoff.
 - `createEmbedURL(studioOrigin, gameId, {hostId?, channel?})`: public player URL.
-- `mountGame(container, {studioOrigin, hostId, gameId, title?, onEvent?})`: create the frame and validated event listener; returns `{iframe, destroy()}`.
+- `mountGame(container, {studioOrigin, hostId, gameId, title?, onEvent?})`: create the frame and validated event listener; returns `{iframe, destroy()}`. The frame delegates fullscreen only to its configured studio origin; gameplay and completion messages retain their existing boundaries.
 - `listPublishedGames(apiOrigin, {signal?})`: paginated public catalog.
 - `parseGameStudioEvent(value)`: strict validation of version 1 events and the explicit version 2 completion envelope for advanced Asteroids (game format 6). Version 2 includes `specVersion: 6` and `mode: 'endless' | 'levels'`; endless runs report a loss when lives run out. Older hosts can keep playing embeds while ignoring unfamiliar completion events. Update the SDK before consuming these new observations.
 - `validateScoringPolicy(value)`: strict normalized version 1 host assignment rules.

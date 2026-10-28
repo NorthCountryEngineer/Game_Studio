@@ -2,6 +2,7 @@
 import {mountGame,createCreatorURL,readGameSelection} from 'http://127.0.0.1:5180/sdk/game-studio.js';
 const studioOrigin='http://127.0.0.1:5180',hostId='local-school';
 document.querySelector('#creator').href=createCreatorURL(studioOrigin,{hostId});
+// mountGame delegates fullscreen to studioOrigin while retaining strict event checks.
 let player;
 function launch(){try{player?.destroy();player=mountGame(document.querySelector('#lesson-game'),{studioOrigin,hostId,gameId:document.querySelector('#game-id').value.trim(),onEvent(data){document.querySelector('#result').textContent=JSON.stringify(data,null,2);}});}catch(error){document.querySelector('#result').textContent=error.message;}}
 document.querySelector('#launch').addEventListener('submit',event=>{event.preventDefault();launch();});
