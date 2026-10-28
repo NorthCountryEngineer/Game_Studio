@@ -163,6 +163,85 @@ async function check() {
       assert.equal((await request(`/multiplayer/rooms/${rawHost.roomId}`, 'DELETE', { hostToken: rawHost.hostToken })).status, 200);
     }
   }
+  async function busyClientRehearsal() {
+    const response = await request('/multiplayer/rooms', 'POST', { gameId: fixture.id, publishedRevision: fixture.publishedRevision });
+    assert.equal(response.status, 200); const rawHost = await response.json();
+    const joined = await request(`/multiplayer/rooms/${rawHost.roomId}/join`, 'POST', { ...joining, inviteToken: rawHost.inviteToken });
+    assert.equal(joined.status, 200); const rawGuest = await joined.json();
+    const hostRoom = validateMultiplayerRoom(rawHost, 0, true), guestRoom = validateMultiplayerRoom(rawGuest, 1, true); assert.ok(hostRoom && guestRoom);
+    const timers = new Set(), clients = [], statuses = [], peers = [[], []], received = [], controls = [], blocked = [], forwarded = [[], []], observed = [[], []];
+    const retryAfterMs = 120, pause = ms => new Promise(resolve => setTimeout(resolve, ms));
+    let mask = 0, pressed = 0, sequence = 0, physics, snapshots;
+    async function until(predicate) { const deadline = Date.now() + 5000; while (!predicate() && Date.now() < deadline) await pause(5); assert.ok(predicate(), 'busy real-client rehearsal reached its expected state'); }
+    function later(fn, ms) { const timer = setTimeout(() => { timers.delete(timer); fn(); }, ms); timers.add(timer); }
+    function busySocket(url, seat) {
+      const socket = new WebSocket(url, { origin }); sockets.push(socket);
+      const view = { get readyState() { return socket.readyState; }, onopen: null, onmessage: null, onclose: null, onerror: null,
+        send(raw) {
+          const value = JSON.parse(raw);
+          if (value.type === 'join') { assert.equal(value.flowVersion, 3); socket.send(raw); return; }
+          if (['state', 'input'].includes(value.type) && !blocked[seat]) {
+            if (value.type === 'state') assert.ok(validateCooperativeState(value.state, fixture.spec));
+            else { assert.ok(Array.isArray(value.history)); assert.deepEqual(value.history.at(-1), { seq: value.seq, mask: value.mask }); }
+            // Drop exactly one valid gameplay request before the real relay sees
+            // it. The local transport alone injects the negotiated busy reply;
+            // no production route, backend switch or stored record is changed.
+            const rejection = { kind: value.type, seq: value.seq, deliveredAt: 0 }; blocked[seat] = rejection;
+            later(() => { rejection.deliveredAt = Date.now(); view.onmessage?.({ data: JSON.stringify({ type: 'busy', kind: value.type, seq: value.seq, retryAfterMs }) }); }, 30);
+            return;
+          }
+          if (['state', 'input'].includes(value.type)) forwarded[seat].push({ kind: value.type, seq: value.seq, at: Date.now() });
+          socket.send(raw);
+        }, close(code) { socket.close(code); },
+      };
+      socket.on('open', () => view.onopen?.({})); socket.on('error', () => view.onerror?.({})); socket.on('close', () => view.onclose?.({}));
+      socket.on('message', raw => { const data = raw.toString(); observed[seat].push(JSON.parse(data)); view.onmessage?.({ data }); });
+      return view;
+    }
+    const engine = createCooperativeEngine(), world = engine.create(fixture.spec); world.running = true; world.paused = false;
+    world.entities = []; world.nextSnack = world.nextHazard = 1;
+    function client(room) {
+      const value = connectMultiplayer(room, { validateState: value => Boolean(validateCooperativeState(value, fixture.spec)), socketFactory: url => busySocket(url, room.seat),
+        onStatus: status => statuses.push([room.seat, status]), onPeer: connected => peers[room.seat].push(connected),
+        onInput: (seq, value, pressedMask) => { mask = value; pressed |= pressedMask || 0; controls.push({ seq, mask: value, pressedMask }); },
+        onState: (seq, state) => received.push({ seq, state }),
+      }); clients.push(value); return value;
+    }
+    const hostClient = client(hostRoom), guestClient = client(guestRoom);
+    try {
+      await until(() => peers.every(values => values.includes(true)));
+      const original = { x: world.players[1].x, y: world.players[1].y, angle: world.players[1].angle };
+      physics = setInterval(() => {
+        world.entities = []; world.nextSnack = world.nextHazard = 1;
+        if (world.advanced) { world.advanced.enemies = []; world.advanced.enemyBullets = []; }
+        engine.step(world, fixture.spec, [0, mask | pressed], 1 / 60); pressed = 0;
+      }, 1000 / 60);
+      hostClient.sendState(++sequence, engine.snapshot(world));
+      snapshots = setInterval(() => hostClient.sendState(++sequence, engine.snapshot(world)), 100);
+      guestClient.sendInput(1, 0); later(() => guestClient.sendInput(2, 2), 20); later(() => guestClient.sendInput(3, 0), 80);
+      await until(() => received.length >= 5 && controls.some(value => value.seq >= 3));
+      assert.ok(controls.some(value => value.mask & 2 || value.pressedMask & 2), 'busy input retry retains a short press in its cumulative history');
+      assert.equal(controls.at(-1).mask, 0, 'the retry preserves the newest released controls');
+      await until(() => fixture.spec.arcade?.rotation
+        ? Math.abs(Math.atan2(Math.sin(world.players[1].angle - original.angle), Math.cos(world.players[1].angle - original.angle))) > 0.001
+        : Math.hypot(world.players[1].x - original.x, world.players[1].y - original.y) > 0.01);
+      for (const seat of [0, 1]) {
+        assert.ok(blocked[seat]?.deliveredAt, `seat ${seat} received its injected busy reply`);
+        assert.ok(forwarded[seat].length > 0, `seat ${seat} continued in the same room`);
+        assert.ok(forwarded[seat][0].seq > blocked[seat].seq, `seat ${seat} retries its newest pending packet`);
+        assert.ok(forwarded[seat][0].at - blocked[seat].deliveredAt >= retryAfterMs - 5, `seat ${seat} honors the requested backoff`);
+        assert.equal(observed[seat].some(value => value.type === 'ack' && value.kind === blocked[seat].kind && value.seq === blocked[seat].seq), false, 'a busy packet was never committed or acknowledged');
+        assert.equal(peers[seat].slice(peers[seat].indexOf(true) + 1).includes(false), false, 'busy does not mark the connected peer absent');
+      }
+      assert.equal(received.some(value => value.seq === blocked[0].seq), false, 'a busy host snapshot was not forwarded');
+      assert.equal(controls.some(value => value.seq === blocked[1].seq), false, 'a busy input was not forwarded');
+      assert.equal(statuses.some(([, status]) => ['ended', 'expired', 'reconnecting'].includes(status)), false, 'finite contention preserves the same connected room');
+      console.log('PASS: actual flowVersion 3 clients recovered from one non-forwarded busy state and input, honored bounded backoff, retried newest state/cumulative controls, preserved the short tap/release and host movement, and continued without peer loss or an ACK for either failed packet. Busy injection is confined to the local socket wrapper; successful retries use the real Python relay.');
+    } finally {
+      clearInterval(physics); clearInterval(snapshots); for (const client of clients) client.close(); for (const timer of timers) clearTimeout(timer);
+      assert.equal((await request(`/multiplayer/rooms/${rawHost.roomId}`, 'DELETE', { hostToken: rawHost.hostToken })).status, 200);
+    }
+  }
   try {
     const host = connect(created.hostToken), second = connect(guest.guestToken);
     const legacyReady = await host.until(m => m.type === 'ready'); assert.equal(legacyReady.seat, 0); assert.equal(legacyReady.expiresAt, created.expiresAt); assert.equal((await second.until(m => m.type === 'ready')).seat, 1);
@@ -203,6 +282,7 @@ async function check() {
     await host.until(m => m.type === 'closed');
 
     await delayedClientRehearsal();
+    await busyClientRehearsal();
 
     const publicResponse = await request('/multiplayer/rooms', 'POST', { gameId: fixture.id, publishedRevision: fixture.publishedRevision, visibility: 'public' });
     assert.equal(publicResponse.status, 200); const publicRoom = await publicResponse.json();

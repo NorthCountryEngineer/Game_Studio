@@ -86,7 +86,7 @@ test('the relay is explicitly configured independently of the Core API', () => {
 test('host authenticates in the first body and accepts only monotonic guest controls', () => {
   const t = connection();
   try {
-    t.ready(); assert.equal(t.socket.url.includes(token), false); assert.deepEqual(t.socket.sent[0], { type: 'join', roomId: id, token, leaseVersion: 1, flowVersion: 2 });
+    t.ready(); assert.equal(t.socket.url.includes(token), false); assert.deepEqual(t.socket.sent[0], { type: 'join', roomId: id, token, leaseVersion: 1, flowVersion: 3 });
     assert.equal(t.statuses.at(-1), 'connected');
     const beforeHeartbeat = t.peers.length; t.socket.message({ type: 'peer', connected: true }); assert.equal(t.peers.length, beforeHeartbeat, 'heartbeat must not clear held controls');
     t.socket.message({ type: 'input', seq: 2, mask: 32 }); t.socket.message({ type: 'input', seq: 1, mask: 1 }); t.socket.message({ type: 'input', seq: 2, mask: 2 });
@@ -167,7 +167,7 @@ test('reconnect reuses the in-memory seat and capability, preserving sequence or
   try {
     c.ready(); c.socket.message({ type: 'state', seq: 5, state: { tick: 1 } }); c.socket.disconnect();
     assert.equal(c.statuses.at(-1), 'reconnecting'); t.mock.timers.tick(500); assert.equal(c.sockets.length, 2);
-    const resumed = c.sockets[1]; resumed.open(); assert.deepEqual(resumed.sent[0], { type: 'join', roomId: id, token, leaseVersion: 1, flowVersion: 2 }); assert.equal(resumed.url.includes(token), false);
+    const resumed = c.sockets[1]; resumed.open(); assert.deepEqual(resumed.sent[0], { type: 'join', roomId: id, token, leaseVersion: 1, flowVersion: 3 }); assert.equal(resumed.url.includes(token), false);
     resumed.message({ type: 'ready', ...publication, roomId: id, seat: 1, expiresAt: room.expiresAt }); resumed.message({ type: 'peer', connected: true });
     resumed.message({ type: 'state', seq: 4, state: { tick: 1 } }); resumed.message({ type: 'state', seq: 6, state: { tick: 1 } });
     assert.deepEqual(c.states, [{ seq: 5, state: { tick: 1 } }, { seq: 6, state: { tick: 1 } }]);
@@ -235,7 +235,7 @@ test('authoritative rolling leases keep the same room connected for two hours an
     c.socket.disconnect(); t.mock.timers.tick(500);
     assert.equal(c.sockets.length, 2);
     const resumed = c.sockets[1]; resumed.open();
-    assert.deepEqual(resumed.sent[0], { type: 'join', roomId: id, token, leaseVersion: 1, flowVersion: 2 });
+    assert.deepEqual(resumed.sent[0], { type: 'join', roomId: id, token, leaseVersion: 1, flowVersion: 3 });
     // A ready message can reflect a slightly earlier admitted lease without rolling back the timer.
     resumed.message({ type: 'ready', ...publication, roomId: id, seat: 1, expiresAt: Math.floor(Date.now() / 1000) + 1790 });
     resumed.message({ type: 'lease', expiresAt: Math.floor(Date.now() / 1000) + 1800 });
@@ -585,6 +585,163 @@ test('bursty queues and out-of-order ACKs respect state/input rates, byte bounds
     }
     assert.equal(host.sockets.length, 1); assert.equal(guest.sockets.length, 1);
   } finally { host.client.close(); guest.client.close(); }
+});
+
+test('busy frames are an exact bounded union without authority, identity or a fake lease', () => {
+  for (const value of [{ type: 'busy', kind: 'state', seq: 1, retryAfterMs: 50 }, { type: 'busy', kind: 'input', seq: 10000000, retryAfterMs: 1000 }, { type: 'busy', kind: 'ping', retryAfterMs: 200 }]) assert.deepEqual(validateMultiplayerServerMessage(JSON.stringify(value), strictState), value);
+  for (const change of [{ kind: 'join' }, { kind: 'ping', seq: 1 }, { seq: 0 }, { seq: true }, { seq: 10000001 }, { seq: 1.5 }, { retryAfterMs: 49 }, { retryAfterMs: 1001 }, { retryAfterMs: true }, { retryAfterMs: 200.5 }, { expiresAt: room.expiresAt }, { token }, { state: { tick: 1 } }, { connected: true }]) assert.equal(validateMultiplayerServerMessage(JSON.stringify({ type: 'busy', kind: 'state', seq: 1, retryAfterMs: 200, ...change }), strictState), undefined);
+  for (const value of [{ type: 'busy', kind: 'state', retryAfterMs: 200 }, { type: 'busy', kind: 'ping', seq: 1, retryAfterMs: 200 }, { type: 'busy', kind: 'ping', retryAfterMs: '200' }]) assert.equal(validateMultiplayerServerMessage(JSON.stringify(value), strictState), undefined);
+  const host = connection();
+  try { host.ready(); host.socket.message({ type: 'busy', kind: 'state', seq: 1, retryAfterMs: 200, expiresAt: room.expiresAt }); assert.equal(host.statuses.at(-1), 'ended:invalid-message'); }
+  finally { host.client.close(); }
+});
+
+test('matching busy backs off one failed packet, preserves only the newest state and ignores bogus or duplicate signals', t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'], now });
+  const host = connection(0, 45000, () => Date.now());
+  try {
+    host.ready(); host.client.sendState(1, activeState()); advance(t, 50); host.client.sendState(2, activeState());
+    for (const message of [{ type: 'busy', kind: 'input', seq: 1, retryAfterMs: 200 }, { type: 'busy', kind: 'state', seq: 2, retryAfterMs: 200 }]) host.socket.message(message);
+    advance(t, 50); assert.equal(host.socket.sent.length, 2, 'unknown or wrong-kind busy cannot release a real credit');
+    host.socket.message({ type: 'busy', kind: 'state', seq: 1, retryAfterMs: 200 });
+    advance(t, 100); host.client.sendState(3, activeState());
+    host.socket.message({ type: 'busy', kind: 'state', seq: 1, retryAfterMs: 1000 });
+    advance(t, 99); assert.equal(host.socket.sent.length, 2, 'busy imposes a bounded quiet interval');
+    advance(t, 1); assert.deepEqual(host.socket.sent.at(-1), { type: 'state', seq: 3, state: activeState() }, 'newest queued snapshot replaces the failed older one, without duplicate extending backoff');
+    host.client.sendState(4, activeState()); advance(t, 50);
+    assert.equal(host.socket.sent.length, 3, 'busy resets the data window to one');
+    assert.equal(host.statuses.at(-1), 'connected'); assert.equal(host.peers.at(-1), true);
+    assert.deepEqual(host.inputs, []); assert.deepEqual(host.states, []);
+  } finally { host.client.close(); }
+});
+
+test('busy for an older packet never replays it after newer success and does not cancel another flight timeout', t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'], now });
+  const host = connection(0, 45000, () => Date.now());
+  try {
+    host.ready(); host.client.sendState(1, activeState()); advance(t, 50); host.client.sendState(2, activeState());
+    advance(t, 50); host.socket.message({ type: 'ack', kind: 'state', seq: 1 });
+    advance(t, 50); host.client.sendState(3, activeState());
+    host.socket.message({ type: 'ack', kind: 'state', seq: 3 });
+    host.socket.message({ type: 'busy', kind: 'state', seq: 2, retryAfterMs: 200 });
+    const before = host.socket.sent.length; advance(t, 200);
+    assert.equal(host.socket.sent.length, before, 'an exact busy retires its older credit but cannot resurrect committed old data');
+    host.client.sendState(4, activeState()); advance(t, 50); host.client.sendState(5, activeState());
+    host.socket.message({ type: 'ack', kind: 'state', seq: 4 }); advance(t, 50); host.client.sendState(6, activeState());
+    host.socket.message({ type: 'busy', kind: 'state', seq: 6, retryAfterMs: 200 });
+    advance(t, 4949);
+    assert.equal(host.statuses.at(-1), 'connected');
+    advance(t, 1);
+    assert.equal(host.statuses.at(-1), 'reconnecting', 'busy must leave the unacknowledged other packet failure timer intact');
+  } finally { host.client.close(); }
+});
+
+test('guest tap and newest release survive contention without playing or replaying authoritative input locally', t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'], now });
+  const guest = connection(1, 45000, () => Date.now()), host = connection(0, 45000, () => Date.now());
+  try {
+    guest.ready(); host.ready(); guest.client.sendInput(1, 0);
+    advance(t, 20); guest.client.sendInput(2, 18); advance(t, 60); guest.client.sendInput(3, 0);
+    guest.socket.message({ type: 'busy', kind: 'input', seq: 1, retryAfterMs: 200 });
+    advance(t, 200);
+    const release = guest.socket.sent.at(-1);
+    assert.deepEqual(release, { type: 'input', seq: 3, mask: 0, history: [{ seq: 1, mask: 0 }, { seq: 2, mask: 18 }, { seq: 3, mask: 0 }] });
+    assert.deepEqual(guest.inputs, []); assert.deepEqual(guest.states, []);
+    host.socket.message(release); host.socket.message(release);
+    assert.deepEqual(host.inputs, [{ seq: 3, mask: 0 }]); assert.deepEqual(host.inputEdges, [18]);
+    guest.socket.message({ type: 'ack', kind: 'input', seq: 3 });
+    guest.socket.message({ type: 'busy', kind: 'input', seq: 1, retryAfterMs: 1000 });
+    advance(t, 1000); assert.equal(guest.socket.sent.length, 3, 'a late old busy cannot replay acknowledged taps');
+  } finally { guest.client.close(); host.client.close(); }
+});
+
+test('busy retries use fresh wire sequences so delayed duplicate busy and ACK cannot release a retried credit', t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'], now });
+  const host = connection(0, 45000, () => Date.now());
+  try {
+    host.ready(); host.client.sendState(1, activeState());
+    host.socket.message({ type: 'busy', kind: 'state', seq: 1, retryAfterMs: 200 });
+    advance(t, 200); assert.deepEqual(host.socket.sent.at(-1), { type: 'state', seq: 2, state: activeState() });
+    host.client.sendState(2, activeState());
+    host.socket.message({ type: 'ack', kind: 'state', seq: 1 });
+    host.socket.message({ type: 'busy', kind: 'state', seq: 1, retryAfterMs: 50 });
+    advance(t, 200); assert.equal(host.socket.sent.length, 3, 'late messages for the old wire sequence cannot free retry capacity');
+    host.socket.message({ type: 'ack', kind: 'state', seq: 2 });
+    assert.deepEqual(host.socket.sent.at(-1), { type: 'state', seq: 3, state: activeState() }, 'caller seq2 remains admissible and maps beyond the fresh retry');
+    host.client.sendState(2, activeState()); advance(t, 50);
+    assert.equal(host.socket.sent.length, 4, 'caller admission still rejects its own duplicate sequence');
+  } finally { host.client.close(); }
+});
+
+test('fresh input retry preserves bounded press history and future caller release without replaying the edge', t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'], now });
+  const guest = connection(1, 45000, () => Date.now()), host = connection(0, 45000, () => Date.now());
+  try {
+    guest.ready(); host.ready(); guest.client.sendInput(1, 18);
+    guest.socket.message({ type: 'busy', kind: 'input', seq: 1, retryAfterMs: 200 }); advance(t, 200);
+    const retry = guest.socket.sent.at(-1);
+    assert.deepEqual(retry, { type: 'input', seq: 2, mask: 18, history: [{ seq: 1, mask: 18 }, { seq: 2, mask: 18 }] });
+    host.socket.message(retry); guest.socket.message({ type: 'ack', kind: 'input', seq: 2 });
+    guest.client.sendInput(2, 0); advance(t, 40); const release = guest.socket.sent.at(-1);
+    assert.deepEqual(release, { type: 'input', seq: 3, mask: 0, history: [{ seq: 1, mask: 18 }, { seq: 3, mask: 0 }] });
+    host.socket.message(release); host.socket.message(retry);
+    assert.deepEqual(host.inputs, [{ seq: 2, mask: 18 }, { seq: 3, mask: 0 }]); assert.deepEqual(host.inputEdges, [18, 0]);
+    guest.socket.message({ type: 'busy', kind: 'input', seq: 1, retryAfterMs: 50 }); advance(t, 200);
+    assert.equal(guest.socket.sent.length, 4);
+  } finally { guest.client.close(); host.client.close(); }
+});
+
+test('wire sequence exhaustion is bounded and cannot wrap or reuse a busy packet', () => {
+  const host = connection();
+  try {
+    host.ready(); host.client.sendState(10000000, activeState());
+    host.socket.message({ type: 'busy', kind: 'state', seq: 10000000, retryAfterMs: 200 });
+    assert.equal(host.statuses.at(-1), 'ended:sequence-exhausted'); assert.equal(host.socket.sent.length, 2);
+  } finally { host.client.close(); }
+});
+
+test('repeated busy retries retain a short tap instead of replacing its history with retry tails', t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'], now });
+  const guest = connection(1, 45000, () => Date.now()), host = connection(0, 45000, () => Date.now());
+  try {
+    guest.ready(); host.ready(); guest.client.sendInput(1, 0);
+    advance(t, 20); guest.client.sendInput(2, 18); advance(t, 60); guest.client.sendInput(3, 0);
+    guest.socket.message({ type: 'busy', kind: 'input', seq: 1, retryAfterMs: 50 }); advance(t, 50);
+    for (let retry = 0; retry < 12; retry++) {
+      const failed = guest.socket.sent.at(-1) as { seq: number; history: { seq: number; mask: number }[] };
+      guest.socket.message({ type: 'busy', kind: 'input', seq: failed.seq, retryAfterMs: 50 }); advance(t, 50);
+      const fresh = guest.socket.sent.at(-1) as typeof failed;
+      assert.equal(fresh.seq, failed.seq + 1); assert.ok(fresh.history.length <= 8); assert.ok(fresh.history.some(sample => sample.seq === 2 && sample.mask === 18));
+    }
+    const final = guest.socket.sent.at(-1); host.socket.message(final); host.socket.message(final);
+    assert.deepEqual(host.inputEdges, [18]);
+    guest.socket.message({ type: 'ack', kind: 'input', seq: (final as { seq: number }).seq });
+    guest.socket.disconnect(); advance(t, 500);
+    const resumed = guest.sockets[1]; resumed.open(); resumed.message({ type: 'ready', ...publication, roomId: id, seat: 1, expiresAt: room.expiresAt }); resumed.message({ type: 'peer', connected: true });
+    guest.client.sendInput(4, 0);
+    assert.ok(Number((resumed.sent.at(-1) as { seq: number }).seq) > Number((final as { seq: number }).seq), 'fresh wire admission remains monotonic after reconnect');
+    assert.equal((resumed.sent.at(-1) as { history: unknown[] }).history.length, 1, 'reconnect still clears all old press history');
+  } finally { guest.client.close(); host.client.close(); }
+});
+
+test('ping busy waits for the regular heartbeat and never grants a pong, peer or lease', t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'], now });
+  const guest = connection(1, 45000, () => Date.now());
+  try {
+    guest.ready(); guest.socket.message({ type: 'busy', kind: 'ping', retryAfterMs: 200 });
+    advance(t, 10000); assert.equal(guest.socket.sent.filter((packet: any) => packet.type === 'ping').length, 1);
+    guest.socket.message({ type: 'busy', kind: 'ping', retryAfterMs: 200 });
+    advance(t, 100); guest.socket.message({ type: 'busy', kind: 'ping', retryAfterMs: 1000 });
+    advance(t, 99); assert.equal(guest.socket.sent.filter((packet: any) => packet.type === 'ping').length, 1);
+    advance(t, 1); assert.equal(guest.socket.sent.filter((packet: any) => packet.type === 'ping').length, 1, 'an unsequenced busy never creates a rapid heartbeat retry');
+    assert.equal(guest.peers.at(-1), true); assert.deepEqual(guest.inputs, []); assert.deepEqual(guest.states, []);
+    advance(t, 9800); assert.equal(guest.socket.sent.filter((packet: any) => packet.type === 'ping').length, 2, 'a matched busy allows the next normal ten-second heartbeat');
+    guest.socket.message({ type: 'busy', kind: 'ping', retryAfterMs: 1000 });
+    guest.socket.message({ type: 'peer', connected: false }); advance(t, 1000);
+    assert.equal(guest.socket.sent.filter((packet: any) => packet.type === 'ping').length, 2, 'peer loss clears the backoff retry');
+    advance(t, 19000);
+    assert.equal(guest.statuses.at(-1), 'reconnecting', 'busy is not heartbeat progress and cannot keep an unresponsive socket alive');
+  } finally { guest.client.close(); }
 });
 
 test('input history rejects missing tail, unordered, oversized, unsafe and noninteger samples while exact legacy masks remain valid', () => {
