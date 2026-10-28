@@ -74,6 +74,10 @@ export function mountGame(container: HTMLElement, options: { studioOrigin: strin
   frame.title = options.title || 'Game Studio game';
   frame.sandbox.add('allow-scripts', 'allow-same-origin', 'allow-forms', 'allow-popups', 'allow-popups-to-escape-sandbox');
   frame.referrerPolicy = 'strict-origin';
+  // Fullscreen is delegated only to this configured player origin, including
+  // when the host embeds the service across origins. The engine stays opaque.
+  frame.allow = `fullscreen ${origin}`;
+  frame.allowFullscreen = true;
   frame.style.cssText = 'width:100%;min-height:760px;border:0;border-radius:16px';
   const receive = (event: MessageEvent) => {
     if (event.origin !== origin || event.source !== frame.contentWindow) return;

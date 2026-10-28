@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { CooperativeGameSpec, Game } from '../lib/game-types';
 import { cooperativeGameSandboxDocument, validateCooperativeState } from '../lib/game-cooperative';
+import { PlayerSurface } from './PlayerSurface';
 import { isCore } from '../lib/core';
 import { createPublicationBinding } from '../lib/game-scoring';
 import { watchMultiplayerLobbyEntry } from '../lib/game-lobby';
@@ -49,11 +50,11 @@ export function CooperativePlayer({ spec, room, onStatus }: { spec: CooperativeG
     const timeout = window.setTimeout(() => setFailed(true), 12000);
     return () => { window.removeEventListener('message', receive); window.clearTimeout(timeout); connection.current?.close(); connection.current = undefined; };
   }, [instance, room, fingerprint]);
-  return <div className="game-player cooperative-player">
+  return <PlayerSurface key={instance.nonce} frame={frame} nonce={instance.nonce} title={`${spec.title} · Player ${room.seat + 1}`} cooperative>
     {!loaded && <p role="status">{failed ? 'The shared game could not load. Leave the room and try again.' : 'Preparing the shared game…'}</p>}
     <iframe key={instance.nonce} ref={frame} title={`${spec.title} — cooperative Player ${room.seat + 1}`} srcDoc={instance.document} sandbox="allow-scripts" referrerPolicy="no-referrer" allow="camera 'none'; microphone 'none'; geolocation 'none'; payment 'none'; clipboard-read 'none'; clipboard-write 'none'; fullscreen 'none'" style={{ display: 'block', width: '100%', height: 'clamp(610px, 75vw, 900px)', border: 0, borderRadius: 12 }} onLoad={() => frame.current?.contentWindow?.postMessage({ type: 'game-coop-load', nonce: instance.nonce, spec, seat: room.seat }, '*')} />
     <p className="game-player-note">You are Player {room.seat + 1}. Each player controls their own friendly character and keeps their own points, lives and goal progress in one shared world. The game pauses when either connection is interrupted.</p>
-  </div>;
+  </PlayerSurface>;
 }
 
 export function CooperativeGame({ game, children }: { game: Game & { spec: CooperativeGameSpec }; children: ReactNode }) {

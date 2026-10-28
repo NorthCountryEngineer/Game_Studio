@@ -6,6 +6,8 @@ Creators describe an adventure and refine a saved game through conversation or t
 
 Creators can also choose **Crossword**, **Word search**, or **Mad Libs**. Edit answers and clues, word lists, or story templates and prompts; save, playtest and acknowledge the content before publishing. Crosswords and word searches have repeatable seeded layouts. Mad Libs collects the player's words before revealing the story. All three run in the fixed isolated player, without arcade timers, lives or high-score boards. See [word-game workflow and limits](docs/WORD_GAMES.md).
 
+Every standalone player and private playtest has a **Full screen** button. Press **F** while playing or **Alt+Enter** to toggle it; **Escape** and the visible exit button return to the page. Word-game text fields keep normal typing. Solo and cooperative play use the same mounted game while switching views. See [full-screen controls and host support](docs/FULLSCREEN.md).
+
 Owning applications can reuse a game with their own assignment point scale, such as 25 or 100 points. The SDK supplies strict versioned policies, deterministic provisional calculations, exact publication bindings and first/latest/best attempt selection. The host owns student records, server-admitted attempts, policy approval and final awards. See [assignment scoring](docs/ASSIGNMENT_SCORING.md).
 
 ## Run locally

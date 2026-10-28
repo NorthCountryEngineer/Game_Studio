@@ -4,6 +4,7 @@ import { createGameEngine, gameSandboxDocument, validateGameResult } from '../li
 import { wordGameSandboxDocument } from '../lib/word-game-runtime';
 import { isEndlessAsteroids, type GameResult, type GameSpec } from '../lib/game-types';
 import { gamePlayerLoadMessage, validateGameReview, type GameReview } from '../lib/game-review';
+import { PlayerSurface } from './PlayerSurface';
 
 export function GamePlayer({ spec, levelId, onComplete, playtest = false, onReview }: { spec: GameSpec; levelId?: string; onComplete?: (result: GameResult) => void; playtest?: boolean; onReview?: (review: GameReview) => void }) {
   const fingerprint = JSON.stringify(spec);
@@ -50,9 +51,9 @@ export function GamePlayer({ spec, levelId, onComplete, playtest = false, onRevi
   }, [instance, levelId, playtest]);
   if (instance.error) return <p role="alert">{instance.error}</p>;
   const ready = readyNonce === instance.nonce;
-  return <div className="game-player">
+  return <PlayerSurface key={instance.nonce} frame={iframe} nonce={instance.nonce} title={spec.title}>
     {!ready && <p role="status">{failedNonce === instance.nonce ? 'The game is taking longer to load. Reload the page to try again.' : 'Preparing your game…'}</p>}
     <iframe key={instance.nonce} ref={iframe} title={`${spec.title} — isolated game player`} srcDoc={instance.document} sandbox="allow-scripts" referrerPolicy="no-referrer" allow="camera 'none'; microphone 'none'; geolocation 'none'; payment 'none'; clipboard-read 'none'; clipboard-write 'none'; fullscreen 'none'" style={{ display: 'block', width: '100%', height: 'clamp(570px, 70vw, 850px)', border: 0, borderRadius: 12 }} onLoad={() => instance.spec && iframe.current?.contentWindow?.postMessage(gamePlayerLoadMessage(instance.spec, instance.nonce, levelId, playtest), '*')} />
     <p className="game-player-note">{spec.version === 3 ? 'The puzzle runs in an isolated player. Your entered letters and story answers stay inside this player. Only completion counts are reported.' : isEndlessAsteroids(spec) ? `Survive as long as you can. Difficulty rises during active play; Pause stops the clock.${playtest ? ' After five seconds, Finish playtest records your private review without submitting a score.' : ' The run ends when your lives are gone.'}` : 'The game runs in an isolated player. Use Start, Pause, Restart level, and the touch buttons, or click the game to use your keyboard. Complete a level to unlock the next one.'}</p>
-  </div>;
+  </PlayerSurface>;
 }

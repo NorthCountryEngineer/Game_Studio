@@ -27,7 +27,7 @@ function sandbox(spec: WordGameSpec) {
   const elements = Object.fromEntries(['title', 'instruction', 'play', 'announce', 'restart'].map(id => [id, new Element()]));
   const messages: any[] = [], handlers: Record<string, Handler> = {}, parent = { postMessage(message: unknown) { messages.push(JSON.parse(JSON.stringify(message))); } };
   let hit: Element | undefined, now = 100;
-  const context = createContext({ document: { getElementById: (id: string) => elements[id], createElement: (tag: string) => new Element(tag), elementFromPoint: () => hit }, window: { addEventListener(name: string, fn: Handler) { handlers[name] = fn; } }, parent, performance: { now: () => now } });
+  const context = createContext({ document: { getElementById: (id: string) => elements[id], createElement: (tag: string) => new Element(tag), elementFromPoint: () => hit, addEventListener() {} }, window: { addEventListener(name: string, fn: Handler) { handlers[name] = fn; } }, parent, performance: { now: () => now } });
   const html = wordGameSandboxDocument('1234567890abcdef'); new Script(html.match(/<script nonce="[^"]+">([\s\S]*)<\/script>/u)![1]).runInContext(context);
   new Script(`window.loadSpec = ${JSON.stringify(spec)};`).runInContext(context);
   const loadSpec = (context.window as any).loadSpec;

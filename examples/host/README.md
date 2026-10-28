@@ -33,4 +33,6 @@ python3 -m http.server 5181 --bind 127.0.0.1 --directory examples/host
 6. Choose the creator link. It opens the standalone creator in another tab and shows **Return to Local lesson demo**. Creation is not embedded.
 7. From Game Studio, pause creation. The published embedded game should still play. Unpublish the synthetic game when finished; the embed will become unavailable after reload.
 
+Before unpublishing, use the embedded player's fullscreen button or press F while the arcade canvas has focus. Confirm the game fills the screen, its Exit button remains available, and Escape returns to the lesson without restarting play. The SDK sets fullscreen permission for the exact studio origin. Also test letter entry in a word-game field: typing F should enter the letter rather than expand the player. Native fullscreen availability depends on the browser; the player can still expand inside its host frame.
+
 Production hosts replace the two localhost origins, configure the matching exact host ID/origin/return path in the installation, and integrate the common SDK with their own page lifecycle. Production hosting headers allow HTTPS hosts only. No wildcard framing, host token forwarding or tenant query parameter is needed.
