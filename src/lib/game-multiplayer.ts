@@ -238,19 +238,39 @@ export async function multiplayerRequest(apiBase: string, path: string, method: 
 }
 
 /** The relay is an explicit installation setting, separate from the Core API. */
-export function validateMultiplayerAPIConfig(value: unknown): string | undefined {
-  if (!object(value) || !exact(value, ['version', 'apiUrl']) || value.version !== 1 || typeof value.apiUrl !== 'string') return;
-  if (!value.apiUrl) return '';
-  try { const url = new URL(value.apiUrl); if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash || !url.hostname || url.href.length > 2048) return; return url.href.replace(/\/$/, ''); } catch { return; }
+export type MultiplayerAPIConfig = { version: 1; apiUrl: string; legacyApplicationOrigin?: string };
+export function parseMultiplayerAPIConfig(value: unknown): MultiplayerAPIConfig | undefined {
+  if (!object(value) || !exact(value, ['version', 'apiUrl', ...(Object.hasOwn(value, 'legacyApplicationOrigin') ? ['legacyApplicationOrigin'] : [])]) || value.version !== 1 || typeof value.apiUrl !== 'string') return;
+  try {
+    let apiUrl = '';
+    if (value.apiUrl) { const url = new URL(value.apiUrl); if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash || !url.hostname || url.href.length > 2048) return; apiUrl = url.href.replace(/\/$/, ''); }
+    if (Object.hasOwn(value, 'legacyApplicationOrigin')) {
+      if (typeof value.legacyApplicationOrigin !== 'string' || value.legacyApplicationOrigin.length > 255) return;
+      const legacy = new URL(value.legacyApplicationOrigin);
+      if (legacy.protocol !== 'https:' || legacy.origin !== value.legacyApplicationOrigin || legacy.port || !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*$/.test(legacy.hostname) || legacy.username || legacy.password || legacy.pathname !== '/' || legacy.search || legacy.hash) return;
+      return { version: 1, apiUrl, legacyApplicationOrigin: legacy.origin };
+    }
+    return { version: 1, apiUrl };
+  } catch { return; }
+}
+export function validateMultiplayerAPIConfig(value: unknown): string | undefined { return parseMultiplayerAPIConfig(value)?.apiUrl; }
+/** Public selection metadata is not identity or a grant; malformed aliases are never used. */
+export function gameStudioSelectionOrigin(actualOrigin: string, configuration: unknown): string {
+  return parseMultiplayerAPIConfig(configuration)?.legacyApplicationOrigin || actualOrigin;
+}
+export async function loadMultiplayerConfig(): Promise<MultiplayerAPIConfig> {
+  let config: unknown;
+  try { const response = await fetch('/multiplayer-config.json', { credentials: 'omit', redirect: 'error', cache: 'no-store', referrerPolicy: 'no-referrer', signal: AbortSignal.timeout(10000) }); if (!response.ok) throw new Error(); config = await response.json(); } catch { throw new Error('Live multiplayer is not configured for this installation yet. Solo play is available.'); }
+  const parsed = parseMultiplayerAPIConfig(config);
+  if (!parsed) throw new Error('Live multiplayer is not configured for this installation yet. Solo play is available.');
+  return parsed;
 }
 export async function loadMultiplayerAPI(localPreviewURL?: string): Promise<string> {
   if (localPreviewURL) {
     try { const url = new URL(localPreviewURL); if (url.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname) && !url.username && !url.password && !url.search && !url.hash) return url.href.replace(/\/$/, ''); } catch { /* Invalid preview configuration stays disabled. */ }
     throw new Error('Local multiplayer requires a loopback relay URL.');
   }
-  let config: unknown;
-  try { const response = await fetch('/multiplayer-config.json', { credentials: 'omit', redirect: 'error', cache: 'no-store', referrerPolicy: 'no-referrer', signal: AbortSignal.timeout(10000) }); if (!response.ok) throw new Error(); config = await response.json(); } catch { throw new Error('Live multiplayer is not configured for this installation yet. Solo play is available.'); }
-  const base = validateMultiplayerAPIConfig(config);
+  const base = (await loadMultiplayerConfig()).apiUrl;
   if (!base) throw new Error('Live multiplayer is not configured for this installation yet. Solo play is available.');
   return base;
 }

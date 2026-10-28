@@ -41,6 +41,32 @@ class MultiplayerDeploymentTests(unittest.TestCase):
             with self.subTest(key=key), self.assertRaises(RuntimeError):
                 release.preserve_binding(previous, {**values, key: 'different'})
 
+    def test_routine_releases_retain_reviewed_legacy_alias_but_cannot_create_or_change_it(self):
+        values = release.binding(self.stack, self.resources, APP)
+        previous = {'Parameters': [{'ParameterKey': k, 'ParameterValue': v} for k, v in {**values, 'LegacyApplicationOrigin': 'https://legacy.example.invalid'}.items()]}
+        release.preserve_binding(previous, values)
+        self.assertEqual(values['LegacyApplicationOrigin'], 'https://legacy.example.invalid')
+        self.assertEqual(release.public_configuration({'ApiUrl': 'https://relay.example.invalid'}, values), {'version': 1, 'apiUrl': 'https://relay.example.invalid', 'legacyApplicationOrigin': 'https://legacy.example.invalid'})
+        self.assertEqual(release.public_configuration({'ApiUrl': 'https://relay.example.invalid'}, {}), {'version': 1, 'apiUrl': 'https://relay.example.invalid'})
+        with self.assertRaises(RuntimeError):
+            release.preserve_binding(previous, {**values, 'LegacyApplicationOrigin': 'https://unknown.example.invalid'})
+        with self.assertRaises(RuntimeError):
+            release.preserve_binding(None, values)
+        for legacy in ('https://*.example.invalid', 'https://games.example.invalid'):
+            broken = {'Parameters': [{'ParameterKey': k, 'ParameterValue': v} for k, v in {**values, 'LegacyApplicationOrigin': legacy}.items()]}
+            with self.subTest(legacy=legacy), self.assertRaises(RuntimeError):
+                release.preserve_binding(broken, {**values, 'LegacyApplicationOrigin': ''})
+
+    def test_optional_alias_is_explicit_bounded_and_cors_defaults_to_primary_only(self):
+        template = json.loads((ROOT / 'infra/aws/multiplayer.template.json').read_text())
+        self.assertEqual(template['Parameters']['LegacyApplicationOrigin']['Default'], '')
+        self.assertEqual(template['Parameters']['LegacyApplicationOrigin']['MaxLength'], 255)
+        env = template['Resources']['Relay']['Properties']['Environment']['Variables']
+        self.assertEqual(env['LEGACY_FRONTEND_ORIGIN'], {'Ref': 'LegacyApplicationOrigin'})
+        cors = template['Resources']['Http']['Properties']['CorsConfiguration']['AllowOrigins']
+        self.assertEqual(cors, {'Fn::If': ['HasLegacyApplicationOrigin', [{'Ref': 'ApplicationOrigin'}, {'Ref': 'LegacyApplicationOrigin'}], [{'Ref': 'ApplicationOrigin'}]]})
+        self.assertEqual(template['Rules']['DistinctFrontendOrigins']['Assertions'][0]['Assert'], {'Fn::Not': [{'Fn::Equals': [{'Ref': 'ApplicationOrigin'}, {'Ref': 'LegacyApplicationOrigin'}]}]})
+
     def test_runtime_has_no_private_data_core_credential_or_provider_authority(self):
         template = json.loads((ROOT / 'infra/aws/multiplayer.template.json').read_text())
         resources = template['Resources']

@@ -1,5 +1,11 @@
 # Validation and release boundary
 
+## Prepared canonical-domain compatibility — October 27, 2026
+
+The isolated feature passed 288 TypeScript tests, 285 Python API tests, 26 deployment/operator tests, full typechecking, the production-comparable offline preview build, offline infrastructure/security invariants, and the real loopback WebSocket rehearsal. Synthetic tests cover empty legacy behavior, exact primary/alias HTTP and WebSocket admission, malformed/duplicate/mismatched origin rejection, unchanged legacy socket negotiation, preservation of an existing alias in future release receipts, pre-React canonical navigation, OAuth credential stripping, retained embed origins and private invitation fragments, public-only selection labels, and disabled selection links while configuration is pending or unavailable. The frontend dependency lock was reused without installing packages. No cloud operation, provider request, host connection change or application-data migration ran for these checks.
+
+The relay template remains below the inline CloudFormation size limit and retains its existing resource identities, room-table retention and IAM scope. Formal `cfn-lint` and `cfn-guard` were unavailable; they did not run. AWS service/change-set checks, DNS/TLS verification, exact managed-release source proofs and authenticated cross-origin browser acceptance remain operator release work. Local checks do not establish a live domain cutover.
+
 ## Assignment scoring — current source
 
 On October 27, 2026, the host scoring SDK passed **174 TypeScript tests**, typechecking and the standalone SDK build. The eleven additional scoring tests cover strict policy/result validation, 25/100 scales, complete-game denominators for partial multi-level attempts, half-up rounding, completion and explicit arcade targets, solution reveals, Mad Libs participation, invalid/duplicate attempt histories, canonical SHA-256 parity with Python for every game format and Unicode, stale publication rejection and input mutation during asynchronous hashing. Existing strict version 1 events, source/origin/channel isolation, private publication workflows and arcade score tests remain passing.

@@ -229,11 +229,37 @@ def rate(api, event, operation, limit):
     fail('Multiplayer is busy. Retry shortly.', 409)
 
 
+def frontend_origins():
+    """At most one explicit compatibility alias; never derive trust from a request."""
+    primary = os.environ.get('FRONTEND_ORIGIN', '')
+    legacy = os.environ.get('LEGACY_FRONTEND_ORIGIN', '')
+    application = os.environ.get('APPLICATION_ORIGIN')
+    if application is not None and application != primary:
+        fail('The multiplayer frontend origin is misconfigured.', 503)
+
+    def exact(value, local=False):
+        try:
+            parsed = urlsplit(value)
+            if local and parsed.scheme == 'http' and parsed.hostname in {'localhost', '127.0.0.1', '::1'}:
+                return (parsed.username is None and parsed.password is None and not parsed.path and not parsed.query
+                    and not parsed.fragment and '?' not in value and '#' not in value
+                    and parsed.port is not None and 1 <= parsed.port <= 65535)
+            return (isinstance(value, str) and len(value) <= 255 and parsed.scheme == 'https'
+                and parsed.port is None and not parsed.path and not parsed.query and not parsed.fragment
+                and '?' not in value and '#' not in value and value == 'https://' + parsed.netloc
+                and re.fullmatch(r'[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*', parsed.netloc) is not None)
+        except (ValueError, TypeError):
+            return False
+
+    # The loopback-only development adapter has no deployed application binding.
+    if not exact(primary, local=application is None and not legacy) or legacy and (not exact(legacy) or legacy == primary):
+        fail('The multiplayer frontend origin is misconfigured.', 503)
+    return (primary, legacy) if legacy else (primary,)
+
+
 def origin(event):
-    headers = {str(key).lower(): value for key, value in (event.get('headers') or {}).items()}
-    expected = os.environ.get('FRONTEND_ORIGIN', '').rstrip('/')
-    supplied = headers.get('origin')
-    if not expected or supplied != expected:
+    supplied = [value for key, value in (event.get('headers') or {}).items() if str(key).lower() == 'origin']
+    if len(supplied) != 1 or supplied[0] not in frontend_origins():
         fail('This page is not allowed to use the multiplayer relay.', 403)
 
 
