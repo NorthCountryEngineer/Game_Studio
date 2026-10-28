@@ -5,8 +5,15 @@ import { wordGameSandboxDocument } from '../lib/word-game-runtime';
 import { isEndlessAsteroids, type GameResult, type GameSpec } from '../lib/game-types';
 import { gamePlayerLoadMessage, validateGameReview, type GameReview } from '../lib/game-review';
 import { PlayerSurface } from './PlayerSurface';
+import { LevelFlowPlayer } from './LevelFlowPlayer';
+import type { FlowProgress, MaterialHandler } from '../lib/game-flow-session';
 
-export function GamePlayer({ spec, levelId, onComplete, playtest = false, onReview }: { spec: GameSpec; levelId?: string; onComplete?: (result: GameResult) => void; playtest?: boolean; onReview?: (review: GameReview) => void }) {
+export type GamePlayerProps = { spec: GameSpec; levelId?: string; onComplete?: (result: GameResult) => void; playtest?: boolean; onReview?: (review: GameReview) => void; characterId?: string; onCharacter?: (id: string) => void; onMaterialRequest?: MaterialHandler; onFlowProgress?: (progress: FlowProgress, result?: GameResult) => void };
+export function GamePlayer(props: GamePlayerProps) {
+  if (props.spec.version !== 3 && props.spec.flow && !props.levelId) return <LevelFlowPlayer key={JSON.stringify(props.spec)} {...props} spec={props.spec} />;
+  return <GameFrame {...props} />;
+}
+export function GameFrame({ spec, levelId, onComplete, playtest = false, onReview, characterId, onCharacter }: GamePlayerProps) {
   const fingerprint = JSON.stringify(spec);
   const instance = useMemo(() => {
     try {
@@ -19,16 +26,22 @@ export function GamePlayer({ spec, levelId, onComplete, playtest = false, onRevi
   const iframe = useRef<HTMLIFrameElement>(null);
   const completed = useRef(onComplete);
   const reviewed = useRef(onReview);
+  const characterSelected = useRef(onCharacter);
+  useEffect(() => { characterSelected.current = onCharacter; }, [onCharacter]);
   const [readyNonce, setReadyNonce] = useState('');
   const [failedNonce, setFailedNonce] = useState('');
   useEffect(() => { completed.current = onComplete; }, [onComplete]);
   useEffect(() => { reviewed.current = onReview; }, [onReview]);
   useEffect(() => {
     if (!instance.spec) return;
-    const send = () => iframe.current?.contentWindow?.postMessage(gamePlayerLoadMessage(instance.spec!, instance.nonce, levelId, playtest), '*');
+    const send = () => iframe.current?.contentWindow?.postMessage(gamePlayerLoadMessage(instance.spec!, instance.nonce, levelId, playtest, characterId), '*');
     const receive = (event: MessageEvent) => {
       if (event.source !== iframe.current?.contentWindow || event.origin !== 'null' || !event.data || Array.isArray(event.data) || event.data.nonce !== instance.nonce) return;
       const keys = Object.keys(event.data);
+      if (event.data.type === 'axolotl-game-character') {
+        if (instance.spec!.version === 7 && keys.sort().join(',') === 'characterId,nonce,type' && typeof event.data.characterId === 'string' && ['maya', 'leo', 'sam', 'aisha', 'eli', 'nora', 'kai', 'robin'].includes(event.data.characterId)) characterSelected.current?.(event.data.characterId);
+        return;
+      }
       if (event.data.type === 'axolotl-game-review') {
         if (!playtest || keys.length !== 3 || keys.some(key => !['type', 'nonce', 'review'].includes(key))) return;
         const review = validateGameReview(event.data.review, instance.spec!, levelId);
@@ -53,7 +66,7 @@ export function GamePlayer({ spec, levelId, onComplete, playtest = false, onRevi
   const ready = readyNonce === instance.nonce;
   return <PlayerSurface key={instance.nonce} frame={iframe} nonce={instance.nonce} title={spec.title}>
     {!ready && <p role="status">{failedNonce === instance.nonce ? 'The game is taking longer to load. Reload the page to try again.' : 'Preparing your game…'}</p>}
-    <iframe key={instance.nonce} ref={iframe} title={`${spec.title} — isolated game player`} srcDoc={instance.document} sandbox="allow-scripts" referrerPolicy="no-referrer" allow="camera 'none'; microphone 'none'; geolocation 'none'; payment 'none'; clipboard-read 'none'; clipboard-write 'none'; fullscreen 'none'" style={{ display: 'block', width: '100%', height: 'clamp(570px, 70vw, 850px)', border: 0, borderRadius: 12 }} onLoad={() => instance.spec && iframe.current?.contentWindow?.postMessage(gamePlayerLoadMessage(instance.spec, instance.nonce, levelId, playtest), '*')} />
+    <iframe key={instance.nonce} ref={iframe} title={`${spec.title} — isolated game player`} srcDoc={instance.document} sandbox="allow-scripts" referrerPolicy="no-referrer" allow="camera 'none'; microphone 'none'; geolocation 'none'; payment 'none'; clipboard-read 'none'; clipboard-write 'none'; fullscreen 'none'" style={{ display: 'block', width: '100%', height: 'clamp(570px, 70vw, 850px)', border: 0, borderRadius: 12 }} onLoad={() => instance.spec && iframe.current?.contentWindow?.postMessage(gamePlayerLoadMessage(instance.spec, instance.nonce, levelId, playtest, characterId), '*')} />
     <p className="game-player-note">{spec.version === 3 ? 'The puzzle runs in an isolated player. Your entered letters and story answers stay inside this player. Only completion counts are reported.' : isEndlessAsteroids(spec) ? `Survive as long as you can. Difficulty rises during active play; Pause stops the clock.${playtest ? ' After five seconds, Finish playtest records your private review without submitting a score.' : ' The run ends when your lives are gone.'}` : 'The game runs in an isolated player. Use Start, Pause, Restart level, and the touch buttons, or click the game to use your keyboard. Complete a level to unlock the next one.'}</p>
   </PlayerSurface>;
 }

@@ -2,6 +2,7 @@ import { validateGameSpec } from './game-design';
 import { validateGameResult } from './game-runtime';
 import type { Game } from './game-types';
 import { isCooperativeGameSpec, isEndlessAsteroids } from './game-types';
+import { parseFlowProgress, type FlowProgress } from './game-flow-session';
 
 /** Host assignment rules, independent of game definitions and casual leaderboards. */
 export type ScoringPolicy = {
@@ -66,12 +67,12 @@ export function calculateProvisionalPoints(specValue: unknown, resultValue: unkn
   const spec = validateGameSpec(specValue), policy = validateScoringPolicy(policyValue);
   if (isCooperativeGameSpec(spec)) throw new Error('Cooperative-enabled editions do not award assignment points.');
   if (isEndlessAsteroids(spec) && policy.method !== 'arcade_target') throw new Error('Endless games require an explicit arcade target; finite completion and proportional scoring do not apply.');
-  object(resultValue, ['outcome', 'elapsed', 'score', 'reviewedLevelIds', ...(spec.version !== 3 && spec.arcade?.scoring ? ['points'] : [])]);
+  object(resultValue, ['outcome', 'elapsed', 'score', 'reviewedLevelIds', ...(spec.version === 7 || spec.version !== 3 && spec.arcade?.scoring ? ['points'] : [])]);
   const result = validateGameResult(resultValue, spec);
   if (!result || result.outcome === 'level-complete') throw new Error('Finish one valid complete game attempt before calculating points.');
   let numerator: number, denominator: number;
   if (policy.method === 'arcade_target') {
-    if (spec.version === 3 || !spec.arcade?.scoring || result.points === undefined) throw new Error('Arcade target scoring requires an arcade game with point scoring enabled.');
+    if (spec.version === 3 || spec.version !== 7 && !spec.arcade?.scoring || result.points === undefined) throw new Error('Arcade target scoring requires an arcade game with point scoring enabled.');
     denominator = policy.arcade_target!; numerator = Math.min(result.points, denominator);
   } else if (policy.method === 'completion') {
     denominator = 1; numerator = result.outcome === 'won' ? 1 : 0;
@@ -142,4 +143,27 @@ export async function scorePublishedGame(publication: unknown, expectedValue: un
   const actual = await createPublicationBinding(snapshot);
   if (expected.game_id !== actual.game_id || expected.published_revision !== actual.published_revision || expected.spec_sha256 !== actual.spec_sha256) throw new Error('The published game differs from the admitted assignment snapshot.');
   return points;
+}
+
+/** Check the whole route, including material after the last level. The host must
+ * separately verify required completions against its own admitted activity records. */
+export function validateFlowCompletion(specValue: unknown, progressValue: unknown, resultValue: unknown): FlowProgress {
+  const spec = validateGameSpec(specValue), progress = parseFlowProgress(progressValue);
+  if (spec.version === 3 || !spec.flow || !progress || !['won', 'lost'].includes(progress.status)) throw new Error('A completed finite game flow is required.');
+  const result = validateGameResult(resultValue, spec);
+  if (!result || result.outcome !== progress.status || result.elapsed !== progress.gameplayElapsed || result.score !== progress.score || result.points !== progress.points) throw new Error('The flow and game observations disagree.');
+  if (progress.materials.reduce((sum, item) => sum + item.elapsed, 0) + progress.gameplayElapsed > progress.wallElapsed + 0.001) throw new Error('Material timing exceeds the observed run duration.');
+  const played = result.reviewedLevelIds, completed = result.outcome === 'lost' ? played.slice(0, -1) : played;
+  if (JSON.stringify(progress.completedLevelIds) !== JSON.stringify(completed)) throw new Error('The flow has an invalid level completion order.');
+  const lastPlayed = spec.flow.nodes.findIndex(node => node.type === 'level' && node.levelId === played.at(-1));
+  const traversed = result.outcome === 'won' ? spec.flow.nodes : spec.flow.nodes.slice(0, lastPlayed);
+  const materialNodes = traversed.filter(node => node.type === 'material');
+  if (progress.materials.length !== materialNodes.length || materialNodes.some((node, index) => node.id !== progress.materials[index].nodeId || node.required && progress.materials[index].status !== 'completed')) throw new Error('The flow is missing a material step or required completion.');
+  return progress;
+}
+
+export async function scorePublishedFlow(publication: unknown, binding: unknown, progress: unknown, result: unknown, policy: unknown): Promise<ProvisionalPoints> {
+  const snapshot = published(publication);
+  validateFlowCompletion(snapshot.spec, progress, result);
+  return scorePublishedGame(snapshot, binding, result, policy);
 }

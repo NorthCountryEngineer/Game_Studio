@@ -1,9 +1,46 @@
-import type { ArcadeGameSpec, GameAsteroidEnemies, GameAsteroidSettings, GameArcadeOptions, GameLevel, GamePowerUps, GameSpec, GameSpriteRole } from './game-types';
+import type { ArcadeGameSpec, GameAsteroidEnemies, GameAsteroidSettings, GameArcadeOptions, GameFlow, GameFlowNode, GameLevel, GamePowerUps, GameSpec, GameSpriteRole } from './game-types';
 import { createWordGameEngine } from './word-game-engine';
 import { designWordGame, wordGameGenre } from './word-game-design';
+import { reconcileGameFlow } from './game-flow';
 
 /** Data is the only author-controlled input to the fixed game engine. */
 export function validateArcadeGameSpec(value: unknown): ArcadeGameSpec {
+  // Keep this copy self-contained for the fixed sandbox; parity tests cover the exported helper.
+  function validateGameFlow(value: unknown, levels: Pick<GameLevel, 'id'>[]): GameFlow {
+    function record(input: unknown, keys: string[]): Record<string, unknown> {
+      if (!input || typeof input !== 'object' || Array.isArray(input) || ![Object.prototype, null].includes(Object.getPrototypeOf(input))) throw new Error('Flow steps must be plain objects.');
+      if (Object.keys(input).length !== keys.length || keys.some(key => !Object.hasOwn(input, key)) || Object.keys(input).some(key => !keys.includes(key))) throw new Error('A flow step has missing or unexpected fields.');
+      return input as Record<string, unknown>;
+    }
+    function title(input: unknown): string {
+      if (typeof input !== 'string' || !input.trim() || input !== input.trim() || input.length > 80 || /[\u0000-\u001f\u007f-\u009f<>]|(?:https?:\/\/|www\.|javascript\s*:|data\s*:|vbscript\s*:)|\b(?:eval|fetch|import)\s*\(/iu.test(input)) throw new Error('Flow titles must be plain text up to 80 characters.');
+      return input;
+    }
+    const flow = record(value, ['version', 'nodes']);
+    if (flow.version !== 1 || !Array.isArray(flow.nodes) || flow.nodes.length < 1 || flow.nodes.length > 24) throw new Error('A flow needs 1 to 24 steps and version 1.');
+    const ids = new Set<string>(), usedLevels = new Set<string>(), levelIds = new Set(levels.map(level => level.id));
+    const nodes: GameFlowNode[] = flow.nodes.map((input, index) => {
+      if (!input || typeof input !== 'object') throw new Error('Choose a supported flow step.');
+      const type = (input as Record<string, unknown>).type;
+      const node = record(input, type === 'level' ? ['id', 'type', 'levelId'] : type === 'menu' ? ['id', 'type', 'title'] : type === 'material' ? ['id', 'type', 'title', 'kind', 'reference', 'required'] : []);
+      if (typeof node.id !== 'string' || !/^step-(?:[1-9]|1[0-9]|2[0-4])$/u.test(node.id) || ids.has(node.id)) throw new Error('Flow identifiers must be unique step-1 through step-24 values.');
+      ids.add(node.id);
+      if (type === 'level') {
+        if (typeof node.levelId !== 'string' || !levelIds.has(node.levelId) || usedLevels.has(node.levelId)) throw new Error('Each saved level must appear exactly once in the flow.');
+        usedLevels.add(node.levelId);
+        return { id: node.id, type, levelId: node.levelId };
+      }
+      if (type === 'menu') {
+        if (index !== 0) throw new Error('A level-selection home screen can appear only as the first step.');
+        return { id: node.id, type, title: title(node.title) };
+      }
+      if (type !== 'material' || !['lesson', 'video', 'exercise'].includes(node.kind as string) || typeof node.required !== 'boolean') throw new Error('Choose a lesson, video, or exercise and whether it is required.');
+      if (typeof node.reference !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/u.test(node.reference) || node.reference.includes('://') || node.reference.split('/').includes('..')) throw new Error('Material references must be opaque client identifiers, without URLs or parent paths.');
+      return { id: node.id, type, title: title(node.title), kind: node.kind as 'lesson' | 'video' | 'exercise', reference: node.reference, required: node.required };
+    });
+    if (usedLevels.size !== levelIds.size) throw new Error('Each saved level must appear exactly once in the flow.');
+    return { version: 1, nodes };
+  }
   function object(input: unknown, keys: string[], label: string): Record<string, unknown> {
     if (!input || typeof input !== 'object' || Array.isArray(input) || ![Object.prototype, null].includes(Object.getPrototypeOf(input))) throw new Error(`${label} must be an object.`);
     const record = input as Record<string, unknown>;
@@ -19,9 +56,9 @@ export function validateArcadeGameSpec(value: unknown): ArcadeGameSpec {
     return input;
   }
   const version = value && typeof value === 'object' ? (value as Record<string, unknown>).version : undefined;
-  if (version !== 1 && version !== 2 && version !== 4 && version !== 5 && version !== 6) throw new Error('Unsupported game version.');
+  if (version !== 1 && version !== 2 && version !== 4 && version !== 5 && version !== 6 && version !== 7) throw new Error('Unsupported game version.');
   const hasArcade = Object.prototype.hasOwnProperty.call(value, 'arcade');
-  const spec = object(value, ['version', 'title', 'description', 'genre', 'theme', 'player', 'rules', 'objects', 'instructions', ...(version !== 1 ? ['progression', 'levels'] : []), ...(version === 4 || (version === 5 || version === 6) && Object.prototype.hasOwnProperty.call(value, 'multiplayer') ? ['multiplayer'] : []), ...(version === 5 || version === 6 && Object.prototype.hasOwnProperty.call(value, 'powerUps') ? ['powerUps'] : []), ...(version === 6 ? ['asteroids'] : []), ...(hasArcade ? ['arcade'] : []), ...(version === 6 && Object.hasOwn(value as object, 'sprites') ? ['sprites'] : [])], 'Game');
+  const spec = object(value, ['version', 'title', 'description', 'genre', 'theme', 'player', 'rules', 'objects', 'instructions', ...(version !== 1 ? ['progression', 'levels'] : []), ...(version === 4 || (version === 5 || version === 6) && Object.prototype.hasOwnProperty.call(value, 'multiplayer') ? ['multiplayer'] : []), ...(version === 5 || version === 6 && Object.prototype.hasOwnProperty.call(value, 'powerUps') ? ['powerUps'] : []), ...(version === 6 ? ['asteroids'] : []), ...(hasArcade ? ['arcade'] : []), ...(Object.hasOwn(value as object, 'flow') ? ['flow'] : []), ...(version === 6 && Object.hasOwn(value as object, 'sprites') ? ['sprites'] : [])], 'Game');
   const player = object(spec.player, ['name', 'color', 'speed', 'jump'], 'Player');
   const rules = object(spec.rules, ['goal', 'timeLimit', 'lives', 'difficulty'], 'Rules');
   const objects = object(spec.objects, ['collectible', 'hazard'], 'Objects');
@@ -37,6 +74,7 @@ export function validateArcadeGameSpec(value: unknown): ArcadeGameSpec {
     objects: { collectible: text(objects.collectible, 30, 'Collectible'), hazard: text(objects.hazard, 30, 'Hazard') },
     instructions: text(spec.instructions, 300, 'Instructions', true),
   };
+  if (version === 7 && (clean.genre !== 'platformer' || hasArcade)) throw new Error('Pixel platformers require the fixed platformer style without arcade options.');
   if (hasArcade) {
     if (spec.genre !== 'dodge') throw new Error('Arcade options are supported only for dodge games.');
     const arcade = object(spec.arcade, ['rotation', 'shooting', 'splitAsteroids', 'scoring', 'highScores'], 'Arcade options');
@@ -93,6 +131,10 @@ export function validateArcadeGameSpec(value: unknown): ArcadeGameSpec {
       if (decoded.length !== width * height * 4 || btoa(decoded) !== sprite.pixels) throw new Error('Invalid sprite pixel dimensions.');
       clean.sprites[role as GameSpriteRole] = { width, height, pixels: sprite.pixels };
     }
+  }
+  if (Object.hasOwn(spec, 'flow')) {
+    if (![2, 5, 6, 7].includes(version) || clean.multiplayer || clean.asteroids?.endless) throw new Error('Flows require a finite solo game with saved levels.');
+    clean.flow = validateGameFlow(spec.flow, clean.levels!);
   }
   return clean;
 }
@@ -174,7 +216,7 @@ export function planGameLevels(spec: ArcadeGameSpec, count: number, seedText: st
     const focus = count === 1 ? 'Explore the world at your own pace.' : index === 0 ? 'Learn the controls with a smaller collection goal and fewer obstacles.' : index === count - 1 ? 'Put your practice together with the full collection goal and the strongest challenge.' : 'Practice finding treasures while watching a more varied obstacle pattern.';
     return { id: `level-${index + 1}`, title: stage, brief: spec.arcade ? arcadeLevelBrief(spec, goal, index === 0 ? 'Learn the controls.' : index === count - 1 ? 'Combine your skills.' : 'Practice with more obstacles.') : `${focus} Collect ${goal} ${spec.objects.collectible}s and avoid ${spec.objects.hazard}s.`, theme: spec.theme, rules: { ...spec.rules, goal, difficulty }, seed: previous[index]?.seed || layoutSeed(`${seedText}|${index + 1}`) };
   });
-  return validateArcadeGameSpec({ ...spec, version: spec.version === 6 ? 6 : spec.version === 5 ? 5 : spec.version === 4 ? 4 : 2, progression: count === 1 ? 'One complete adventure with a saved layout. Lives and time reset when you retry.' : 'Start with the controls and a smaller goal, practice avoiding obstacles, then finish with the full goal and a greater challenge. Each level starts with fresh lives and time.', levels });
+  return validateArcadeGameSpec({ ...spec, version: spec.version === 7 ? 7 : spec.version === 6 ? 6 : spec.version === 5 ? 5 : spec.version === 4 ? 4 : 2, ...(spec.flow ? { flow: reconcileGameFlow(spec.flow, levels) } : {}), progression: count === 1 ? 'One complete adventure with a saved layout. Lives and time reset when you retry.' : 'Start with the controls and a smaller goal, practice avoiding obstacles, then finish with the full goal and a greater challenge. Each level starts with fresh lives and time.', levels });
 }
 
 export function defaultGameSpec(): ArcadeGameSpec {
@@ -187,6 +229,7 @@ export function defaultPowerUps(): GamePowerUps { return { spawnInterval: 12, du
 export function defaultAsteroidSettings(): GameAsteroidSettings { return { endless: false, difficultyInterval: 30, sizes: 2, enemies: { enabled: false, difficulty: 'easy', hitPoints: 1, spawnInterval: 15, maxShips: 2 } }; }
 export function updateAsteroidSettings(spec: ArcadeGameSpec, patch: Partial<Omit<GameAsteroidSettings, 'enemies'>> & { enemies?: Partial<GameAsteroidEnemies> }): ArcadeGameSpec {
   if (spec.genre !== 'dodge' || !spec.arcade?.shooting) throw new Error('Enable Asteroids shooting before changing its advanced settings.');
+  if (patch.endless && spec.flow) throw new Error('Remove the level flow before switching to continuous play.');
   const previous = spec.asteroids ?? defaultAsteroidSettings();
   const asteroids = { ...previous, ...patch, enemies: { ...previous.enemies, ...patch.enemies } };
   const candidate = { ...structuredClone(spec), version: 6 as const, levels: getGameLevels(spec), progression: spec.progression ?? 'Learn the controls, build confidence, and finish your adventure one level at a time.', asteroids };
@@ -276,6 +319,7 @@ export function designArcadeGame(message: string, current?: ArcadeGameSpec): { s
     if (toggles.find(([key]) => key === 'shooting')?.[1] === false) spec.arcade.shooting = spec.arcade.splitAsteroids = false;
     if (toggles.find(([key]) => key === 'scoring')?.[1] === false) spec.arcade.scoring = spec.arcade.highScores = false;
   }
+  if (spec.version === 7 && spec.genre !== 'platformer') spec.version = 2;
   if (spec.genre !== 'dodge') {
     delete spec.arcade;
     if (hasArcadeToggle) notes.push('Rotation, shooting, and arcade score options are supported in dodge games.');
@@ -386,6 +430,7 @@ export function designArcadeGame(message: string, current?: ArcadeGameSpec): { s
     else notes.push('Advanced Asteroids settings require a dodge game with shooting enabled.');
   }
   const cooperative = arcadeToggle(lower, 'multiplayer|two[ -]player|2[ -]player|cooperative|co-op');
+  if (cooperative === true && (spec.flow || spec.version === 7)) throw new Error('Pixel platformers and custom level flows currently support solo play.');
   if (cooperative === true) {
     if (spec.version === 1) spec = planGameLevels(spec, 1, seedText);
     spec = validateArcadeGameSpec({ ...spec, version: spec.version === 6 ? 6 : spec.version === 5 ? 5 : 4, multiplayer: { mode: 'cooperative', maxPlayers: 2 } });

@@ -88,7 +88,7 @@ def publication(api, game_id, revision):
         fail('A new edition was published. Reload this game before saving scores.', 409)
     try: spec = games().validate_spec(state['spec'])
     except (games().GameError, KeyError): fail('This game cannot accept arcade scores.', 409)
-    if spec['version'] in {3, 4} or spec.get('multiplayer'): fail('Shared solo high scores are not enabled for this game format.', 404)
+    if spec['version'] in {3, 4, 7} or spec.get('multiplayer'): fail('Shared solo high scores are not enabled for this game format.', 404)
     if not spec.get('arcade', {}).get('scoring') or not spec['arcade']['highScores']:
         fail('High scores are not enabled for this game.', 404)
     return spec, item
@@ -104,13 +104,16 @@ def max_points(spec, levels, elapsed=None):
 
 
 def validate_result(value, spec):
-    if spec['version'] in {3, 4} or spec.get('multiplayer'): fail('This format cannot submit solo arcade scores.')
+    if spec['version'] in {3, 4, 7} or spec.get('multiplayer'): fail('This format cannot submit solo arcade scores.')
     required = {'outcome', 'elapsed', 'score', 'reviewedLevelIds', 'points'}
     if not isinstance(value, dict) or set(value) != required: fail('Unexpected or missing score report fields.')
     if not isinstance(value['outcome'], str) or value['outcome'] not in {'won', 'lost'}:
         fail('Finish a complete round before saving its score.')
     ids = value['reviewedLevelIds']
     levels = games().get_levels(spec)
+    if 'flow' in spec:
+        by_id = {level['id']: level for level in levels}
+        levels = [by_id[node['levelId']] for node in spec['flow']['nodes'] if node['type'] == 'level']
     if not isinstance(ids, list) or not ids or any(not isinstance(item, str) for item in ids) or ids != [level['id'] for level in levels[:len(ids)]]:
         fail('The played levels do not match this published game.')
     played = levels[:len(ids)]

@@ -12,7 +12,8 @@ export function AsteroidChallengeEditor({ spec, change }: { spec: ArcadeGameSpec
   const settings = spec.version === 6 ? spec.asteroids! : defaultAsteroidSettings();
   return <div className="game-asteroid-challenge">
     <h5>Survival and enemy ships</h5>
-    <label className="game-checkbox"><input type="checkbox" checked={settings.endless} onChange={event => change(updateAsteroidSettings(spec, { endless: event.target.checked }))} />Endless survival</label>
+    <label className="game-checkbox"><input type="checkbox" checked={settings.endless} disabled={Boolean(spec.flow)} onChange={event => change(updateAsteroidSettings(spec, { endless: event.target.checked }))} />Endless survival</label>
+    {spec.flow && <p className="game-small-note">This game has a custom level flow. Use “Use levels only” in the flow editor before switching to continuous play.</p>}
     <p className="game-small-note">Survive as long as you can, with no timer or collection goal. The challenge increases during active play. Your first saved level starts the run; the rest of your level plan stays saved for when you turn endless survival off.</p>
     {settings.endless && <label>Increase difficulty every · {settings.difficultyInterval} seconds of active play<input type="range" min={10} max={120} step={1} value={settings.difficultyInterval} aria-valuetext={`${settings.difficultyInterval} seconds of active play`} onChange={event => change(updateAsteroidSettings(spec, { difficultyInterval: Number(event.target.value) }))} /><small>10–120 seconds</small></label>}
     <label>Asteroid sizes<select value={settings.sizes} disabled={!spec.arcade.splitAsteroids} onChange={event => change(updateAsteroidSettings(spec, { sizes: Number(event.target.value) as 2 | 3 }))}><option value={2}>Two sizes · large → small</option><option value={3}>Three sizes · large → medium → small</option></select></label>

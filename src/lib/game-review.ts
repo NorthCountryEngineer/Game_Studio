@@ -2,9 +2,9 @@ import { gameReviewLevelIds, isEndlessAsteroids, type GameSpec } from './game-ty
 
 export type GameReview = { elapsed: number; reviewedLevelIds: string[] };
 
-export function gamePlayerLoadMessage(spec: GameSpec, nonce: string, levelId?: string, playtest = false) {
+export function gamePlayerLoadMessage(spec: GameSpec, nonce: string, levelId?: string, playtest = false, characterId?: string) {
   // The older word-player protocol deliberately accepts no preview-only flags.
-  return { type: 'axolotl-game-load', nonce, spec, levelId, ...(spec.version !== 3 ? { playtest } : {}) };
+  return { type: 'axolotl-game-load', nonce, spec, levelId, ...(spec.version !== 3 ? { playtest } : {}), ...(spec.version === 7 && characterId ? { characterId } : {}) };
 }
 
 /** Private preview acknowledgement, deliberately separate from a game result. */

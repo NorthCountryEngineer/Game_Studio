@@ -1,5 +1,7 @@
 # Assignment points owned by a host application
 
+Pixel platformers report 10 gameplay points per collectible and support these assignment policies. Custom level flows also report material completion and separate active/total timing. Use `scorePublishedFlow` for a flow and independently verify its required client activities before accepting credit. Game Studio supplies the adapter contract; it does not create class leaderboards or write NCAcademy records. See [level flow integration](LEVEL_FLOWS.md).
+
 An application can use the same published game for a 25-point assignment, a 100-point assignment, or another approved scale. The assignment owns its scoring rules. Changing those rules does not edit the reusable game, its publication or its casual arcade board.
 
 Game Studio's SDK provides deterministic calculations for the owning application. It does not store student identities, enforce enrollment or write an application's gradebook. The host admits and stores attempts under its own current permissions and, where applicable, student-data encryption. Browser gameplay is an observation: these calculations are provisional until the host's authorized review or award process accepts them.

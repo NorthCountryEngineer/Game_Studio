@@ -1,5 +1,7 @@
 # Game Studio host SDK
 
+Finite level flows add version 3 `material-request` and `flow-progress` events. `mountGame` accepts `onMaterial(event, {complete, unavailable})`; the client resolves and verifies its own material before replying. `validateFlowCompletion` and `scorePublishedFlow` check whole-flow observations and publication-bound provisional points. See [the flow adapter and runnable rehearsal](../docs/LEVEL_FLOWS.md). Existing events remain unchanged for games without custom flows.
+
 Build with `npm run build:sdk` from the repository root. It generates the standalone ES module at `public/sdk/game-studio.js` and an equivalent local package build under `sdk/dist/`. The SDK is served with public cross-origin module headers; it contains no tenant secrets or authentication tokens.
 
 Exports:

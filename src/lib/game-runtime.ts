@@ -39,6 +39,58 @@ export type GameState = {
 /** Self-contained so the exact tested engine can also run in an opaque-origin iframe. */
 export function createGameEngine() {
   const width = 960, height = 540;
+  // Cosmetic choices belong to the player and never alter movement or collision.
+  const characters = [
+    { id: 'maya', name: 'Maya', description: 'Deep brown skin, curly dark hair, teal jacket', skin: '#8b533b', hair: '#241e29', clothes: '#26a8a2', accent: '#263e73', style: 'curls', glasses: false },
+    { id: 'leo', name: 'Leo', description: 'Light skin, copper hair, blue jacket', skin: '#f0c4a4', hair: '#a54b28', clothes: '#3b74d7', accent: '#433e75', style: 'short', glasses: false },
+    { id: 'sam', name: 'Sam', description: 'Medium brown skin, dark hair, orange jacket and glasses', skin: '#be8057', hair: '#342d38', clothes: '#e89535', accent: '#354c77', style: 'short', glasses: true },
+    { id: 'aisha', name: 'Aisha', description: 'Brown skin, plum headscarf, rose jacket', skin: '#a56a45', hair: '#65437f', clothes: '#d5689a', accent: '#3c4d67', style: 'long', glasses: false },
+    { id: 'eli', name: 'Eli', description: 'Light brown skin, black hair, green jacket', skin: '#d0a06f', hair: '#212b35', clothes: '#4b9a55', accent: '#58447c', style: 'short', glasses: false },
+    { id: 'nora', name: 'Nora', description: 'Fair skin, blonde hair, purple jacket', skin: '#f6d1b4', hair: '#ebc253', clothes: '#8d65c9', accent: '#345e8b', style: 'long', glasses: false },
+    { id: 'kai', name: 'Kai', description: 'Tan skin, dark wavy hair, red jacket', skin: '#ce9a77', hair: '#3b2b32', clothes: '#d95653', accent: '#334d67', style: 'curls', glasses: false },
+    { id: 'robin', name: 'Robin', description: 'Dark brown skin, silver hair, yellow jacket and glasses', skin: '#744735', hair: '#d7dce6', clothes: '#e0bd39', accent: '#525286', style: 'short', glasses: true },
+  ];
+  function drawCharacter(ctx: CanvasRenderingContext2D, id: string, x: number, y: number, w: number, h: number, stride = 0, facing = 1) {
+    const character = characters.find(item => item.id === id) || characters[0];
+    const rows = ['....HHHH....', '...HHHHHH...', '...HSSSSH...', '...HSESSH...', '....SSSS....', '...CCCCCC...', '..SCCCCCCS..', '..SCCCCCCS..', '..SCCCCCCS..', '...CCCCCC...', '...AAAAAA...', '...AA..AA...', '...AA..AA...', '...BB..BB...', '..BBB..BBB..'];
+    const colors: Record<string, string> = { H: character.hair, S: character.skin, E: '#1d2032', C: character.clothes, A: character.accent, B: '#252638' };
+    const size = Math.min(w / 12, h / 15), left = x + (w - size * 12) / 2, top = y + h - size * 15;
+    ctx.save(); ctx.imageSmoothingEnabled = false;
+    if (facing < 0) { ctx.translate(left * 2 + size * 12, 0); ctx.scale(-1, 1); }
+    for (let row = 0; row < rows.length; row++) for (let col = 0; col < 12; col++) {
+      let pixel = rows[row][col];
+      if (character.style === 'long' && row >= 2 && row <= 6 && (col === 2 || col === 9)) pixel = 'H';
+      if (character.style === 'curls' && row < 3 && (col === 2 || col === 9) && row % 2 === 0) pixel = 'H';
+      if (pixel === '.') continue;
+      ctx.fillStyle = colors[pixel];
+      const move = row >= 13 && stride ? (col < 6 ? stride : -stride) * size : 0;
+      ctx.fillRect(Math.round(left + col * size + move), Math.round(top + row * size), Math.ceil(size), Math.ceil(size));
+    }
+    if (character.glasses) { ctx.fillStyle = '#273247'; ctx.fillRect(left + size * 4, top + size * 3, size * 4, size); }
+    ctx.restore();
+  }
+  function drawPlatformWorld(ctx: CanvasRenderingContext2D, state: GameState, theme: ArcadeGameSpec['theme']) {
+    const sky = theme === 'space' ? '#211d48' : theme === 'pond' ? '#a8d8ed' : '#bce0a4';
+    ctx.fillStyle = sky; ctx.fillRect(0, 0, width, height);
+    if (theme === 'space') {
+      ctx.fillStyle = '#e8dcff'; for (let i = 0; i < 40; i++) ctx.fillRect((i * 139 + 31) % width, (i * 83 + 57) % 480, 3, 3);
+      ctx.fillStyle = '#8879bd'; ctx.fillRect(735, 40, 100, 80); ctx.fillRect(745, 30, 80, 100); ctx.fillStyle = '#6e61a6'; ctx.fillRect(755, 48, 23, 19); ctx.fillRect(794, 82, 17, 15);
+    } else {
+      ctx.fillStyle = '#edf6dc'; for (let i = 0; i < 4; i++) { const x = i * 267 + 25; ctx.fillRect(x, 58 + i % 2 * 38, 94, 22); ctx.fillRect(x + 18, 44 + i % 2 * 38, 50, 22); }
+      for (let i = 0; i < 7; i++) {
+        const x = i * 162 - 20; ctx.fillStyle = theme === 'garden' ? '#6caa6b' : '#72b8ca'; ctx.fillRect(x, 310 + i % 2 * 40, 116, 190); ctx.fillRect(x + 18, 285 + i % 2 * 40, 80, 35);
+        if (theme === 'garden') { ctx.fillStyle = '#4e7654'; ctx.fillRect(x + 46, 350, 20, 150); }
+      }
+      if (theme === 'pond') { ctx.fillStyle = '#4596bb'; ctx.fillRect(0, 475, width, 25); ctx.fillStyle = '#a4d9e9'; for (let x = 0; x < width; x += 75) ctx.fillRect(x, 484, 34, 4); }
+    }
+    for (const platform of state.platforms) {
+      ctx.fillStyle = theme === 'space' ? '#564a7c' : '#866242'; ctx.fillRect(platform.x, platform.y, platform.w, platform.h);
+      ctx.fillStyle = theme === 'space' ? '#b5a1ea' : theme === 'pond' ? '#56a396' : '#65a94d'; ctx.fillRect(platform.x, platform.y, platform.w, 6);
+      ctx.fillStyle = theme === 'space' ? '#746393' : '#aa8155';
+      for (let x = platform.x + 8; x < platform.x + platform.w; x += 24) ctx.fillRect(x, platform.y + 9, Math.min(12, platform.x + platform.w - x), 4);
+    }
+  }
+  function scoring(spec: ArcadeGameSpec) { return spec.version === 7 || Boolean(spec.arcade?.scoring); }
   function overlaps(a: { x: number; y: number; w: number; h: number }, b: { x: number; y: number; w: number; h: number }) {
     return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
   }
@@ -137,7 +189,8 @@ export function createGameEngine() {
     return { ...spec, theme: level.theme, rules: { ...level.rules } };
   }
   function maxPoints(spec: ArcadeGameSpec, selectedLevelIds?: string[], elapsed?: number) {
-    if (!spec.arcade?.scoring) return 0;
+    if (!scoring(spec)) return 0;
+    if (spec.version === 7) return getLevels(spec).filter(level => !selectedLevelIds || selectedLevelIds.includes(level.id)).reduce((sum, level) => sum + level.rules.goal * 10, 0);
     if (spec.version === 6) {
       const seconds = elapsed !== undefined ? Math.max(0, elapsed) : spec.asteroids!.endless ? 2147483647 : getLevels(spec).filter(level => !selectedLevelIds || selectedLevelIds.includes(level.id)).reduce((sum, level) => sum + level.rules.timeLimit, 0);
       // Hardest sustained asteroid/enemy pressure is below 2,000 points/sec;
@@ -352,7 +405,7 @@ export function createGameEngine() {
       score: 0, lives: spec.rules.lives, elapsed: 0, invulnerable: 1, nextSnack: 0.4, nextHazard: 0.7, seed: original.version !== 1 ? levels[index].seed : 17031, nextId: 1, previousJump: false, outcome: 'playing', levelIndex: index, levelId: levels[index].id,
       ...(spec.arcade?.rotation || spec.arcade?.shooting ? { angle: -Math.PI / 2 } : {}),
       ...(spec.arcade?.shooting ? { bullets: [], fireCooldown: 0 } : {}),
-      ...(spec.arcade?.scoring ? { points: 0 } : {}),
+      ...(scoring(spec) ? { points: 0 } : {}),
       ...((spec.version === 5 || spec.version === 6) && spec.powerUps ? { powerUps: { pickups: [], nextSpawn: spec.powerUps.spawnInterval, effects: newEffects() } } : {}),
       ...(spec.version === 6 ? { advanced: advancedWorld(spec) } : {}),
     };
@@ -472,7 +525,7 @@ export function createGameEngine() {
         if (surface && (entity.x <= surface.x + 5 || entity.x + entity.w >= surface.x + surface.w - 5)) entity.vx *= -1;
       }
       if (!overlaps(player, entity)) continue;
-      if (entity.kind === 'snack') { collected.add(entity.id); if (arcade?.scoring && state.score < spec.rules.goal) state.points = (state.points || 0) + 10; state.score++; }
+      if (entity.kind === 'snack') { collected.add(entity.id); if (scoring(spec) && state.score < spec.rules.goal) state.points = (state.points || 0) + 10; state.score++; }
       else if (!state.invulnerable && !entity.grace) {
         if (state.powerUps?.effects.shield) state.powerUps.effects.shield = 0; else state.lives--; state.invulnerable = 1.5;
         if (spec.genre === 'platformer') { player.x = 48; player.y = 464; player.vy = 0; }
@@ -490,7 +543,7 @@ export function createGameEngine() {
     if (state.outcome !== 'won' || state.levelIndex + 1 >= getLevels(spec).length) return undefined;
     return create(spec, state.levelIndex + 1);
   }
-  return { spritePainter, edgeSpawn, shotPrize, collectPrize, create, step, nextLevel, getLevels, forLevel, overlaps, sweptHit, maxPoints, newEffects, tickEffects, advancePrizes, effectLabel, drawPrizes, endless, advancedWorld, difficulty, descendantBudget, advancedImpact, stepAdvanced, drawAdvanced, width, height };
+  return { characters, drawCharacter, drawPlatformWorld, scoring, spritePainter, edgeSpawn, shotPrize, collectPrize, create, step, nextLevel, getLevels, forLevel, overlaps, sweptHit, maxPoints, newEffects, tickEffects, advancePrizes, effectLabel, drawPrizes, endless, advancedWorld, difficulty, descendantBudget, advancedImpact, stepAdvanced, drawAdvanced, width, height };
 }
 
 /** Treat the opaque frame's results as untrusted messages, never as permissions. */
@@ -507,12 +560,14 @@ export function validateGameResult(value: unknown, spec: GameSpec, levelId?: str
 
   if (!['level-complete', 'won', 'lost'].includes(result.outcome as string) || !Array.isArray(result.reviewedLevelIds) || !result.reviewedLevelIds.length || result.reviewedLevelIds.some(id => typeof id !== 'string') || new Set(result.reviewedLevelIds).size !== result.reviewedLevelIds.length) return;
   const ids = result.reviewedLevelIds as string[];
-  const levels = createGameEngine().getLevels(spec);
+  const engine = createGameEngine();
+  const storedLevels = engine.getLevels(spec);
+  const levels = spec.flow ? spec.flow.nodes.filter(node => node.type === 'level').map(node => storedLevels.find(level => level.id === node.levelId)!) : storedLevels;
   if (spec.version === 6 && spec.asteroids!.endless) {
     if (result.outcome !== 'lost' || ids.length !== 1 || ids[0] !== levels[0].id || levelId && levelId !== levels[0].id) return;
     if (typeof result.elapsed !== 'number' || !Number.isFinite(result.elapsed) || result.elapsed < 0 || result.elapsed > 2147483647 || typeof result.score !== 'number' || !Number.isInteger(result.score) || result.score < 0 || result.score > Math.min(2147483647,Math.ceil(result.elapsed*20)+40)) return;
-    if (spec.arcade?.scoring ? typeof result.points !== 'number' || !Number.isSafeInteger(result.points) || result.points < 0 || result.points > createGameEngine().maxPoints(spec, ids, result.elapsed) : 'points' in result) return;
-    return { outcome: 'lost', elapsed: result.elapsed, score: result.score, reviewedLevelIds: [levels[0].id], ...(spec.arcade?.scoring ? { points: result.points as number } : {}) };
+    if (engine.scoring(spec) ? typeof result.points !== 'number' || !Number.isSafeInteger(result.points) || result.points < 0 || result.points > createGameEngine().maxPoints(spec, ids, result.elapsed) : 'points' in result) return;
+    return { outcome: 'lost', elapsed: result.elapsed, score: result.score, reviewedLevelIds: [levels[0].id], ...(engine.scoring(spec) ? { points: result.points as number } : {}) };
   }
   const allowed = levelId ? levels.filter(level => level.id === levelId) : levels.slice(0, result.reviewedLevelIds.length);
   if (!allowed.length || allowed.length !== result.reviewedLevelIds.length || allowed.some((level, i) => level.id !== ids[i])) return;
@@ -522,8 +577,9 @@ export function validateGameResult(value: unknown, spec: GameSpec, levelId?: str
   if (result.outcome !== 'lost' && result.score !== maxScore) return;
   if (result.outcome === 'won' && (allowed.length !== levels.length || (Boolean(levelId) && levels.length > 1))) return;
   if (result.outcome === 'level-complete' && !levelId && allowed.length === levels.length) return;
-  if (spec.arcade?.scoring ? typeof result.points !== 'number' || !Number.isSafeInteger(result.points) || result.points < 0 || result.points > createGameEngine().maxPoints(spec, ids, result.elapsed as number) : 'points' in result) return;
-  return { outcome: result.outcome as GameResult['outcome'], elapsed: result.elapsed, score: result.score, reviewedLevelIds: [...result.reviewedLevelIds] as string[], ...(spec.arcade?.scoring ? { points: result.points as number } : {}) };
+  if (engine.scoring(spec) ? typeof result.points !== 'number' || !Number.isSafeInteger(result.points) || result.points < 0 || result.points > createGameEngine().maxPoints(spec, ids, result.elapsed as number) : 'points' in result) return;
+  if (spec.version === 7 && result.points !== (result.score as number) * 10) return;
+  return { outcome: result.outcome as GameResult['outcome'], elapsed: result.elapsed, score: result.score, reviewedLevelIds: [...result.reviewedLevelIds] as string[], ...(engine.scoring(spec) ? { points: result.points as number } : {}) };
 }
 
 /** Fit the fixed bitmap into the iframe's remaining height; short screens scroll controls. */
@@ -557,15 +613,35 @@ export function startGameSandbox(engine: ReturnType<typeof createGameEngine>, va
   const finishReview = document.getElementById('finish-review') as HTMLButtonElement | null;
   let paintSprite = engine.spritePainter();
   let gameSpec: ArcadeGameSpec | undefined, spec: ArcadeGameSpec | undefined, selectedLevel: string | undefined, state: GameState | undefined, running = false, paused = false, notified = false, playtest = false;
-  let previous = 0, accumulator = 0;
+  let previous = 0, accumulator = 0, characterId = engine.characters[0].id, facing = 1;
+  const characterPicker = document.getElementById('characters');
+  function chooseCharacter(id: string) {
+    if (!engine.characters.some(item => item.id === id) || running && state?.outcome === 'playing') return;
+    characterId = id;
+    if (characterPicker) for (const button of characterPicker.querySelectorAll<HTMLButtonElement>('[data-character]')) button.setAttribute('aria-pressed', String(button.dataset.character === id));
+    parent.postMessage({ type: 'axolotl-game-character', nonce, characterId: id }, '*');
+    draw();
+  }
+  function prepareCharacters(preferred: unknown) {
+    if (!characterPicker || gameSpec?.version !== 7) return;
+    if (typeof preferred === 'string' && engine.characters.some(item => item.id === preferred)) characterId = preferred;
+    characterPicker.replaceChildren(); characterPicker.hidden = false;
+    for (const item of engine.characters) {
+      const button = document.createElement('button'), preview = document.createElement('canvas'), label = document.createElement('span');
+      button.type = 'button'; button.dataset.character = item.id; button.setAttribute('aria-label', `${item.name}: ${item.description}`); button.setAttribute('aria-pressed', String(item.id === characterId));
+      preview.width = 36; preview.height = 45; preview.setAttribute('aria-hidden', 'true');
+      const ctx = preview.getContext('2d'); if (ctx) engine.drawCharacter(ctx, item.id, 0, 0, 36, 45);
+      label.textContent = item.name; button.append(preview, label); button.addEventListener('click', () => chooseCharacter(item.id)); characterPicker.append(button);
+    }
+  }
   const reviews = new Map<string, { score: number; elapsed: number; points?: number }>();
   const keys = new Set<string>(), pressed = new Set<string>();
   const palette = { pond: ['#e4f2e8', '#b7d9c7', '#38796c', '#fffaf0'], space: ['#211d3e', '#3d355e', '#baaddb', '#f8edff'], garden: ['#f6f1cf', '#c9d8a5', '#6a8547', '#fffdf1'] };
   const input = () => ({ left: keys.has('arrowleft') || keys.has('a') || pressed.has('left'), right: keys.has('arrowright') || keys.has('d') || pressed.has('right'), up: keys.has('arrowup') || keys.has('w') || pressed.has('up'), down: keys.has('arrowdown') || keys.has('s') || pressed.has('down'), jump: keys.has(' ') || pressed.has('jump'), fire: keys.has(' ') || keys.has('z') || pressed.has('fire') });
   function controlHelp() {
     if (!spec) return '';
-    const movement = spec.arcade?.rotation ? 'Left / Right or A / D turn the ship through 360°. Up / W thrusts forward; Down / S reverses.' : spec.genre === 'platformer' ? 'Arrow keys or WASD move. Space or Up jumps.' : 'Arrow keys or WASD move.';
-    return `${movement}${spec.arcade?.shooting ? ` Space or Z fires.${spec.arcade.splitAsteroids ? spec.version === 6 && spec.asteroids!.sizes === 3 ? ' Large asteroids split into two medium rocks; each medium splits into two small pieces; shoot small pieces once to destroy them.' : ' Large asteroids split into two small pieces; shoot each small piece once to destroy it.' : ' One shot destroys an asteroid.'}` : ''}${spec.arcade?.scoring ? ` Collectibles: 10 points.${spec.arcade.shooting ? ` Large asteroids: 20 points.${spec.version === 6 && spec.asteroids!.sizes === 3 ? ' Medium rocks: 30 points.' : ''}${spec.arcade.splitAsteroids ? ' Small pieces: 50 points.' : ''}` : ''}` : ''}${spec.version === 6 && spec.asteroids!.enemies.enabled ? ` Enemy ships: ${spec.asteroids!.enemies.hitPoints} hits; ${spec.asteroids!.enemies.difficulty === 'easy' ? 'wander without pursuit' : spec.asteroids!.enemies.difficulty === 'medium' ? 'track your ship gradually' : 'pursue and fire aimed, dodgeable shots'}.` : ''}${spec.powerUps ? ` Shoot or collect prizes: 3 = triple shot, » = rapid fire, S = one-hit shield, ↑ = speed boost. ${engine.endless(spec) ? 'Prizes last until any damaging impact; shield absorbs one hit, which clears all prizes.' : 'Shoot or fly over a prize to collect it; timed prizes refresh without stacking.'}` : ''} P pauses. R restarts this level.`;
+    const movement = spec.version === 7 ? 'Left / Right or A / D walk. Space, Up or W jumps.' : spec.arcade?.rotation ? 'Left / Right or A / D turn the ship through 360°. Up / W thrusts forward; Down / S reverses.' : spec.genre === 'platformer' ? 'Arrow keys or WASD move. Space or Up jumps.' : 'Arrow keys or WASD move.';
+    return `${movement}${spec.arcade?.shooting ? ` Space or Z fires.${spec.arcade.splitAsteroids ? spec.version === 6 && spec.asteroids!.sizes === 3 ? ' Large asteroids split into two medium rocks; each medium splits into two small pieces; shoot small pieces once to destroy them.' : ' Large asteroids split into two small pieces; shoot each small piece once to destroy it.' : ' One shot destroys an asteroid.'}` : ''}${engine.scoring(spec) ? ` Collectibles: 10 points.${spec.arcade?.shooting ? ` Large asteroids: 20 points.${spec.version === 6 && spec.asteroids!.sizes === 3 ? ' Medium rocks: 30 points.' : ''}${spec.arcade.splitAsteroids ? ' Small pieces: 50 points.' : ''}` : ''}` : ''}${spec.version === 6 && spec.asteroids!.enemies.enabled ? ` Enemy ships: ${spec.asteroids!.enemies.hitPoints} hits; ${spec.asteroids!.enemies.difficulty === 'easy' ? 'wander without pursuit' : spec.asteroids!.enemies.difficulty === 'medium' ? 'track your ship gradually' : 'pursue and fire aimed, dodgeable shots'}.` : ''}${spec.powerUps ? ` Shoot or collect prizes: 3 = triple shot, » = rapid fire, S = one-hit shield, ↑ = speed boost. ${engine.endless(spec) ? 'Prizes last until any damaging impact; shield absorbs one hit, which clears all prizes.' : 'Shoot or fly over a prize to collect it; timed prizes refresh without stacking.'}` : ''} P pauses. R restarts this level.`;
   }
   function levelInstructions(brief: string) {
     if (!gameSpec || !spec) return '';
@@ -575,10 +651,13 @@ export function startGameSandbox(engine: ReturnType<typeof createGameEngine>, va
   }
   function begin(level: number | string, clear: boolean) {
     if (!gameSpec) return;
+    if (gameSpec.version === 7) parent.postMessage({ type: 'axolotl-game-character', nonce, characterId }, '*');
     if (clear) reviews.clear();
     state = engine.create(gameSpec, level); spec = engine.forLevel(gameSpec, state.levelIndex);
     reviews.delete(state.levelId);
     running = true; paused = false; notified = false; accumulator = 0; keys.clear(); pressed.clear();
+    if (characterPicker) characterPicker.hidden = true;
+    const choice = document.getElementById('character-choice'); if (choice) choice.hidden = true;
     if (finishReview) finishReview.hidden = true;
     start.textContent = 'Restart level'; pause.textContent = 'Pause'; pause.disabled = false; next.hidden = true;
     restart.hidden = engine.endless(spec) || engine.getLevels(gameSpec).length === 1 || Boolean(selectedLevel);
@@ -608,7 +687,7 @@ export function startGameSandbox(engine: ReturnType<typeof createGameEngine>, va
   next.addEventListener('click', () => { if (gameSpec && state?.outcome === 'won' && !selectedLevel && state.levelIndex + 1 < engine.getLevels(gameSpec).length) begin(state.levelIndex + 1, false); });
   document.addEventListener('keydown', event => {
     const key = event.key.toLowerCase();
-    if (['arrowleft', 'arrowright', 'arrowup', 'arrowdown', ' ', 'a', 'd', 'w', 's', 'z', 'p', 'escape', 'r'].includes(key) && !([start, pause, next, restart, ...(finishReview ? [finishReview] : [])] as EventTarget[]).includes(event.target!)) {
+    if (['arrowleft', 'arrowright', 'arrowup', 'arrowdown', ' ', 'a', 'd', 'w', 's', 'z', 'p', 'escape', 'r'].includes(key) && !([start, pause, next, restart, ...(finishReview ? [finishReview] : [])] as EventTarget[]).includes(event.target!) && !(event.target as HTMLElement | null)?.closest?.('[data-character]')) {
       event.preventDefault();
       if ((key === 'p' || key === 'escape') && !event.repeat) togglePause();
       else if (key === 'r' && !event.repeat) reset();
@@ -629,7 +708,7 @@ export function startGameSandbox(engine: ReturnType<typeof createGameEngine>, va
   window.addEventListener('message', event => {
     if (event.source !== parent || !event.data || event.data.type !== 'axolotl-game-load' || event.data.nonce !== nonce || gameSpec) return;
     try {
-      gameSpec = validate(event.data.spec); paintSprite = engine.spritePainter(gameSpec.sprites);
+      gameSpec = validate(event.data.spec); const choice = document.getElementById('character-choice'); if (choice) choice.hidden = gameSpec.version !== 7; prepareCharacters(event.data.characterId); paintSprite = engine.spritePainter(gameSpec.sprites);
       playtest = event.data.playtest === true;
       selectedLevel = typeof event.data.levelId === 'string' ? event.data.levelId : undefined;
       state = engine.create(gameSpec, selectedLevel || 0); spec = engine.forLevel(gameSpec, state.levelIndex);
@@ -641,15 +720,18 @@ export function startGameSandbox(engine: ReturnType<typeof createGameEngine>, va
       document.getElementById('legend')!.textContent = `Reward: ${spec.objects.collectible} · Obstacle: ${spec.objects.hazard}`;
       document.getElementById('jump')!.hidden = spec.genre !== 'platformer';
       document.getElementById('fire')!.hidden = !spec.arcade?.shooting;
+      for (const button of document.querySelectorAll<HTMLButtonElement>('[data-control]')) if (spec.version === 7 && ['up', 'down'].includes(button.dataset.control!)) button.hidden = true;
       const labels: Record<string, string> = spec.arcade?.rotation ? { left: 'Turn left', right: 'Turn right', up: 'Thrust forward', down: 'Reverse thrust' } : { left: 'Move left', right: 'Move right', up: spec.genre === 'platformer' ? 'Move up or jump' : 'Move up', down: 'Move down' };
       for (const button of document.querySelectorAll<HTMLButtonElement>('[data-control]')) if (labels[button.dataset.control!]) button.setAttribute('aria-label', labels[button.dataset.control!]);
-      start.disabled = false; announce.textContent = 'Ready. Choose Start game.';
+      start.disabled = false; announce.textContent = spec.version === 7 ? 'Choose your character, then Start game. Every character has the same movement and jump.' : 'Ready. Choose Start game.';
       parent.postMessage({ type: 'axolotl-game-loaded', nonce }, '*');
     } catch { announce.textContent = 'This game could not be loaded safely.'; }
   });
   function draw() {
     if (!context || !spec || !state) return;
     const ctx = context, colors = palette[spec.theme];
+    if (spec.version === 7) engine.drawPlatformWorld(ctx, state, spec.theme);
+    else {
     ctx.fillStyle = colors[0]; ctx.fillRect(0, 0, engine.width, engine.height);
     for (let i = 0; i < 25; i++) {
       ctx.beginPath(); ctx.arc((i * 139 + 31) % 960, (i * 83 + 57) % 520, spec.theme === 'space' ? 2 : 4 + i % 3, 0, Math.PI * 2);
@@ -661,7 +743,14 @@ export function startGameSandbox(engine: ReturnType<typeof createGameEngine>, va
     }
     ctx.fillStyle = colors[2];
     for (const platform of state.platforms) { ctx.fillRect(platform.x, platform.y, platform.w, platform.h); ctx.fillStyle = colors[1]; ctx.fillRect(platform.x, platform.y, platform.w, 5); ctx.fillStyle = colors[2]; }
+    }
     for (const entity of state.entities) {
+      if (spec.version === 7) {
+        const x = Math.round(entity.x), y = Math.round(entity.y);
+        if (entity.kind === 'snack') { ctx.fillStyle = '#a66b23'; ctx.fillRect(x + 4, y, 14, 22); ctx.fillStyle = '#ffe46b'; ctx.fillRect(x + 1, y + 4, 20, 14); ctx.fillStyle = '#fff5b0'; ctx.fillRect(x + 6, y + 3, 5, 11); }
+        else { ctx.fillStyle = '#672c5c'; ctx.fillRect(x + 3, y + 8, 24, 22); ctx.fillRect(x + 7, y + 3, 16, 6); ctx.fillStyle = '#d25574'; ctx.fillRect(x + 6, y + 9, 18, 16); ctx.fillStyle = '#fff4df'; ctx.fillRect(x + 8, y + 12, 5, 5); ctx.fillRect(x + 18, y + 12, 5, 5); ctx.fillStyle = '#241d3b'; ctx.fillRect(x + 8, y + 15, 3, 3); ctx.fillRect(x + 18, y + 15, 3, 3); }
+        continue;
+      }
       const x = entity.x + entity.w / 2, y = entity.y + entity.h / 2;
       ctx.beginPath();
       if (paintSprite(ctx, entity.kind === 'snack' ? 'reward' : 'asteroid', entity.x, entity.y, entity.w, entity.h)) continue;
@@ -686,6 +775,8 @@ export function startGameSandbox(engine: ReturnType<typeof createGameEngine>, va
     const p = state.player;
     if (state.powerUps?.effects.shield) { ctx.strokeStyle = '#36cad7'; ctx.lineWidth = 4; ctx.beginPath(); ctx.arc(p.x + p.w / 2, p.y + p.h / 2, 34, 0, Math.PI * 2); ctx.stroke(); }
     if (!(state.invulnerable > 0 && Math.floor(state.elapsed * 9) % 2)) {
+      if (spec.version === 7) engine.drawCharacter(ctx, characterId, p.x, p.y - 12, p.w, p.h + 12, running && !paused && p.grounded && (input().left || input().right) ? Math.floor(state.elapsed * 10) % 2 : 0, facing);
+      else {
       const x = p.x + p.w / 2, y = p.y + p.h / 2;
       ctx.save(); ctx.translate(x, y);
       if (spec.arcade?.rotation || spec.arcade?.shooting) ctx.rotate((state.angle ?? -Math.PI / 2) + Math.PI / 2);
@@ -695,12 +786,13 @@ export function startGameSandbox(engine: ReturnType<typeof createGameEngine>, va
         ctx.fillStyle = '#a9d9e8'; ctx.beginPath(); ctx.ellipse(0, -1, 7, 10, 0, 0, Math.PI * 2); ctx.fill();
       }
       ctx.restore();
+      }
     }
     if (!running || paused || state.outcome !== 'playing') {
       ctx.fillStyle = spec.theme === 'space' ? '#211d3ed9' : '#fffaf0df'; ctx.fillRect(0, 0, 960, 540);
       ctx.textAlign = 'center'; ctx.fillStyle = spec.theme === 'space' ? '#fffaf0' : '#254e45'; ctx.font = 'bold 42px system-ui';
       const another = gameSpec && !selectedLevel && state.levelIndex + 1 < engine.getLevels(gameSpec).length;
-      ctx.fillText(!running ? 'A little game. A big adventure.' : paused ? 'Taking a little breather.' : state.outcome === 'won' ? another ? 'Level complete!' : 'You did it, little explorer!' : 'Another adventure awaits.', 480, 240);
+      ctx.fillText(!running ? spec.version === 7 ? 'Choose your adventurer' : 'A little game. A big adventure.' : paused ? 'Taking a little breather.' : state.outcome === 'won' ? another ? 'Level complete!' : 'You did it, little explorer!' : 'Another adventure awaits.', 480, 240);
       ctx.font = '23px system-ui'; ctx.fillText(!running ? notified ? 'Playtest reviewed. Choose Restart level to try again.' : 'Choose Start game below.' : paused ? 'Choose Resume to keep playing.' : state.outcome === 'won' && another ? 'Choose Next level to continue your adventure.' : engine.endless(spec) ? `Survived ${Math.floor(state.elapsed)} seconds. Choose Restart level to try again.` : `Collected ${state.score} of ${spec.rules.goal}. Choose Restart level to try again.`, 480, 285);
     }
   }
@@ -708,30 +800,32 @@ export function startGameSandbox(engine: ReturnType<typeof createGameEngine>, va
     const dt = previous ? Math.min((now - previous) / 1000, 0.1) : 0; previous = now;
     if (running && !paused && state && spec && state.outcome === 'playing') {
       accumulator += dt;
-      while (accumulator >= 1 / 60) { engine.step(state, gameSpec!, input(), 1 / 60); accumulator -= 1 / 60; }
+      const movement = input(); if (movement.left !== movement.right) facing = movement.left ? -1 : 1;
+      while (accumulator >= 1 / 60) { engine.step(state, gameSpec!, movement, 1 / 60); accumulator -= 1 / 60; }
     } else accumulator = 0;
     if (state && spec) {
       const seconds = Math.max(0, Math.ceil(spec.rules.timeLimit - state.elapsed));
       const levelLabel = gameSpec && engine.getLevels(gameSpec).length > 1 ? `Level ${state.levelIndex + 1} / ${engine.getLevels(gameSpec).length} · ` : '';
-      const label = engine.endless(spec) ? `Survival ${Math.floor(state.elapsed / 60)}:${String(Math.floor(state.elapsed % 60)).padStart(2, '0')} · Difficulty ${state.advanced!.difficulty}${spec.arcade?.scoring ? ` · Points ${state.points || 0}` : ''} · Lives ${state.lives}${state.powerUps ? ` · ${engine.effectLabel(state.powerUps.effects,true)}` : ''}` : `${levelLabel}Snacks ${state.score} / ${spec.rules.goal}${spec.arcade?.scoring ? ` · Points ${state.points || 0}` : ''} · Lives ${state.lives} · Time ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}${state.powerUps ? ` · ${engine.effectLabel(state.powerUps.effects)}` : ''}`;
+      const label = engine.endless(spec) ? `Survival ${Math.floor(state.elapsed / 60)}:${String(Math.floor(state.elapsed % 60)).padStart(2, '0')} · Difficulty ${state.advanced!.difficulty}${engine.scoring(spec) ? ` · Points ${state.points || 0}` : ''} · Lives ${state.lives}${state.powerUps ? ` · ${engine.effectLabel(state.powerUps.effects,true)}` : ''}` : `${levelLabel}${spec.version === 7 ? 'Treasures' : 'Snacks'} ${state.score} / ${spec.rules.goal}${engine.scoring(spec) ? ` · Points ${state.points || 0}` : ''} · Lives ${state.lives} · Time ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}${state.powerUps ? ` · ${engine.effectLabel(state.powerUps.effects)}` : ''}`;
       if (finishReview) finishReview.hidden = !playtest || !engine.endless(spec) || !running || notified || state.outcome !== 'playing' || state.elapsed < 5;
       if (status.textContent !== label) status.textContent = label;
       const previousReviews = [...reviews.entries()].filter(([id]) => id !== state!.levelId).map(([, review]) => review);
       const totalScore = previousReviews.reduce((sum, review) => sum + review.score, state.score);
       const totalTime = previousReviews.reduce((sum, review) => sum + review.elapsed, state.elapsed);
       const totalPoints = previousReviews.reduce((sum, review) => sum + (review.points || 0), state.points || 0);
-      document.getElementById('campaign')!.textContent = !engine.endless(spec) && gameSpec && engine.getLevels(gameSpec).length > 1 ? `Adventure total: ${totalScore} treasures${spec.arcade?.scoring ? ` · ${totalPoints} points` : ''} · ${Math.floor(totalTime / 60)}:${String(Math.floor(totalTime % 60)).padStart(2, '0')} played` : '';
+      document.getElementById('campaign')!.textContent = !engine.endless(spec) && gameSpec && engine.getLevels(gameSpec).length > 1 ? `Adventure total: ${totalScore} treasures${engine.scoring(spec) ? ` · ${totalPoints} points` : ''} · ${Math.floor(totalTime / 60)}:${String(Math.floor(totalTime % 60)).padStart(2, '0')} played` : '';
       if (state.outcome !== 'playing' && !notified) {
+        if (characterPicker && spec.version === 7) { characterPicker.hidden = false; const choice = document.getElementById('character-choice'); if (choice) choice.hidden = false; }
         notified = true; pause.disabled = true;
         const levels = engine.getLevels(gameSpec!);
-        reviews.set(state.levelId, { score: state.score, elapsed: state.elapsed, ...(spec.arcade?.scoring ? { points: state.points || 0 } : {}) });
+        reviews.set(state.levelId, { score: state.score, elapsed: state.elapsed, ...(engine.scoring(spec) ? { points: state.points || 0 } : {}) });
         const reviewedLevelIds = levels.filter(level => reviews.has(level.id)).map(level => level.id);
         const totals = [...reviews.values()].reduce<{ score: number; elapsed: number; points: number }>((sum, review) => ({ score: sum.score + review.score, elapsed: sum.elapsed + review.elapsed, points: sum.points + (review.points || 0) }), { score: 0, elapsed: 0, points: 0 });
         const hasNext = !selectedLevel && state.levelIndex + 1 < levels.length;
         next.hidden = state.outcome !== 'won' || !hasNext;
         const outcome = state.outcome === 'lost' ? 'lost' : hasNext || (selectedLevel && levels.length > 1) ? 'level-complete' : 'won';
         announce.textContent = state.outcome === 'won' ? hasNext ? `Level ${state.levelIndex + 1} complete. Choose Next level.` : selectedLevel && levels.length > 1 ? 'Selected level complete. Return to the editor to review another level.' : `Adventure complete! Collected ${totals.score} treasures.` : `Level ${state.levelIndex + 1} ended. Choose Restart level to try again.`;
-        parent.postMessage({ type: 'axolotl-game-result', nonce, result: { outcome, score: totals.score, elapsed: totals.elapsed, reviewedLevelIds, ...(spec.arcade?.scoring ? { points: totals.points } : {}) } }, '*');
+        parent.postMessage({ type: 'axolotl-game-result', nonce, result: { outcome, score: totals.score, elapsed: totals.elapsed, reviewedLevelIds, ...(engine.scoring(spec) ? { points: totals.points } : {}) } }, '*');
       }
     }
     draw(); requestAnimationFrame(frame);
@@ -745,7 +839,7 @@ export function startGameSandbox(engine: ReturnType<typeof createGameEngine>, va
 export function gameSandboxDocument(nonce: string): string {
   if (!/^[a-zA-Z0-9_-]{16,100}$/u.test(nonce)) throw new Error('A safe random game nonce is required.');
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-${nonce}'; style-src 'unsafe-inline'; connect-src 'none'; img-src 'none'; media-src 'none'; font-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'; worker-src 'none'"><style>
-*{box-sizing:border-box}body{margin:0;background:#fffaf0;color:#254e45;font:15px/1.4 system-ui,sans-serif}main{padding:12px}h2{font-size:20px;margin:0 0 6px}p{margin:7px 0}canvas{display:block;width:100%;aspect-ratio:16/9;background:#e4f2e8;border-radius:10px;outline-offset:3px}canvas:focus-visible,button:focus-visible{outline:3px solid #a94c7b}#status{font-weight:700;font-variant-numeric:tabular-nums}.buttons,.touch{display:flex;gap:8px;align-items:center;justify-content:center;flex-wrap:wrap;margin-top:10px}button{font:inherit;min-height:44px;min-width:56px;padding:8px 15px;border:1px solid #497267;border-radius:8px;background:#fffaf0;color:#254e45;cursor:pointer;touch-action:none;user-select:none}button:active{background:#cce4d5}button:disabled{opacity:.5;cursor:default}#start{background:#254e45;color:#fffaf0}.touch button{font-size:20px;min-width:54px}[hidden]{display:none!important}#announce{min-height:22px;font-weight:600;text-align:center}#legend{font-size:13px;text-align:center}#instruction{font-size:14px} @media(max-width:500px){main{padding:6px}h2{font-size:18px}.touch{gap:5px}.touch button{padding:7px;min-width:44px}#instruction{font-size:12px}}
+*{box-sizing:border-box}body{margin:0;background:#fffaf0;color:#254e45;font:15px/1.4 system-ui,sans-serif}main{padding:12px}h2{font-size:20px;margin:0 0 6px}p{margin:7px 0}canvas{display:block;width:100%;aspect-ratio:16/9;background:#e4f2e8;border-radius:10px;outline-offset:3px}canvas:focus-visible,button:focus-visible{outline:3px solid #a94c7b}#status{font-weight:700;font-variant-numeric:tabular-nums}.buttons,.touch{display:flex;gap:8px;align-items:center;justify-content:center;flex-wrap:wrap;margin-top:10px}button{font:inherit;min-height:44px;min-width:56px;padding:8px 15px;border:1px solid #497267;border-radius:8px;background:#fffaf0;color:#254e45;cursor:pointer;touch-action:none;user-select:none}button:active{background:#cce4d5}button:disabled{opacity:.5;cursor:default}#start{background:#254e45;color:#fffaf0}.touch button{font-size:20px;min-width:54px}[hidden]{display:none!important}#announce{min-height:22px;font-weight:600;text-align:center}#legend{font-size:13px;text-align:center}#instruction{font-size:14px}#character-choice{border:0;padding:0;margin:5px 0}#characters{display:flex;gap:6px;flex-wrap:wrap;justify-content:center}#characters button{min-width:70px;padding:4px;display:flex;align-items:center;flex-direction:column;font-size:12px}#characters button canvas{width:36px;height:45px;min-height:0;border-radius:0;background:transparent;image-rendering:pixelated}#characters button[aria-pressed=true]{outline:3px solid #386dca;background:#e0eaff}#character-choice legend{font-weight:700} @media(max-width:500px){main{padding:6px}h2{font-size:18px}.touch{gap:5px}.touch button{padding:7px;min-width:44px}#instruction{font-size:12px}}
 ${gameCanvasViewportStyles}
-</style></head><body><main><h2 id="title">Loading your game…</h2><div id="status" aria-label="Game score"></div><div id="campaign" aria-label="Adventure totals"></div><p id="instruction"></p><canvas id="game" width="960" height="540" tabindex="0">This game needs a browser with Canvas support. Keyboard and touch controls are provided.</canvas><p id="legend"></p><div class="buttons"><button id="start" disabled>Start game</button><button id="pause" disabled>Pause</button><button id="next" hidden>Next level</button><button id="restart" hidden>Restart game</button><button id="finish-review" hidden>Finish playtest</button></div><div class="touch" aria-label="Game movement controls"><button type="button" data-control="left" aria-label="Move left">←</button><button type="button" data-control="up" aria-label="Move up or jump">↑</button><button type="button" data-control="down" aria-label="Move down">↓</button><button type="button" data-control="right" aria-label="Move right">→</button><button type="button" data-control="jump" id="jump" aria-label="Jump">Jump</button><button type="button" data-control="fire" id="fire" aria-label="Fire" hidden>Fire ✦</button></div><p id="announce" role="status" aria-live="polite">Loading…</p><p id="controls-help" style="text-align:center;font-size:12px">Arrow keys or WASD · P to pause · R to restart</p></main><script nonce="${nonce}">const __name = (fn) => fn; (${installGameDisplayKeyboardBridge.toString()})("${nonce}"); (${startGameSandbox.toString()})((${createGameEngine.toString()})(),(${validateArcadeGameSpec.toString()}),"${nonce}");</script></body></html>`;
+</style></head><body><main><h2 id="title">Loading your game…</h2><div id="status" aria-label="Game score"></div><div id="campaign" aria-label="Adventure totals"></div><p id="instruction"></p><fieldset id="character-choice" hidden><legend>Choose your character</legend><div id="characters" role="group" aria-label="Player characters" hidden></div></fieldset><canvas id="game" width="960" height="540" tabindex="0">This game needs a browser with Canvas support. Keyboard and touch controls are provided.</canvas><p id="legend"></p><div class="buttons"><button id="start" disabled>Start game</button><button id="pause" disabled>Pause</button><button id="next" hidden>Next level</button><button id="restart" hidden>Restart game</button><button id="finish-review" hidden>Finish playtest</button></div><div class="touch" aria-label="Game movement controls"><button type="button" data-control="left" aria-label="Move left">←</button><button type="button" data-control="up" aria-label="Move up or jump">↑</button><button type="button" data-control="down" aria-label="Move down">↓</button><button type="button" data-control="right" aria-label="Move right">→</button><button type="button" data-control="jump" id="jump" aria-label="Jump">Jump</button><button type="button" data-control="fire" id="fire" aria-label="Fire" hidden>Fire ✦</button></div><p id="announce" role="status" aria-live="polite">Loading…</p><p id="controls-help" style="text-align:center;font-size:12px">Arrow keys or WASD · P to pause · R to restart</p></main><script nonce="${nonce}">const __name = (fn) => fn; (${installGameDisplayKeyboardBridge.toString()})("${nonce}"); (${startGameSandbox.toString()})((${createGameEngine.toString()})(),(${validateArcadeGameSpec.toString()}),"${nonce}");</script></body></html>`;
 }

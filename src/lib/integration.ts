@@ -1,6 +1,10 @@
+import { parseFlowStudioEvent, type FlowStudioEvent, type MaterialEvent, type MaterialResponse } from './game-flow-integration';
+export { parseFlowStudioEvent, parseMaterialResponse } from './game-flow-integration';
+export type { FlowStudioEvent, MaterialEvent, MaterialResponse } from './game-flow-integration';
+export type { FlowProgress, MaterialRequest } from './game-flow-session';
 /** Versioned host interface. Tokens, role claims and private drafts never cross postMessage. */
 export const INTEGRATION_VERSION = 1 as const;
-export { validateScoringPolicy, gameObjectiveUnits, calculateProvisionalPoints, selectScoringAttempt, createPublicationBinding, scorePublishedGame } from './game-scoring';
+export { validateScoringPolicy, gameObjectiveUnits, calculateProvisionalPoints, selectScoringAttempt, createPublicationBinding, scorePublishedGame, validateFlowCompletion, scorePublishedFlow } from './game-scoring';
 export type { ScoringPolicy, ProvisionalPoints, PublicationBinding, ScoringAttempt } from './game-scoring';
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const hostId = /^[a-z][a-z0-9_-]{0,63}$/;
@@ -48,10 +52,11 @@ export function readGameSelection(locationURL: string, expectedStudioOrigin: str
 }
 export type CompletionResult = { outcome: 'won' | 'lost'; elapsed: number; score: number; points?: number; reviewedLevelIds: string[] };
 type GameStudioEventBase = { source: 'nce-game-studio'; channel: string; gameId: string; publishedRevision?: number; result?: CompletionResult };
-export type GameStudioEvent = GameStudioEventBase & ({ version: 1; type: 'ready' | 'completed' } | { version: 2; type: 'completed'; specVersion: 6; mode: 'endless' | 'levels' });
+export type GameStudioEvent = (GameStudioEventBase & ({ version: 1; type: 'ready' | 'completed' } | { version: 2; type: 'completed'; specVersion: 6; mode: 'endless' | 'levels' })) | FlowStudioEvent;
 export function parseGameStudioEvent(value: unknown): GameStudioEvent | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return;
   const v = value as Record<string, unknown>;
+  if (v.version === 3) return parseFlowStudioEvent(value);
   const advanced = v.version === 2 && v.type === 'completed' && v.specVersion === 6 && typeof v.mode === 'string' && ['endless', 'levels'].includes(v.mode);
   const fields = ['version', 'source', 'channel', 'type', 'gameId', 'publishedRevision', 'result', ...(advanced ? ['specVersion', 'mode'] : [])];
   if (Object.keys(v).some(k => !fields.includes(k)) || v.version !== 1 && !advanced || v.source !== 'nce-game-studio' || typeof v.channel !== 'string' || !channelId.test(v.channel) || typeof v.gameId !== 'string' || !uuid.test(v.gameId) || typeof v.type !== 'string' || !['ready', 'completed'].includes(v.type)) return;
@@ -67,7 +72,7 @@ export function parseGameStudioEvent(value: unknown): GameStudioEvent | undefine
   return JSON.parse(JSON.stringify(v)) as GameStudioEvent;
 }
 /** Browser gameplay reports are advisory; never use them as proof of learning or a grade. */
-export function mountGame(container: HTMLElement, options: { studioOrigin: string; gameId: string; hostId: string; title?: string; onEvent?: (event: GameStudioEvent) => void }) {
+export function mountGame(container: HTMLElement, options: { studioOrigin: string; gameId: string; hostId: string; title?: string; onEvent?: (event: GameStudioEvent) => void; onMaterial?: (event: MaterialEvent, controls: { complete: () => void; unavailable: () => void }) => void }) {
   const origin = integrationOrigin(options.studioOrigin), channel = crypto.randomUUID();
   const frame = document.createElement('iframe');
   frame.src = createEmbedURL(origin, options.gameId, { hostId: options.hostId, channel });
@@ -79,13 +84,26 @@ export function mountGame(container: HTMLElement, options: { studioOrigin: strin
   frame.allow = `fullscreen ${origin}`;
   frame.allowFullscreen = true;
   frame.style.cssText = 'width:100%;min-height:760px;border:0;border-radius:16px';
+  let disposed = false, lastRequest = '';
   const receive = (event: MessageEvent) => {
     if (event.origin !== origin || event.source !== frame.contentWindow) return;
     const data = parseGameStudioEvent(event.data);
-    if (data?.channel === channel && data.gameId === options.gameId) options.onEvent?.(data);
+    if (data?.channel !== channel || data.gameId !== options.gameId) return;
+    if (data.version === 3 && data.type === 'material-request') {
+      const requestKey = `${data.runId}:${data.requestId}`;
+      if (lastRequest === requestKey) return;
+      lastRequest = requestKey; let answered = false;
+      const reply = (status: MaterialResponse['status']) => {
+        if (answered || disposed) return; answered = true;
+        frame.contentWindow?.postMessage({ source: 'nce-game-host', version: 3, type: 'material-result', channel, gameId: options.gameId, publishedRevision: data.publishedRevision, runId: data.runId, requestId: data.requestId, nodeId: data.node.id, status } satisfies MaterialResponse, origin);
+      };
+      try { if (options.onMaterial) options.onMaterial(data, { complete: () => reply('completed'), unavailable: () => reply('unavailable') }); else reply('unavailable'); }
+      catch { reply('unavailable'); }
+    }
+    options.onEvent?.(data);
   };
   window.addEventListener('message', receive); container.append(frame);
-  return { iframe: frame, destroy() { window.removeEventListener('message', receive); frame.remove(); } };
+  return { iframe: frame, destroy() { disposed = true; window.removeEventListener('message', receive); frame.remove(); } };
 }
 /** Public catalog only. Private authoring uses Game Studio's own Core service audience. */
 export async function listPublishedGames(apiOrigin: string, options: { signal?: AbortSignal } = {}): Promise<unknown[]> {

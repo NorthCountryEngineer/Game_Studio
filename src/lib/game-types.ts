@@ -15,8 +15,13 @@ export type GameLevel = {
   rules: GameRules;
   seed: number;
 };
+export type GameFlowNode =
+  | { id: string; type: 'level'; levelId: string }
+  | { id: string; type: 'material'; title: string; kind: 'lesson' | 'video' | 'exercise'; reference: string; required: boolean }
+  | { id: string; type: 'menu'; title: string };
+export type GameFlow = { version: 1; nodes: GameFlowNode[] };
 export type ArcadeGameSpec = {
-  version: 1 | 2 | 4 | 5 | 6;
+  version: 1 | 2 | 4 | 5 | 6 | 7;
   title: string;
   description: string;
   genre: 'collect' | 'dodge' | 'platformer';
@@ -32,6 +37,7 @@ export type ArcadeGameSpec = {
   powerUps?: GamePowerUps;
   asteroids?: GameAsteroidSettings;
   sprites?: GameSprites;
+  flow?: GameFlow;
 };
 
 export type CooperativeGameSpec = ArcadeGameSpec & { version: 4 | 5 | 6; progression: string; levels: GameLevel[]; multiplayer: { mode: 'cooperative'; maxPlayers: 2 } };
