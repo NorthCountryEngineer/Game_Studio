@@ -8,6 +8,7 @@ import { useConfirm } from './components/Confirm';
 import { BrandingProvider, defaultIntegrationConfig, parseIntegrationConfig, type IntegrationConfig, type ServiceBranding } from './lib/branding';
 import { beginCoreLogin, completeCoreLogin, coreConfig, coreLogout, corePlayerSession, coreRequest, isCore, recoverExpiredCoreSession } from './lib/core';
 import { parseGameStudioEvent } from './lib/integration';
+import { requestMultiHostMaterial } from './lib/multi-game-integration';
 import { requestHostMaterial } from './lib/game-flow-integration';
 import { hostLoginCandidate, hostLoginLaunch } from './lib/host-login';
 import './games.css';
@@ -39,10 +40,10 @@ function EmbeddedGame({id,config}:{id:string;config:IntegrationConfig}) {
   if (!allowed) return <main className="service-main"><h1>Open this game from a connected application.</h1><p>The host must be approved for this deployment.</p><a href={`/games/${encodeURIComponent(id)}`} target="_blank" rel="noopener noreferrer">Open the standalone player ↗</a></main>;
   const report = (event:PublishedGameEvent) => {
     if(event.type === 'completed' && event.result.outcome === 'level-complete') return;
-    const clean = parseGameStudioEvent({...event,source:'nce-game-studio',version:event.type === 'flow-progress' ? 3 : event.specVersion === 6 ? 2 : 1,channel});
+    const clean = parseGameStudioEvent({...event,source:'nce-game-studio',version:event.type === 'multi-progress' ? 4 : event.type === 'flow-progress' ? 3 : event.specVersion === 6 ? 2 : 1,channel});
     if (clean) window.parent.postMessage(clean, selected!.origin);
   };
-  return <GamePage id={id} embedded signed={false} playerSigned={false} adminMode={false} navigate={async path => { window.open(path,'_blank','noopener,noreferrer'); }} onGameEvent={report} onMaterialRequest={(request, signal) => requestHostMaterial(window.parent, selected!.origin, { channel, gameId: request.gameId, publishedRevision: request.publishedRevision }, { runId: request.runId, requestId: request.requestId, node: request.node }, signal)}/>;
+  return <GamePage id={id} embedded signed={false} playerSigned={false} adminMode={false} navigate={async path => { window.open(path,'_blank','noopener,noreferrer'); }} onGameEvent={report} onMultiMaterialRequest={(request, signal) => requestMultiHostMaterial(window.parent, selected!.origin, { channel, gameId: request.gameId, publishedRevision: request.publishedRevision }, { runId: request.runId, requestId: request.requestId, path: request.path, node: request.node }, signal)} onMaterialRequest={(request, signal) => requestHostMaterial(window.parent, selected!.origin, { channel, gameId: request.gameId, publishedRevision: request.publishedRevision }, { runId: request.runId, requestId: request.requestId, node: request.node }, signal)}/>;
 }
 
 export default function App() {

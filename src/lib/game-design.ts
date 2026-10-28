@@ -2,6 +2,7 @@ import type { ArcadeGameSpec, GameAsteroidEnemies, GameAsteroidSettings, GameArc
 import { createWordGameEngine } from './word-game-engine';
 import { designWordGame, wordGameGenre } from './word-game-design';
 import { reconcileGameFlow } from './game-flow';
+import { designMultiGame, multiGameRequested, validateMultiGameSpec } from './multi-game';
 
 /** Data is the only author-controlled input to the fixed game engine. */
 export function validateArcadeGameSpec(value: unknown): ArcadeGameSpec {
@@ -458,10 +459,12 @@ export function designArcadeGame(message: string, current?: ArcadeGameSpec): { s
 
 /** Preserve legacy layouts and dispatch only validated data to the matching fixed engine. */
 export function validateGameSpec(value: unknown): GameSpec {
+  if (value && typeof value === 'object' && (value as { version?: unknown }).version === 8) return validateMultiGameSpec(value);
   return value && typeof value === 'object' && (value as { version?: unknown }).version === 3 ? createWordGameEngine().validate(value) : validateArcadeGameSpec(value);
 }
 export function designGame(message: string, current?: GameSpec): { spec: GameSpec; reply: string } {
   const validated = current ? validateGameSpec(current) : undefined;
+  if (validated?.version === 8 || multiGameRequested(message)) return designMultiGame(message, validated?.version === 8 ? validated : undefined);
   if (validated?.version === 3 || wordGameGenre(message)) return designWordGame(message, validated?.version === 3 ? validated : undefined);
   return designArcadeGame(message, validated);
 }

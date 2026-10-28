@@ -73,6 +73,8 @@ def identifier(value):
 
 
 def validate_spec(value):
+    if isinstance(value, dict) and type(value.get('version')) is int and value['version'] == 8:
+        return validate_multi_game(value)
     if isinstance(value, dict) and type(value.get('version')) in {int, float} and value['version'] == 3:
         try: return word_games().validate_spec(value)
         except word_games().WordGameError as error: fail(str(error))
@@ -151,6 +153,66 @@ def validate_spec(value):
         if value['version'] not in {2, 5, 6, 7} or value.get('multiplayer') or is_endless_asteroids(value): fail('Flows require a finite solo game with saved levels.')
         validate_flow(value['flow'], value['levels'])
     return deepcopy(value)
+
+
+def validate_multi_game(value):
+    """A bounded composition of copied solo definitions, never recursive references."""
+    fields(value, ('version', 'genre', 'title', 'description', 'instructions', 'steps'))
+    if type(value['version']) is not int or value['version'] != 8 or value['genre'] != 'multi-game': fail('Unsupported multi-game version.')
+    text(value['title'], 80, 'Journey title'); text(value['description'], 300, 'Description', True); text(value['instructions'], 300, 'Instructions', True)
+    steps = value['steps']
+    if not isinstance(steps, list) or not 1 <= len(steps) <= 12: fail('A multi-game journey needs 1 to 12 steps.')
+    seen, game_count, finite_count = set(), 0, 0
+    for index, step in enumerate(steps):
+        if not isinstance(step, dict): fail('Choose a supported journey step.')
+        kind = step.get('type')
+        if not isinstance(kind, str): fail('Choose a supported journey step.')
+        fields(step, ('id', 'type', 'title', 'kind', 'reference', 'required') if kind == 'material' else ('id', 'type', 'spec'))
+        if not isinstance(step['id'], str) or not re.fullmatch(r'step-(?:[1-9]|1[0-2])', step['id']) or step['id'] in seen: fail('Journey identifiers must be unique step-1 through step-12 values.')
+        seen.add(step['id'])
+        if kind == 'material':
+            text(step['title'], 80, 'Client object title')
+            if not isinstance(step['kind'], str) or step['kind'] not in {'content', 'video', 'interactive'} or type(step['required']) is not bool: fail('Choose a supported client object and whether it is required.')
+            reference = step['reference']
+            if not isinstance(reference, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}', reference) or '://' in reference or '..' in reference.split('/'): fail('Material references must be opaque client identifiers, without URLs or parent paths.')
+            continue
+        if kind not in {'game', 'free-play'}: fail('Choose a game, client object, or final free-play step.')
+        raw = step['spec']
+        if not isinstance(raw, dict) or raw.get('version') == 8: fail('Nested multi-game journeys are not supported.')
+        spec = validate_spec(raw)
+        if spec.get('multiplayer'): fail('Journey games must use the fixed solo formats.')
+        game_count += 1
+        if game_count > 8: fail('A journey supports at most eight games, including free play.')
+        endless = is_endless_asteroids(spec)
+        if kind == 'free-play':
+            if index != len(steps) - 1 or spec['version'] != 6 or not endless: fail('Free play must be the last step and use continuous solo Asteroids.')
+        else:
+            if endless: fail('Continuous games belong only in the final free-play step.')
+            finite_count += 1
+    if not finite_count: fail('A journey needs at least one finite game.')
+    if len(canonical(value).encode('utf-8')) >= 240000: fail('The combined journey must fit below 240,000 bytes. Use smaller sprites or fewer games.')
+    return deepcopy(value)
+
+
+def default_multi_game():
+    return validate_multi_game({'version': 8, 'genre': 'multi-game', 'title': 'Multi-game Journey',
+        'description': 'A sequence of games and optional client-owned objects.', 'instructions': 'Complete each game to continue through the journey.',
+        'steps': [{'id': 'step-1', 'type': 'game', 'spec': word_games().default_spec('crossword')},
+            {'id': 'step-2', 'type': 'game', 'spec': word_games().default_spec('word-search')}]})
+
+
+def multi_game_requested(message):
+    if not isinstance(message, str): return False
+    directives = '\n'.join(line for line in message.split('\n') if not re.search(r'^\s*(?:title|name|description|instructions|player|collectible|hazard)\s*:', line, re.I))
+    return re.search(r'\b(?:create|build|make|start)\s+(?:a\s+)?multi[ -]game\b', directives, re.I) is not None
+
+
+def design_multi_game(message, current=None):
+    spec = validate_multi_game(current) if current else default_multi_game()
+    for line in message.split('\n'):
+        match = re.fullmatch(r'\s*(title|description|instructions)\s*:\s*(.*?)\s*', line, re.I)
+        if match: spec[match[1].lower()] = match[2].strip(JS_WHITESPACE)
+    return {'spec': validate_multi_game(spec), 'reply': 'Use the journey editor to add, copy, and reorder games or client objects. Conversation updates Title, Description, and Instructions; saved game copies stay unchanged.'}
 
 
 def validate_flow(value, levels):
@@ -386,6 +448,8 @@ def update_asteroid_settings(spec, patch):
 def design_game(message, current=None):
     """The same bounded conversational compiler as the local preview."""
     prompt_text(message)
+    if isinstance(current, dict) and current.get('version') == 8 or multi_game_requested(message):
+        return design_multi_game(message, current if isinstance(current, dict) and current.get('version') == 8 else None)
     if isinstance(current, dict) and current.get('version') == 3 or word_games().requested_genre(message):
         try: return word_games().design_game(message, current)
         except word_games().WordGameError as error: fail(str(error))
@@ -803,7 +867,12 @@ def complete_test(api, claims, game_id, body):
         fail('Unexpected or missing game fields.')
     state, existing = load(api, claims, game_id); expected(state, body['revision'])
     if state.get('_pending'): fail('Wait for the assistant to finish, or edit this draft before testing.', 409)
-    if state['spec']['version'] == 3:
+    if state['spec']['version'] == 8:
+        reviewed = body.get('reviewedLevelIds')
+        step_ids = {step['id'] for step in state['spec']['steps']}
+        if not isinstance(reviewed, list) or len(reviewed) != len(step_ids) or any(not isinstance(value, str) for value in reviewed) or set(reviewed) != step_ids:
+            fail('Playtest and review every step of this exact journey revision before marking it tested.')
+    elif state['spec']['version'] == 3:
         if body.get('reviewedLevelIds') != ['level-1']:
             fail('Complete and review this exact word game revision before marking it tested.')
     elif state['spec']['version'] in {2, 4, 5, 6, 7}:
@@ -845,7 +914,7 @@ def duplicate(api, claims, game_id, body):
     result = {'id': target, 'spec': deepcopy(state['spec']), 'revision': 0, 'status': 'Draft', 'messages': [],
         'createdAt': timestamp, 'updatedAt': timestamp, '_owner': claims['sub'], '_requests': [], '_turns': 0, '_modelCalls': 0}
     result['spec']['title'] = ('Copy of ' + result['spec']['title'])[:80]
-    if result['spec']['version'] == 3:
+    if result['spec']['version'] in {3, 8}:
         # The schema counts UTF-16 units, and a title may contain astral text.
         result['spec']['title'] = ('Copy of ' + state['spec']['title']).encode('utf-16-le')[:160].decode('utf-16-le', errors='ignore').rstrip(JS_WHITESPACE)
     source_guard = {'ConditionCheck': {'TableName': os.environ['GAME_DRAFT_TABLE'], 'Key': {'id': key('game', game_id)}, **conditional(existing)}}
@@ -909,6 +978,9 @@ def registry_guard(api, af, registry):
 
 
 def model_spec(af, agent, model, state, message):
+    if state['spec']['version'] == 8 or multi_game_requested(message):
+        designed = design_game(message, state['spec'])
+        return designed['spec'], designed['reply']
     word_genre = word_games().requested_genre(message) or (state['spec']['genre'] if state['spec']['version'] == 3 else None)
     if word_genre: return word_model_spec(af, agent, model, state, message, word_genre)
     schema = default_spec()
@@ -1019,7 +1091,9 @@ def conversation(api, claims, game_id, body, event=None):
     if state.get('_pending'): fail('An assistant request is still pending. It will not be replayed automatically.', 409)
     if state.get('_turns', 0) >= 40: fail('This conversation is full. Duplicate the game to continue.', 409)
     value, stored = config(api); config_guard = guard(value, stored)
-    selected = configured_model(api, claims, value) if value['assistantModeId'] else None
+    # Composition edits are deterministic even when a paid assistant is configured.
+    composition = state['spec']['version'] == 8 or multi_game_requested(message)
+    selected = configured_model(api, claims, value) if value['assistantModeId'] and not composition else None
     paid = selected is not None and selected[3]['provider'] == 'bedrock'
     if selected:
         current = selected[1]

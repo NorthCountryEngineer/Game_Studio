@@ -88,7 +88,7 @@ def publication(api, game_id, revision):
         fail('A new edition was published. Reload this game before saving scores.', 409)
     try: spec = games().validate_spec(state['spec'])
     except (games().GameError, KeyError): fail('This game cannot accept arcade scores.', 409)
-    if spec['version'] in {3, 4, 7} or spec.get('multiplayer'): fail('Shared solo high scores are not enabled for this game format.', 404)
+    if spec['version'] in {3, 4, 7, 8} or spec.get('multiplayer'): fail('Shared solo high scores are not enabled for this game format.', 404)
     if not spec.get('arcade', {}).get('scoring') or not spec['arcade']['highScores']:
         fail('High scores are not enabled for this game.', 404)
     return spec, item

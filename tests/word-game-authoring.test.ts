@@ -9,7 +9,7 @@ import type { WordGenre } from '../src/lib/game-types.ts';
 const render = (genre: WordGenre, disabled = false, dirty = true) => renderToStaticMarkup(createElement(WordGameEditor, { spec: defaultWordGameSpec(genre, 'space'), disabled, dirty, revision: 2, change: () => {}, save: () => {} }));
 
 test('explicit format starters preserve field-based conversation input on separate lines', () => {
-  assert.deepEqual(gameFormatStarters.map(format => format.id), ['arcade', 'platformer', 'crossword', 'word-search', 'mad-libs']);
+  assert.deepEqual(gameFormatStarters.map(format => format.id), ['arcade', 'multi-game', 'platformer', 'crossword', 'word-search', 'mad-libs']);
   const idea = 'Entries: MOON | A natural satellite; MARS | The red planet; STAR | A glowing ball of gas';
   const message = formatCreationPrompt('crossword', idea);
   assert.match(message, /^Create a Crossword game\.\nEntries:/u);

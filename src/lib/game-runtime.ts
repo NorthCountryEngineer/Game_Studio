@@ -548,6 +548,7 @@ export function createGameEngine() {
 
 /** Treat the opaque frame's results as untrusted messages, never as permissions. */
 export function validateGameResult(value: unknown, spec: GameSpec, levelId?: string): GameResult | undefined {
+  if (spec.version === 8) return;
   if (!value || typeof value !== 'object' || Array.isArray(value)) return;
   const result = value as Record<string, unknown>;
   if (spec.version === 3) {

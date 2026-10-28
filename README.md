@@ -8,6 +8,8 @@ The workshop's **Asteroids** starter uses a spaceship and supports uploaded spri
 
 The **2D Platformer** starter adds pixel worlds, walking, jumping and eight player-selected characters. Finite solo games share a drag/drop journey editor for levels, client-owned lessons/videos/exercises and an optional level home. Continuous Asteroids has separate survival settings. Clients can consume points, active play time and material completion through the SDK. See [level flows and client adapters](docs/LEVEL_FLOWS.md).
 
+The **Multi-game** category composes complete puzzles and leveled games with generic client objects, videos and interactive objects. It uses the same drag/drop stack and selected-step editor. An optional continuous ending starts after the main result is finalized, keeping free-play scores separate. See [multi-game journeys](docs/MULTI_GAME.md).
+
 Creators can also choose **Crossword**, **Word search**, or **Mad Libs**. Edit answers and clues, word lists, or story templates and prompts; save, playtest and acknowledge the content before publishing. Crosswords and word searches have repeatable seeded layouts. Mad Libs collects the player's words before revealing the story. All three run in the fixed isolated player, without arcade timers, lives or high-score boards. See [word-game workflow and limits](docs/WORD_GAMES.md).
 
 Every standalone player and private playtest has a **Full screen** button. Press **F** while playing or **Alt+Enter** to toggle it; **Escape** and the visible exit button return to the page. Word-game text fields keep normal typing. Solo and cooperative play use the same mounted game while switching views. See [full-screen controls and host support](docs/FULLSCREEN.md).

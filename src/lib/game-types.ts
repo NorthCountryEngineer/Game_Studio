@@ -51,10 +51,18 @@ export type WordSearchSpec = WordBase & { genre: 'word-search'; puzzle: { seed: 
 export type MadLibBlank = { id: string; label: string };
 export type MadLibsSpec = WordBase & { genre: 'mad-libs'; puzzle: { template: string; blanks: MadLibBlank[] } };
 export type WordGameSpec = CrosswordSpec | WordSearchSpec | MadLibsSpec;
-export type GameSpec = ArcadeGameSpec | WordGameSpec;
+export type SingleGameSpec = ArcadeGameSpec | WordGameSpec;
+export type MultiGameStep =
+  | { id: string; type: 'game'; spec: SingleGameSpec }
+  | { id: string; type: 'material'; title: string; kind: 'content' | 'video' | 'interactive'; reference: string; required: boolean }
+  | { id: string; type: 'free-play'; spec: ArcadeGameSpec };
+export type MultiGameSpec = { version: 8; genre: 'multi-game'; title: string; description: string; instructions: string; steps: MultiGameStep[] };
+export type GameSpec = SingleGameSpec | MultiGameSpec;
 export function isWordGameSpec(spec: GameSpec): spec is WordGameSpec { return spec.version === 3; }
+export function isMultiGameSpec(spec: GameSpec): spec is MultiGameSpec { return spec.version === 8; }
+export function isArcadeGameSpec(spec: GameSpec): spec is ArcadeGameSpec { return spec.version !== 3 && spec.version !== 8; }
 export function isEndlessAsteroids(spec: GameSpec): boolean { return spec.version === 6 && !!spec.asteroids?.endless; }
-export function gameReviewLevelIds(spec: GameSpec): string[] { return spec.version === 3 || spec.version === 1 ? ['level-1'] : (isEndlessAsteroids(spec) ? (spec.levels || []).slice(0, 1) : spec.levels || []).map(level => level.id); }
+export function gameReviewLevelIds(spec: GameSpec): string[] { return spec.version === 8 ? spec.steps.map(step => step.id) : spec.version === 3 || spec.version === 1 ? ['level-1'] : (isEndlessAsteroids(spec) ? (spec.levels || []).slice(0, 1) : spec.levels || []).map(level => level.id); }
 
 export type GameMessage = { id: string; role: 'user' | 'assistant'; text: string };
 export type Game = {

@@ -2,22 +2,26 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { validateGameSpec } from '../lib/game-design';
 import { createGameEngine, gameSandboxDocument, validateGameResult } from '../lib/game-runtime';
 import { wordGameSandboxDocument } from '../lib/word-game-runtime';
-import { isEndlessAsteroids, type GameResult, type GameSpec } from '../lib/game-types';
+import { isEndlessAsteroids, type GameResult, type GameSpec, type SingleGameSpec } from '../lib/game-types';
 import { gamePlayerLoadMessage, validateGameReview, type GameReview } from '../lib/game-review';
 import { PlayerSurface } from './PlayerSurface';
+import { MultiGamePlayer } from './MultiGamePlayer';
+import type { MultiGameProgress, MultiGameResult, MultiMaterialHandler } from '../lib/multi-game-session';
 import { LevelFlowPlayer } from './LevelFlowPlayer';
 import type { FlowProgress, MaterialHandler } from '../lib/game-flow-session';
 
-export type GamePlayerProps = { spec: GameSpec; levelId?: string; onComplete?: (result: GameResult) => void; playtest?: boolean; onReview?: (review: GameReview) => void; characterId?: string; onCharacter?: (id: string) => void; onMaterialRequest?: MaterialHandler; onFlowProgress?: (progress: FlowProgress, result?: GameResult) => void };
+export type GamePlayerProps = { spec: GameSpec; levelId?: string; stepId?: string; onMultiProgress?: (progress: MultiGameProgress) => void; onMultiComplete?: (result: MultiGameResult) => void; onMultiMaterialRequest?: MultiMaterialHandler; onComplete?: (result: GameResult) => void; playtest?: boolean; onReview?: (review: GameReview) => void; characterId?: string; onCharacter?: (id: string) => void; onMaterialRequest?: MaterialHandler; onFlowProgress?: (progress: FlowProgress, result?: GameResult) => void };
 export function GamePlayer(props: GamePlayerProps) {
+  if (props.spec.version === 8) return <MultiGamePlayer key={JSON.stringify(props.spec)} {...props} spec={props.spec} />;
   if (props.spec.version !== 3 && props.spec.flow && !props.levelId) return <LevelFlowPlayer key={JSON.stringify(props.spec)} {...props} spec={props.spec} />;
-  return <GameFrame {...props} />;
+  return <GameFrame {...props} spec={props.spec} />;
 }
-export function GameFrame({ spec, levelId, onComplete, playtest = false, onReview, characterId, onCharacter }: GamePlayerProps) {
+export function GameFrame({ spec, levelId, onComplete, playtest = false, onReview, characterId, onCharacter }: Omit<GamePlayerProps, 'spec'> & { spec: SingleGameSpec }) {
   const fingerprint = JSON.stringify(spec);
   const instance = useMemo(() => {
     try {
       const validated = validateGameSpec(JSON.parse(fingerprint));
+      if (validated.version === 8) throw new Error('Open a multi-game journey in its sequence player.');
       if (levelId && (validated.version === 3 ? levelId !== 'level-1' : !createGameEngine().getLevels(validated).some(level => level.id === levelId))) throw new Error('Choose a level in this game.');
       const nonce = crypto.randomUUID().replaceAll('-', '');
       return { spec: validated, nonce, document: validated.version === 3 ? wordGameSandboxDocument(nonce) : gameSandboxDocument(nonce), error: '' };
