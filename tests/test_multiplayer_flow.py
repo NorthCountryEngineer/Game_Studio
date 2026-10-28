@@ -41,7 +41,7 @@ class FlowTests(unittest.TestCase):
 
     def test_flow_opt_in_is_exact_and_does_not_change_ready_or_disclose_flags(self):
         created = self.create()
-        for index, value in enumerate((True, False, 0, 2, '1', None, [], {})):
+        for index, value in enumerate((True, False, 0, 3, '1', None, [], {})):
             connection = 'invalid-flow-' + str(index)
             relay.connect(self.api, self.event(connection, '$connect'))
             self.error(400, lambda: self.send(connection, {'type': 'join', 'roomId': created['roomId'],

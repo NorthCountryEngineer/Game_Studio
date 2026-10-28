@@ -43,7 +43,7 @@ export function CooperativePlayer({ spec, room, onStatus }: { spec: CooperativeG
       validateState: value => Boolean(validateCooperativeState(value, spec)),
       onStatus: (status, reason) => statusCallback.current(status, reason),
       onPeer: connected => { peerConnected.current = connected; sendPeer(); },
-      onInput: (seq, mask) => post({ type: 'game-coop-input', nonce: instance.nonce, seq, mask }),
+      onInput: (seq, mask, pressedMask) => post({ type: 'game-coop-input', nonce: instance.nonce, seq, mask, ...(pressedMask === undefined ? {} : { pressedMask }) }),
       onState: (seq, state) => { lastSnapshot.current = { seq, state }; post({ type: 'game-coop-state', nonce: instance.nonce, seq, state }); },
     });
     sendLoad();

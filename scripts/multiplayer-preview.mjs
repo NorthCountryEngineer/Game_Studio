@@ -12,7 +12,9 @@ import { WebSocketServer } from 'ws';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const port = Number(process.env.MULTIPLAYER_PREVIEW_PORT || 8096);
 const relayPort = Number(process.env.MULTIPLAYER_PREVIEW_RELAY_PORT || 8097);
+const oneWayDelay = Number(process.env.MULTIPLAYER_PREVIEW_ONE_WAY_MS || 0), ackDelay = Number(process.env.MULTIPLAYER_PREVIEW_ACK_DELAY_MS || 0);
 if (![port, relayPort].every(value => Number.isInteger(value) && value > 1024 && value < 65536) || port === relayPort || process.env.NODE_ENV === 'production') throw new Error('This rehearsal requires two distinct local development ports.');
+if (![oneWayDelay, ackDelay].every(value => Number.isInteger(value) && value >= 0 && value <= 1000)) throw new Error('Synthetic delay must be between 0 and 1000 ms.');
 const origin = `http://127.0.0.1:${port}`, relayOrigin = `http://127.0.0.1:${relayPort}`;
 process.env.VITE_APP_MODE = 'local';
 process.env.VITE_MULTIPLAYER_API_URL = relayOrigin;
@@ -26,7 +28,11 @@ const lines = createInterface({ input: python.stdout });
 lines.on('line', line => {
   let value; try { value = JSON.parse(line); } catch { readyReject(new Error('The preview backend returned invalid output.')); return; }
   if (value.ready) { readyResolve(value.game); return; }
-  for (const message of value.outgoing || []) { const socket = sockets.get(message.connectionId); if (socket?.readyState === 1) socket.send(JSON.stringify(message.message)); }
+  for (const message of value.outgoing || []) {
+    const socket = sockets.get(message.connectionId), deliver = () => { if (socket?.readyState === 1) socket.send(JSON.stringify(message.message)); };
+    const delay = oneWayDelay + (message.message.type === 'ack' ? ackDelay : 0);
+    if (delay) setTimeout(deliver, delay); else deliver();
+  }
   for (const id of value.closures || []) sockets.get(id)?.close(1000);
   pending.shift()?.resolve(value);
 });
@@ -53,7 +59,7 @@ try {
   wss.on('connection', async (socket, request) => {
     const connectionId = randomUUID(); sockets.set(connectionId, socket);
     const connected = dispatch({ kind: 'socket', route: '$connect', connectionId, origin: request.headers.origin });
-    socket.on('message', async (bytes, binary) => { if (binary) { socket.close(1008); return; } try { await connected; await dispatch({ kind: 'socket', route: '$default', connectionId, origin: request.headers.origin, body: JSON.parse(bytes.toString()) }); } catch { socket.close(1008); } });
+    socket.on('message', async (bytes, binary) => { if (binary) { socket.close(1008); return; } try { await connected; if (oneWayDelay) await new Promise(resolveValue => setTimeout(resolveValue, oneWayDelay)); if (socket.readyState !== 1) return; await dispatch({ kind: 'socket', route: '$default', connectionId, origin: request.headers.origin, body: JSON.parse(bytes.toString()) }); } catch { socket.close(1008); } });
     socket.on('close', () => { sockets.delete(connectionId); void dispatch({ kind: 'socket', route: '$disconnect', connectionId, origin: request.headers.origin }).catch(() => {}); });
     const accepted = await connected; if (accepted.status !== 200) socket.close(1008);
   });
@@ -69,6 +75,7 @@ try {
   console.log(`Synthetic multiplayer rehearsal: ${origin}/__multiplayer-fixture`);
   console.log(`Real Python relay logic: ${relayOrigin}; transient in-memory storage only.`);
   console.log('Open the fixture in two sessions, choose cooperative play, create a room, and paste its invitation into the second session. Ctrl+C removes every local room.');
+  if (oneWayDelay || ackDelay) console.log(`Synthetic latency: ${oneWayDelay} ms each way; ${ackDelay} ms additional acknowledgment delay.`);
 } catch (error) { console.error(error instanceof Error ? error.message : 'Local rehearsal failed.'); for (const socket of sockets.values()) socket.close(1000); await vite?.close(); httpServer?.close(); python.kill(); process.exitCode = 1; }
 async function close() { for (const socket of sockets.values()) socket.close(1000); await vite?.close(); httpServer?.close(); python.kill(); process.exit(0); }
 process.once('SIGINT', close); process.once('SIGTERM', close);
