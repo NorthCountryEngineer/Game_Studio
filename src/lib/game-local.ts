@@ -11,8 +11,9 @@ const copy = <T,>(value: T): T => structuredClone(value);
 function identifier(value: string) { if (!uuid.test(value)) throw new Error('Invalid game or request identifier.'); }
 function prompt(value: string) { if (typeof value !== 'string' || !value.trim() || value.length > 2000) throw new Error('Describe your game in 1–2,000 characters.'); return value.trim(); }
 export function validateGameConfig(value: GameConfig): GameConfig {
-  if (!value || Object.keys(value).sort().join(',') !== 'assistantModeId,creationEnabled,revision,version' || value.version !== 1 || !Number.isSafeInteger(value.revision) || value.revision < 0 || typeof value.creationEnabled !== 'boolean' || typeof value.assistantModeId !== 'string' || value.assistantModeId && !/^[a-z][a-z0-9_-]{0,63}$/.test(value.assistantModeId)) throw new Error('Choose valid game creation settings and an available assistant mode.');
-  return { version: 1, revision: value.revision, creationEnabled: value.creationEnabled, assistantModeId: value.assistantModeId };
+  const mode = (input: unknown) => typeof input === 'string' && (input === '' || /^[a-z][a-z0-9_-]{0,63}$/.test(input));
+  if (!value || typeof value !== 'object' || Array.isArray(value) || ![Object.prototype, null].includes(Object.getPrototypeOf(value)) || !['assistantModeId,creationEnabled,revision,version', 'assistantModeId,creationEnabled,crosswordAssistantModeId,revision,version'].includes(Object.keys(value).sort().join(',')) || value.version !== 1 || !Number.isSafeInteger(value.revision) || value.revision < 0 || typeof value.creationEnabled !== 'boolean' || !mode(value.assistantModeId) || Object.hasOwn(value, 'crosswordAssistantModeId') && !mode(value.crosswordAssistantModeId)) throw new Error('Choose valid game creation settings and an available assistant mode.');
+  return { version: 1, revision: value.revision, creationEnabled: value.creationEnabled, assistantModeId: value.assistantModeId, ...(Object.hasOwn(value, 'crosswordAssistantModeId') ? { crosswordAssistantModeId: value.crosswordAssistantModeId } : {}) };
 }
 
 /** Browser-only game rehearsal. No generated code, model calls, network uploads, or cloud writes. */
@@ -43,7 +44,7 @@ export class LocalGameLibrary {
     return game;
   }
   private update(state: State, game: Game) { game.revision += 1; game.updatedAt = now(); this.write(state); return copy(game); }
-  settings(): GameSettings { const config = copy(this.read().config); return { config, canCreate: config.creationEnabled, canPublish: true, canManage: true, canAdminContent: true }; }
+  settings(): GameSettings { const config = copy(this.read().config); return { config, canCreate: config.creationEnabled, canPublish: true, canManage: true, canAdminContent: true, crosswordGenerator: { available: false, reason: 'AI crossword suggestions require the connected site and an administrator-configured model. Local preview makes no model calls.' } }; }
   saveSettings(config: GameConfig, expectedRevision: number): GameSettings {
     const state = this.read(), clean = validateGameConfig(config);
     if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0 || clean.revision !== expectedRevision || state.config.revision !== expectedRevision) throw new Error('Game settings changed. Reload settings before saving again.');

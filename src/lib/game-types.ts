@@ -79,6 +79,9 @@ export type Game = {
   operationState?: 'pending' | 'uncertain';
   operationError?: string;
 };
-export type GameConfig = { version: 1; revision: number; creationEnabled: boolean; assistantModeId: string };
-export type GameSettings = { config: GameConfig; canCreate: boolean; canPublish: boolean; canManage: boolean; canAdminContent: boolean };
+export type GameConfig = { version: 1; revision: number; creationEnabled: boolean; assistantModeId: string; crosswordAssistantModeId?: string };
+export type CrosswordGeneratorStatus = { available: boolean; reason?: string; modeName?: string; modelName?: string };
+export type CrosswordSuggestionProposal = { requestId: string; path: string[]; title: string; description: string; entries: CrosswordEntry[] };
+export type CrosswordSuggestionResponse = { game: Game; proposal: CrosswordSuggestionProposal };
+export type GameSettings = { config: GameConfig; canCreate: boolean; canPublish: boolean; canManage: boolean; canAdminContent: boolean; crosswordGenerator?: CrosswordGeneratorStatus };
 export type GameResult = { outcome: 'level-complete' | 'won' | 'lost'; elapsed: number; score: number; points?: number; reviewedLevelIds: string[] };
