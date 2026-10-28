@@ -54,7 +54,10 @@ def word(value):
     return value
 
 
-def crossword(spec):
+def crossword(spec, *, work_limit=None):
+    if work_limit is None: work_limit = CROSSWORD_WORK_LIMIT
+    if type(work_limit) is not int or not 1 <= work_limit <= CROSSWORD_WORK_LIMIT:
+        fail('Crossword layout work limit is invalid.')
     size, entries = 25, spec['puzzle']['entries']
     grid, masks = [[''] * 25 for _ in range(25)], [[0] * 25 for _ in range(25)]
     placed, nodes, work = [], 0, 0
@@ -66,7 +69,7 @@ def crossword(spec):
     def tick():
         nonlocal work
         work += 1
-        if work > CROSSWORD_WORK_LIMIT:
+        if work > work_limit:
             fail('Crossword layout search reached its work limit. Edit the vocabulary or seed; every word must fit.')
 
     def candidate(index, row, col, direction):

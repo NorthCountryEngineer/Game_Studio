@@ -273,6 +273,110 @@ class CrosswordSuggestionsTests(unittest.TestCase):
         messages = {self.generated_error(content, category) for content, category in cases}
         self.assertEqual(len(messages), 5)
 
+    def test_connected_pool_is_kept_complete_and_in_its_original_order(self):
+        target = games.word_games().default_spec('crossword')
+        before = deepcopy(target)
+        fitted = games.fit_crossword_entries(target, self.entries)
+        self.assertEqual(fitted, self.entries)
+        self.assertEqual(target, before)
+
+    def test_valid_vocabulary_with_disconnected_word_returns_only_model_derived_connected_options(self):
+        target = games.word_games().default_spec('crossword')
+        target.update(title='Synthetic saved crossword', description='A synthetic saved topic.', instructions='Keep these saved instructions.')
+        target['puzzle']['seed'] = 4242
+        before = deepcopy(target)
+        pool = [*deepcopy(self.entries[:2]), {'answer': 'ZZZZ', 'clue': 'A disconnected synthetic word'}, *deepcopy(self.entries[2:])]
+        self.provider.converse.return_value = self.response(pool)
+        result = games.crossword_model_entries(self.af, {'instructions': ''}, {'target': 'test.small-model', 'maxOutputTokens': 1200}, target)
+        self.assertEqual(result, self.entries)
+        self.assertEqual(target, before)
+        candidate = deepcopy(target); candidate['puzzle']['entries'] = result
+        self.assertEqual(games.validate_spec(candidate), candidate)
+        self.provider.converse.assert_called_once()
+
+    def test_pool_is_validated_before_any_fitting_or_filtering(self):
+        target = games.word_games().default_spec('crossword')
+        bad_tails = [
+            {'answer': 'ZZZZ', 'clue': 'https://DO_NOT_LOG_THIS.example'},
+            {'answer': 'ZZZZ', 'clue': 'A clue', 'code': 'DO_NOT_LOG_THIS'},
+            {'answer': self.entries[0]['answer'], 'clue': 'A duplicate answer'},
+        ]
+        with patch.object(games.word_games(), 'crossword', side_effect=AssertionError('Invalid pools cannot reach fitting.')):
+            for tail in bad_tails:
+                with self.assertRaises(games.GameError) as caught: games.fit_crossword_entries(target, [*self.entries, tail])
+                self.assertEqual(caught.exception.status, 502)
+                self.assertNotIn('DO_NOT_LOG_THIS', caught.exception.message)
+
+    def test_no_connected_triple_fails_without_wasting_triple_layout_searches(self):
+        target = games.word_games().default_spec('crossword')
+        pool = [{'answer': answer, 'clue': 'A synthetic clue'} for answer in ('AA', 'AB', 'CC', 'CD', 'EE', 'EF')]
+        with patch.object(games.word_games(), 'crossword', wraps=games.word_games().crossword) as layout:
+            with self.assertRaises(games.GameError) as caught: games.fit_crossword_entries(target, pool)
+            self.assertIn('one connected crossword', caught.exception.message)
+            self.assertEqual(layout.call_count, 1)
+
+    def test_subset_search_has_a_finite_total_work_budget_even_when_only_last_triple_fits(self):
+        target = games.word_games().default_spec('crossword')
+        pool = [{'answer': 'A' + chr(letter) + 'A', 'clue': 'A synthetic clue'} for letter in range(ord('B'), ord('R'))]
+        calls, triples = [], []
+        def bounded_layout(candidate, *, work_limit=None):
+            answers = [entry['answer'] for entry in candidate['puzzle']['entries']]
+            calls.append(work_limit)
+            self.assertIs(type(work_limit), int)
+            if len(answers) == 3:
+                triples.append(answers)
+                if len(triples) == 48: return None
+            raise games.word_games().WordGameError('Synthetic bounded layout failure.')
+        with patch.object(games.word_games(), 'crossword', side_effect=bounded_layout):
+            result = games.fit_crossword_entries(target, pool)
+        self.assertEqual(len(triples), 48)
+        self.assertEqual([entry['answer'] for entry in result], triples[-1])
+        self.assertLessEqual(len(calls), 1 + 48 + 2 * 13)
+        self.assertLessEqual(sum(calls), 1104000)
+        self.assertEqual(calls[0], 200000)
+        self.assertEqual(calls.count(8000), 48)
+        self.assertLessEqual(calls.count(20000), 26)
+
+    def test_subset_search_never_tries_more_than_48_layout_triples(self):
+        target = games.word_games().default_spec('crossword')
+        pool = [{'answer': 'A' + chr(letter) + 'A', 'clue': 'A synthetic clue'} for letter in range(ord('B'), ord('R'))]
+        with patch.object(games.word_games(), 'crossword', side_effect=games.word_games().WordGameError('Synthetic bounded failure.')) as layout:
+            with self.assertRaises(games.GameError): games.fit_crossword_entries(target, pool)
+            self.assertEqual(layout.call_count, 49)
+            self.assertEqual(sum(call.kwargs['work_limit'] for call in layout.call_args_list), 200000 + 48 * 8000)
+
+    def test_second_greedy_pass_can_include_an_earlier_word_after_a_later_bridge(self):
+        words = games.word_games(); target = words.default_spec('crossword')
+        pool = [{'answer': answer, 'clue': 'A synthetic clue'} for answer in ('CAT', 'CAR', 'ART', 'DOG', 'ROAD')]
+        original_layout = words.crossword
+        calls = []
+        def limited_layout(candidate, *, work_limit=None):
+            calls.append([entry['answer'] for entry in candidate['puzzle']['entries']])
+            if len(calls) == 1: raise words.WordGameError('Synthetic initial pool work limit.')
+            return original_layout(candidate, work_limit=work_limit)
+        with patch.object(words, 'crossword', side_effect=limited_layout):
+            fitted = games.fit_crossword_entries(target, pool)
+        self.assertEqual(fitted, pool)
+        # DOG has no letter in the first triple; ROAD adds its shared letters.
+        # The final list still follows model order, after the deferred addition.
+        self.assertIn(['CAT', 'CAR', 'ART', 'ROAD'], calls)
+        self.assertEqual(calls[-1], ['CAT', 'CAR', 'ART', 'DOG', 'ROAD'])
+
+    def test_crossword_internal_budget_is_bounded_and_default_layout_is_unchanged(self):
+        words = games.word_games(); target = words.default_spec('crossword')
+        baseline = words.crossword(target)
+        self.assertEqual(words.crossword(target, work_limit=words.CROSSWORD_WORK_LIMIT), baseline)
+        for invalid in (0, -1, True, 1.5, '1000', words.CROSSWORD_WORK_LIMIT + 1):
+            with self.assertRaises(words.WordGameError) as caught: words.crossword(target, work_limit=invalid)
+            self.assertIn('work limit is invalid', str(caught.exception))
+        with self.assertRaises(words.WordGameError) as caught: words.crossword(target, work_limit=1)
+        self.assertIn('search reached its work limit', str(caught.exception))
+        # Resolve the global default when called, so existing bounded-engine
+        # tests can still lower it without altering the function signature.
+        with patch.object(words, 'CROSSWORD_WORK_LIMIT', 1):
+            with self.assertRaises(words.WordGameError) as caught: words.crossword(target)
+            self.assertIn('search reached its work limit', str(caught.exception))
+
     def test_incomplete_nonjson_code_and_disconnected_responses_never_change_game(self):
         self.configure(); original = self.crossword()
         invalid_outputs = [
