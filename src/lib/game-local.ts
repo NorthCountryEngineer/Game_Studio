@@ -15,7 +15,7 @@ export function validateGameConfig(value: GameConfig): GameConfig {
   return { version: 1, revision: value.revision, creationEnabled: value.creationEnabled, assistantModeId: value.assistantModeId };
 }
 
-/** Browser-only game rehearsal. No generated code, model calls, uploads, or cloud writes. */
+/** Browser-only game rehearsal. No generated code, model calls, network uploads, or cloud writes. */
 export class LocalGameLibrary {
   constructor(private storage: StoragePort) {}
   private read(): State {
@@ -108,7 +108,7 @@ export class LocalGameLibrary {
     identifier(newId); const state = this.read(); this.enabled(state); const source = this.draft(state, id, revision);
     if (state.deleted.includes(newId) || state.drafts.some(item => item.id === newId)) throw new Error('This copy identifier already exists. Reload the library.');
     let title = `${source.spec.title.slice(0, 70)} (copy)`;
-    if (source.spec.version === 3) {
+    if (source.spec.version === 3 || source.spec.version === 8) {
       title = `Copy of ${source.spec.title}`.slice(0, 80).replace(/[\uD800-\uDBFF]$/u, '').trimEnd();
     }
     const stamp = now(), game: Game = { id: newId, spec: validateGameSpec({ ...source.spec, title }), revision: 0, status: 'Draft', messages: [], createdAt: stamp, updatedAt: stamp };

@@ -36,7 +36,7 @@ export function createCooperativeEngine(base = createGameEngine()) {
         const platform = state.platforms[1 + Math.floor(random(state) * (state.platforms.length - 1))];
         x = platform.x + 18 + random(state) * (platform.w - 60); y = platform.y - size;
         if (kind === 'hazard') vx = (random(state) > 0.5 ? 1 : -1) * (20 + rules.difficulty * 8);
-      } else if (spec.genre === 'dodge') { y = -size - random(state) * 50; vy = kind === 'snack' ? 75 + rules.difficulty * 12 : 85 + rules.difficulty * 28; }
+      } else if (spec.genre === 'dodge') { y = -size - random(state) * 50; vy = kind === 'snack' ? 75 + rules.difficulty * 12 : 85 + rules.difficulty * 28; if (kind === 'hazard' && arcade) ({ x, y, vx, vy } = base.edgeSpawn(state, size, vy)); }
       else if (kind === 'hazard') { vx = (random(state) > 0.5 ? 1 : -1) * (25 + rules.difficulty * 10); vy = (random(state) > 0.5 ? 1 : -1) * (15 + rules.difficulty * 5); }
       const entity: GameEntity = { id: state.nextId, kind, x, y, w: size, h: size, vx, vy, ...(arcade && kind === 'hazard' ? { asteroid: 'large' as const } : {}) };
       if (state.players.some(player => base.overlaps({ x: player.x - 16, y: player.y - 16, w: 74, h: 66 }, entity)) || attempt < 39 && state.entities.some(other => base.overlaps({ ...other, x: other.x - 8, y: other.y - 8, w: other.w + 16, h: other.h + 16 }, entity))) continue;
@@ -97,8 +97,10 @@ export function createCooperativeEngine(base = createGameEngine()) {
     state.bullets = state.bullets.filter(bullet => {
       const dx = bullet.vx * dt, dy = bullet.vy * dt;
       let nearest: GameEntity | undefined, first = Infinity;
-      for (const entity of state.entities) if (entity.kind === 'hazard' && !removed.has(entity.id)) { const hit = base.sweptHit(bullet.x, bullet.y, dx - entity.vx * dt, dy - entity.vy * dt, entity); if (hit !== undefined && hit < first) { nearest = entity; first = hit; } }
+      for (const entity of state.entities) if (!removed.has(entity.id) && (entity.kind === 'hazard' || state.players[bullet.owner].lives && state.players[bullet.owner].score < rules.goal)) { const hit = base.sweptHit(bullet.x, bullet.y, dx - entity.vx * dt, dy - entity.vy * dt, entity); if (hit !== undefined && hit < first) { nearest = entity; first = hit; } }
+      if (base.shotPrize(bullet, dt, state.powerUps, spec.powerUps, state.players[bullet.owner], first)) return false;
       if (nearest) {
+        if (nearest.kind === 'snack') { removed.add(nearest.id); const owner = state.players[bullet.owner]; owner.score++; if (arcade?.scoring) owner.points += 10; return false; }
         removed.add(nearest.id); if (arcade?.scoring) state.players[bullet.owner].points += nearest.asteroid === 'small' ? 50 : 20;
         if (arcade?.splitAsteroids && nearest.asteroid !== 'small') {
           const jitter = (random(state) - 0.5) * 0.3;
@@ -129,7 +131,7 @@ export function createCooperativeEngine(base = createGameEngine()) {
         if (!player.invulnerable && !entity.grace) { if (player.effects?.shield) player.effects.shield = 0; else player.lives = Math.max(0, player.lives - 1); player.invulnerable = 1.5; if (spec.genre === 'platformer') { player.x = 48 + seat * 80; player.y = 464; player.vy = 0; } }
       }
     }
-    state.entities = state.entities.filter(entity => !removed.has(entity.id) && entity.y < height + 60 && entity.x > -64 && entity.x < width + 64).concat(fragments);
+    state.entities = state.entities.filter(entity => !removed.has(entity.id) && entity.y > -128 && entity.y < height + 60 && entity.x > -64 && entity.x < width + 64).concat(fragments);
     if (spec.genre !== 'dodge') for (let i = 0; i < collected && state.players.some(player => player.score < rules.goal); i++) spawn(state, spec, 'snack');
     if (state.players.every(player => player.score >= rules.goal)) state.outcome = 'won';
     else if (state.players.every(player => !player.lives) || state.elapsed >= rules.timeLimit) state.outcome = 'lost';
@@ -137,7 +139,7 @@ export function createCooperativeEngine(base = createGameEngine()) {
   }
   /** Round snapshots without feeding network precision back into host physics. */
   function snapshot(state: CooperativeState): CooperativeState { return JSON.parse(JSON.stringify(state, (_key, value) => typeof value === 'number' && !Number.isInteger(value) ? Math.round(value * 1000) / 1000 : value)) as CooperativeState; }
-  return { create, step, snapshot, drawPrizes: base.drawPrizes, effectLabel: base.effectLabel, drawAdvanced: base.drawAdvanced, endless: base.endless, width, height };
+  return { spritePainter: base.spritePainter, create, step, snapshot, drawPrizes: base.drawPrizes, effectLabel: base.effectLabel, drawAdvanced: base.drawAdvanced, endless: base.endless, width, height };
 }
 
 /** Untrusted relay data is bounded before entering the opaque drawing frame. */
@@ -203,6 +205,7 @@ export function startCooperativeSandbox(engine: ReturnType<typeof createCooperat
   const canvas = document.getElementById('game') as HTMLCanvasElement, ctx = canvas.getContext('2d');
   const title = document.getElementById('title')!, status = document.getElementById('status')!, announce = document.getElementById('announce')!, instruction = document.getElementById('instruction')!;
   const start = document.getElementById('start') as HTMLButtonElement, pause = document.getElementById('pause') as HTMLButtonElement, next = document.getElementById('next') as HTMLButtonElement;
+  let paintSprite = engine.spritePainter();
   let spec: CooperativeGameSpec | undefined, seat: 0 | 1 = 0, state: CooperativeState | undefined, connected = false, previous = 0, accumulator = 0, broadcast = 0, inputTimer = 0, seq = 0, remoteSeq = 0, remoteMask = 0, remoteAge = 0, lastMask = -1;
   const keys = new Set<string>(), pressed = new Set<string>();
   const mask = () => Number(keys.has('arrowleft') || keys.has('a') || pressed.has('left')) | Number(keys.has('arrowright') || keys.has('d') || pressed.has('right')) * 2 | Number(keys.has('arrowup') || keys.has('w') || pressed.has('up')) * 4 | Number(keys.has('arrowdown') || keys.has('s') || pressed.has('down')) * 8 | Number(keys.has(' ') || pressed.has('jump')) * 16 | Number(keys.has(' ') || keys.has('z') || pressed.has('fire')) * 32;
@@ -240,12 +243,12 @@ export function startCooperativeSandbox(engine: ReturnType<typeof createCooperat
     const data = event.data, exact = (fields: string[]) => Object.keys(data).length === fields.length && fields.every(key => Object.prototype.hasOwnProperty.call(data, key));
     if (data.type === 'game-coop-load' && !spec && exact(['type', 'nonce', 'spec', 'seat']) && (data.seat === 0 || data.seat === 1)) {
       try {
-        const loaded = validate(data.spec); if (loaded.version !== 4 && !((loaded.version === 5 || loaded.version === 6) && loaded.multiplayer)) return; spec = loaded as CooperativeGameSpec; seat = data.seat;
+        const loaded = validate(data.spec); if (loaded.version !== 4 && !((loaded.version === 5 || loaded.version === 6) && loaded.multiplayer)) return; spec = loaded as CooperativeGameSpec; paintSprite = engine.spritePainter(spec.sprites); seat = data.seat;
         state = engine.create(spec); title.textContent = `${spec.title} · Cooperative play`; instruction.textContent = `You are Player ${seat + 1}. Both players collect their own goal. Shared world; separate lives and points. No friendly fire. The host starts and pauses each level. If a player runs out of lives before finishing their goal, restart the level to try together again.`;
         if (engine.endless(spec)) instruction.textContent = `You are Player ${seat + 1}. Survive together for as long as possible. Difficulty rises every ${spec.asteroids!.difficultyInterval} active seconds. The run ends when both ships lose all lives. Shared world; separate lives and points; no friendly fire. The authored treasure goal and timer do not end this run.`;
         document.getElementById('jump')!.hidden = spec.genre !== 'platformer'; document.getElementById('fire')!.hidden = !spec.arcade?.shooting;
         document.getElementById('controls-help')!.textContent = spec.arcade?.rotation ? 'Left / Right turn · Up thrusts · Down reverses · Space / Z fires' : spec.genre === 'platformer' ? 'Arrows / WASD move · Space / Up jumps' : `Arrows / WASD move${spec.arcade?.shooting ? ' · Space / Z fires' : ''}`;
-        if (spec.powerUps) instruction.textContent += ` Falling prizes: 3 triple shot, » rapid fire, S one-hit shield, ↑ speed boost. Pickups affect only the ship that collects them.${engine.endless(spec) ? ' Any damaging impact clears that ship’s prizes; a shield absorbs one hit and also clears every prize.' : ''}`;
+        if (spec.powerUps) instruction.textContent += ` Shoot or collect prizes: 3 triple shot, » rapid fire, S one-hit shield, ↑ speed boost. Pickups affect only the ship that collects them.${engine.endless(spec) ? ' Any damaging impact clears that ship’s prizes; a shield absorbs one hit and also clears every prize.' : ''}`;
         if (spec.version === 6) instruction.textContent += `${spec.arcade?.splitAsteroids ? spec.asteroids!.sizes === 3 ? ' Asteroids split large → two medium → four small pieces.' : ' Large asteroids split into two small pieces.' : ''}${spec.asteroids!.enemies.enabled ? ` Enemy ships take ${spec.asteroids!.enemies.hitPoints} hits; ${spec.asteroids!.enemies.difficulty === 'easy' ? 'easy enemies wander' : spec.asteroids!.enemies.difficulty === 'medium' ? 'medium enemies track gradually' : 'hard enemies pursue and fire aimed shots'}.` : ''}`;
         start.hidden = pause.hidden = seat !== 0; draw(); parent.postMessage({ type: 'game-coop-loaded', nonce }, '*');
       } catch { announce.textContent = 'This cooperative game could not be loaded safely.'; }
@@ -265,16 +268,18 @@ export function startCooperativeSandbox(engine: ReturnType<typeof createCooperat
     ctx.fillStyle = dark ? '#211d3e' : level.theme === 'garden' ? '#f6f1cf' : '#e4f2e8'; ctx.fillRect(0, 0, 960, 540);
     ctx.fillStyle = dark ? '#baaddb' : '#38796c'; for (let i = 0; i < 25; i++) { ctx.beginPath(); ctx.arc((i * 139 + 31) % 960, (i * 83 + 57) % 520, dark ? 2 : 3, 0, Math.PI * 2); ctx.fill(); }
     ctx.fillStyle = dark ? '#887da5' : '#6a8547'; for (const platform of state.platforms) ctx.fillRect(platform.x, platform.y, platform.w, platform.h);
-    for (const entity of state.entities) { ctx.fillStyle = entity.kind === 'snack' ? '#ecc96b' : entity.asteroid === 'medium' ? '#bc9382' : entity.asteroid === 'small' ? '#8eabb0' : '#9b82a7'; ctx.strokeStyle = '#4b4458'; ctx.lineWidth = 2; ctx.beginPath(); if (entity.kind === 'snack') { const x = entity.x + entity.w / 2, y = entity.y + entity.h / 2; ctx.moveTo(x, y - 12); ctx.lineTo(x + 11, y); ctx.lineTo(x, y + 12); ctx.lineTo(x - 11, y); ctx.closePath(); } else ctx.ellipse(entity.x + entity.w / 2, entity.y + entity.h / 2, entity.w / 2, entity.h / 2, 0.3, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); }
-    if (state.advanced) engine.drawAdvanced(ctx,state.advanced);
-    if (state.powerUps) engine.drawPrizes(ctx, state.powerUps.pickups);
+    for (const entity of state.entities) { if (paintSprite(ctx, entity.kind === 'snack' ? 'reward' : 'asteroid', entity.x, entity.y, entity.w, entity.h)) continue; ctx.fillStyle = entity.kind === 'snack' ? '#ecc96b' : entity.asteroid === 'medium' ? '#bc9382' : entity.asteroid === 'small' ? '#8eabb0' : '#9b82a7'; ctx.strokeStyle = '#4b4458'; ctx.lineWidth = 2; ctx.beginPath(); if (entity.kind === 'snack') { const x = entity.x + entity.w / 2, y = entity.y + entity.h / 2; ctx.moveTo(x, y - 12); ctx.lineTo(x + 11, y); ctx.lineTo(x, y + 12); ctx.lineTo(x - 11, y); ctx.closePath(); } else ctx.ellipse(entity.x + entity.w / 2, entity.y + entity.h / 2, entity.w / 2, entity.h / 2, 0.3, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); }
+    if (state.advanced) engine.drawAdvanced(ctx,state.advanced,paintSprite);
+    if (state.powerUps) engine.drawPrizes(ctx, state.powerUps.pickups, paintSprite);
     for (const bullet of state.bullets) { ctx.strokeStyle = bullet.owner === 0 ? '#f6c6de' : '#7edbed'; ctx.lineWidth = 5; ctx.beginPath(); ctx.moveTo(bullet.x - bullet.vx / 60, bullet.y - bullet.vy / 60); ctx.lineTo(bullet.x, bullet.y); ctx.stroke(); }
     state.players.forEach((player, index) => {
       if (!player.lives || player.invulnerable > 0 && Math.floor(state!.elapsed * 9) % 2) return;
       if (player.effects?.shield) { ctx.strokeStyle = '#36cad7'; ctx.lineWidth = 4; ctx.beginPath(); ctx.arc(player.x + 21, player.y + 17, 34, 0, Math.PI * 2); ctx.stroke(); }
       ctx.save(); ctx.translate(player.x + 21, player.y + 17); ctx.fillStyle = index === 0 ? spec!.player.color : '#63cadd'; ctx.strokeStyle = dark ? '#fffaf0' : '#254e45'; ctx.lineWidth = index === seat ? 4 : 2;
-      if (spec!.arcade?.shooting || spec!.arcade?.rotation) { ctx.rotate(player.angle + Math.PI / 2); ctx.beginPath(); ctx.moveTo(0, -25); ctx.lineTo(23, 17); ctx.lineTo(0, 11); ctx.lineTo(-23, 17); ctx.closePath(); }
-      else { ctx.beginPath(); ctx.ellipse(0, 0, 21, 17, 0, 0, Math.PI * 2); } ctx.fill(); ctx.stroke(); ctx.restore();
+      if (spec!.arcade?.shooting || spec!.arcade?.rotation) ctx.rotate(player.angle + Math.PI / 2);
+      if (paintSprite(ctx, 'player', -23, -25, 46, 46)) { ctx.restore(); } else {
+      if (spec!.arcade?.shooting || spec!.arcade?.rotation) { ctx.beginPath(); ctx.moveTo(0, -25); ctx.lineTo(23, 17); ctx.lineTo(0, 11); ctx.lineTo(-23, 17); ctx.closePath(); }
+      else { ctx.beginPath(); ctx.ellipse(0, 0, 21, 17, 0, 0, Math.PI * 2); } ctx.fill(); ctx.stroke(); ctx.restore(); }
       ctx.fillStyle = dark ? '#fffaf0' : '#254e45'; ctx.font = 'bold 16px system-ui'; ctx.textAlign = 'center'; ctx.fillText(`P${index + 1}`, player.x + 21, player.y - 12);
     });
     if (!connected || !state.running || state.paused || state.outcome !== 'playing') {

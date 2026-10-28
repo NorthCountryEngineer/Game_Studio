@@ -1,15 +1,15 @@
-import { gameReviewLevelIds, isEndlessAsteroids, type GameSpec } from './game-types';
+import { gameReviewLevelIds, isEndlessAsteroids, type GameSpec, type SingleGameSpec } from './game-types';
 
 export type GameReview = { elapsed: number; reviewedLevelIds: string[] };
 
-export function gamePlayerLoadMessage(spec: GameSpec, nonce: string, levelId?: string, playtest = false) {
+export function gamePlayerLoadMessage(spec: SingleGameSpec, nonce: string, levelId?: string, playtest = false, characterId?: string) {
   // The older word-player protocol deliberately accepts no preview-only flags.
-  return { type: 'axolotl-game-load', nonce, spec, levelId, ...(spec.version !== 3 ? { playtest } : {}) };
+  return { type: 'axolotl-game-load', nonce, spec, levelId, ...(spec.version !== 3 ? { playtest } : {}), ...(spec.version === 7 && characterId ? { characterId } : {}) };
 }
 
 /** Private preview acknowledgement, deliberately separate from a game result. */
 export function validateGameReview(value: unknown, spec: GameSpec, levelId?: string): GameReview | undefined {
-  if (!isEndlessAsteroids(spec) || !value || typeof value !== 'object' || Array.isArray(value)) return;
+  if (spec.version === 8 || !isEndlessAsteroids(spec) || !value || typeof value !== 'object' || Array.isArray(value)) return;
   const review = value as Record<string, unknown>;
   if (Object.keys(review).sort().join(',') !== 'elapsed,reviewedLevelIds' || typeof review.elapsed !== 'number' || !Number.isFinite(review.elapsed) || review.elapsed < 5 || review.elapsed > 2_147_483_647) return;
   const allowed = levelId ? spec.version !== 3 && spec.levels?.some(level => level.id === levelId) ? [levelId] : [] : gameReviewLevelIds(spec);

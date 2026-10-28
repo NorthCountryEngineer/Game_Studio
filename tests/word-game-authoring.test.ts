@@ -9,14 +9,14 @@ import type { WordGenre } from '../src/lib/game-types.ts';
 const render = (genre: WordGenre, disabled = false, dirty = true) => renderToStaticMarkup(createElement(WordGameEditor, { spec: defaultWordGameSpec(genre, 'space'), disabled, dirty, revision: 2, change: () => {}, save: () => {} }));
 
 test('explicit format starters preserve field-based conversation input on separate lines', () => {
-  assert.deepEqual(gameFormatStarters.map(format => format.id), ['arcade', 'crossword', 'word-search', 'mad-libs']);
+  assert.deepEqual(gameFormatStarters.map(format => format.id), ['arcade', 'multi-game', 'platformer', 'crossword', 'word-search', 'mad-libs']);
   const idea = 'Entries: MOON | A natural satellite; MARS | The red planet; STAR | A glowing ball of gas';
   const message = formatCreationPrompt('crossword', idea);
   assert.match(message, /^Create a Crossword game\.\nEntries:/u);
   const designed = designWordGame(message).spec;
   assert.equal(designed.genre, 'crossword');
   if (designed.genre === 'crossword') assert.deepEqual(designed.puzzle.entries.map(entry => entry.answer), ['MOON', 'MARS', 'STAR']);
-  assert.equal(formatCreationPrompt('arcade', '  A pond adventure  '), 'A pond adventure');
+  assert.match(formatCreationPrompt('arcade', '  A space adventure  '), /^Create an Asteroids game in space\.[\s\S]*\nA space adventure$/);
 });
 
 test('crossword editing exposes authored answers, clues and repeatable layout only', () => {

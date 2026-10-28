@@ -1,9 +1,47 @@
-import type { ArcadeGameSpec, GameAsteroidEnemies, GameAsteroidSettings, GameArcadeOptions, GameLevel, GamePowerUps, GameSpec } from './game-types';
+import type { ArcadeGameSpec, GameAsteroidEnemies, GameAsteroidSettings, GameArcadeOptions, GameFlow, GameFlowNode, GameLevel, GamePowerUps, GameSpec, GameSpriteRole } from './game-types';
 import { createWordGameEngine } from './word-game-engine';
 import { designWordGame, wordGameGenre } from './word-game-design';
+import { reconcileGameFlow } from './game-flow';
+import { designMultiGame, multiGameRequested, validateMultiGameSpec } from './multi-game';
 
 /** Data is the only author-controlled input to the fixed game engine. */
 export function validateArcadeGameSpec(value: unknown): ArcadeGameSpec {
+  // Keep this copy self-contained for the fixed sandbox; parity tests cover the exported helper.
+  function validateGameFlow(value: unknown, levels: Pick<GameLevel, 'id'>[]): GameFlow {
+    function record(input: unknown, keys: string[]): Record<string, unknown> {
+      if (!input || typeof input !== 'object' || Array.isArray(input) || ![Object.prototype, null].includes(Object.getPrototypeOf(input))) throw new Error('Flow steps must be plain objects.');
+      if (Object.keys(input).length !== keys.length || keys.some(key => !Object.hasOwn(input, key)) || Object.keys(input).some(key => !keys.includes(key))) throw new Error('A flow step has missing or unexpected fields.');
+      return input as Record<string, unknown>;
+    }
+    function title(input: unknown): string {
+      if (typeof input !== 'string' || !input.trim() || input !== input.trim() || input.length > 80 || /[\u0000-\u001f\u007f-\u009f<>]|(?:https?:\/\/|www\.|javascript\s*:|data\s*:|vbscript\s*:)|\b(?:eval|fetch|import)\s*\(/iu.test(input)) throw new Error('Flow titles must be plain text up to 80 characters.');
+      return input;
+    }
+    const flow = record(value, ['version', 'nodes']);
+    if (flow.version !== 1 || !Array.isArray(flow.nodes) || flow.nodes.length < 1 || flow.nodes.length > 24) throw new Error('A flow needs 1 to 24 steps and version 1.');
+    const ids = new Set<string>(), usedLevels = new Set<string>(), levelIds = new Set(levels.map(level => level.id));
+    const nodes: GameFlowNode[] = flow.nodes.map((input, index) => {
+      if (!input || typeof input !== 'object') throw new Error('Choose a supported flow step.');
+      const type = (input as Record<string, unknown>).type;
+      const node = record(input, type === 'level' ? ['id', 'type', 'levelId'] : type === 'menu' ? ['id', 'type', 'title'] : type === 'material' ? ['id', 'type', 'title', 'kind', 'reference', 'required'] : []);
+      if (typeof node.id !== 'string' || !/^step-(?:[1-9]|1[0-9]|2[0-4])$/u.test(node.id) || ids.has(node.id)) throw new Error('Flow identifiers must be unique step-1 through step-24 values.');
+      ids.add(node.id);
+      if (type === 'level') {
+        if (typeof node.levelId !== 'string' || !levelIds.has(node.levelId) || usedLevels.has(node.levelId)) throw new Error('Each saved level must appear exactly once in the flow.');
+        usedLevels.add(node.levelId);
+        return { id: node.id, type, levelId: node.levelId };
+      }
+      if (type === 'menu') {
+        if (index !== 0) throw new Error('A level-selection home screen can appear only as the first step.');
+        return { id: node.id, type, title: title(node.title) };
+      }
+      if (type !== 'material' || !['lesson', 'video', 'exercise'].includes(node.kind as string) || typeof node.required !== 'boolean') throw new Error('Choose a lesson, video, or exercise and whether it is required.');
+      if (typeof node.reference !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/u.test(node.reference) || node.reference.includes('://') || node.reference.split('/').includes('..')) throw new Error('Material references must be opaque client identifiers, without URLs or parent paths.');
+      return { id: node.id, type, title: title(node.title), kind: node.kind as 'lesson' | 'video' | 'exercise', reference: node.reference, required: node.required };
+    });
+    if (usedLevels.size !== levelIds.size) throw new Error('Each saved level must appear exactly once in the flow.');
+    return { version: 1, nodes };
+  }
   function object(input: unknown, keys: string[], label: string): Record<string, unknown> {
     if (!input || typeof input !== 'object' || Array.isArray(input) || ![Object.prototype, null].includes(Object.getPrototypeOf(input))) throw new Error(`${label} must be an object.`);
     const record = input as Record<string, unknown>;
@@ -19,9 +57,9 @@ export function validateArcadeGameSpec(value: unknown): ArcadeGameSpec {
     return input;
   }
   const version = value && typeof value === 'object' ? (value as Record<string, unknown>).version : undefined;
-  if (version !== 1 && version !== 2 && version !== 4 && version !== 5 && version !== 6) throw new Error('Unsupported game version.');
+  if (version !== 1 && version !== 2 && version !== 4 && version !== 5 && version !== 6 && version !== 7) throw new Error('Unsupported game version.');
   const hasArcade = Object.prototype.hasOwnProperty.call(value, 'arcade');
-  const spec = object(value, ['version', 'title', 'description', 'genre', 'theme', 'player', 'rules', 'objects', 'instructions', ...(version !== 1 ? ['progression', 'levels'] : []), ...(version === 4 || (version === 5 || version === 6) && Object.prototype.hasOwnProperty.call(value, 'multiplayer') ? ['multiplayer'] : []), ...(version === 5 || version === 6 && Object.prototype.hasOwnProperty.call(value, 'powerUps') ? ['powerUps'] : []), ...(version === 6 ? ['asteroids'] : []), ...(hasArcade ? ['arcade'] : [])], 'Game');
+  const spec = object(value, ['version', 'title', 'description', 'genre', 'theme', 'player', 'rules', 'objects', 'instructions', ...(version !== 1 ? ['progression', 'levels'] : []), ...(version === 4 || (version === 5 || version === 6) && Object.prototype.hasOwnProperty.call(value, 'multiplayer') ? ['multiplayer'] : []), ...(version === 5 || version === 6 && Object.prototype.hasOwnProperty.call(value, 'powerUps') ? ['powerUps'] : []), ...(version === 6 ? ['asteroids'] : []), ...(hasArcade ? ['arcade'] : []), ...(Object.hasOwn(value as object, 'flow') ? ['flow'] : []), ...(version === 6 && Object.hasOwn(value as object, 'sprites') ? ['sprites'] : [])], 'Game');
   const player = object(spec.player, ['name', 'color', 'speed', 'jump'], 'Player');
   const rules = object(spec.rules, ['goal', 'timeLimit', 'lives', 'difficulty'], 'Rules');
   const objects = object(spec.objects, ['collectible', 'hazard'], 'Objects');
@@ -37,6 +75,7 @@ export function validateArcadeGameSpec(value: unknown): ArcadeGameSpec {
     objects: { collectible: text(objects.collectible, 30, 'Collectible'), hazard: text(objects.hazard, 30, 'Hazard') },
     instructions: text(spec.instructions, 300, 'Instructions', true),
   };
+  if (version === 7 && (clean.genre !== 'platformer' || hasArcade)) throw new Error('Pixel platformers require the fixed platformer style without arcade options.');
   if (hasArcade) {
     if (spec.genre !== 'dodge') throw new Error('Arcade options are supported only for dodge games.');
     const arcade = object(spec.arcade, ['rotation', 'shooting', 'splitAsteroids', 'scoring', 'highScores'], 'Arcade options');
@@ -79,6 +118,25 @@ export function validateArcadeGameSpec(value: unknown): ArcadeGameSpec {
     if (!Array.isArray(prizes.types) || prizes.types.length < 1 || prizes.types.length > 4 || prizes.types.some(type => typeof type !== 'string' || !allowed.includes(type)) || new Set(prizes.types).size !== prizes.types.length) throw new Error('Choose one to four different supported prizes.');
     clean.powerUps = { spawnInterval: integer(prizes.spawnInterval, 5, 60, 'Prize interval'), duration: integer(prizes.duration, 3, 30, 'Prize duration'), types: [...prizes.types] as GamePowerUps['types'] };
   }
+  if (Object.hasOwn(spec, 'sprites')) {
+    const sprites = spec.sprites;
+    if (!sprites || typeof sprites !== 'object' || Array.isArray(sprites) || ![Object.prototype, null].includes(Object.getPrototypeOf(sprites))) throw new Error('Choose valid sprite images.');
+    const roles = Object.keys(sprites);
+    if (!roles.length || roles.length > 4 || roles.some(role => !['player', 'asteroid', 'reward', 'enemy'].includes(role))) throw new Error('Choose supported sprite slots.');
+    clean.sprites = {};
+    for (const role of roles) {
+      const sprite = object((sprites as Record<string, unknown>)[role], ['width', 'height', 'pixels'], 'Sprite');
+      const width = integer(sprite.width, 1, 64, 'Sprite width'), height = integer(sprite.height, 1, 64, 'Sprite height');
+      if (typeof sprite.pixels !== 'string' || sprite.pixels.length !== Math.ceil(width * height * 4 / 3) * 4 || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(sprite.pixels)) throw new Error('Sprite pixels must be bounded RGBA image data.');
+      let decoded: string; try { decoded = atob(sprite.pixels); } catch { throw new Error('Invalid sprite pixels.'); }
+      if (decoded.length !== width * height * 4 || btoa(decoded) !== sprite.pixels) throw new Error('Invalid sprite pixel dimensions.');
+      clean.sprites[role as GameSpriteRole] = { width, height, pixels: sprite.pixels };
+    }
+  }
+  if (Object.hasOwn(spec, 'flow')) {
+    if (![2, 5, 6, 7].includes(version) || clean.multiplayer || clean.asteroids?.endless) throw new Error('Flows require a finite solo game with saved levels.');
+    clean.flow = validateGameFlow(spec.flow, clean.levels!);
+  }
   return clean;
 }
 
@@ -95,7 +153,7 @@ function layoutSeed(text: string): number {
 
 /** Only the fixed dodge engine can run these optional controls and scoring rules. */
 function arcadeControls(spec: ArcadeGameSpec): string {
-  return spec.arcade?.rotation ? 'Left/Right or A/D turn 360 degrees; Up/W thrusts and Down/S reverses.' : 'Use arrows or WASD to swim.';
+  return spec.arcade?.rotation ? 'Left/Right or A/D turn 360 degrees; Up/W thrusts and Down/S reverses.' : 'Use arrows or WASD to move.';
 }
 
 function arcadeChallenge(spec: ArcadeGameSpec): string {
@@ -105,7 +163,7 @@ function arcadeChallenge(spec: ArcadeGameSpec): string {
 
 function arcadeInstructions(spec: ArcadeGameSpec): string {
   if (spec.version === 6 && spec.asteroids) {
-    const controls = spec.arcade?.rotation ? 'Left/Right turn; Up thrust; Down reverse.' : 'Use arrows or WASD to swim.';
+    const controls = spec.arcade?.rotation ? 'Left/Right turn; Up thrust; Down reverse.' : 'Use arrows or WASD to move.';
     const goal = spec.asteroids.endless ? 'Survive as long as you can; difficulty rises over time.' : 'Complete each level’s collection goal.';
     const shooting = !spec.arcade?.splitAsteroids ? 'Space fires; one shot destroys an asteroid.' : spec.asteroids.sizes === 3 ? 'Space fires. Large rocks split into two medium, then four small pieces.' : 'Space fires. Large rocks split into two small pieces.';
     const enemy = spec.asteroids.enemies.enabled ? ` ${spec.asteroids.enemies.difficulty} enemy ships take ${spec.asteroids.enemies.hitPoints} hit${spec.asteroids.enemies.hitPoints === 1 ? '' : 's'}; ${spec.asteroids.enemies.difficulty === 'easy' ? 'they wander' : spec.asteroids.enemies.difficulty === 'medium' ? 'they track you' : 'dodge aimed shots'}.` : '';
@@ -123,8 +181,9 @@ function arcadeLevelBrief(spec: ArcadeGameSpec, goal: number, focus: string): st
 
 /** Refresh generated control hints without replacing an author's level design. */
 function refreshArcadeBrief(before: ArcadeGameSpec, spec: ArcadeGameSpec, brief: string): string {
-  const previous = `${arcadeControls(before)} ${arcadeChallenge(before)}`;
-  if (!brief.endsWith(previous)) return brief;
+  const hint = `${arcadeControls(before)} ${arcadeChallenge(before)}`;
+  const previous = [hint, hint.replace('to move.', 'to swim.')].find(candidate => brief.endsWith(candidate));
+  if (!previous) return brief;
   const authored = brief.slice(0, -previous.length).trimEnd();
   const refreshed = `${authored ? `${authored} ` : ''}${arcadeControls(spec)} ${arcadeChallenge(spec)}`;
   // A longer control hint must never truncate the creator's original text.
@@ -158,11 +217,11 @@ export function planGameLevels(spec: ArcadeGameSpec, count: number, seedText: st
     const focus = count === 1 ? 'Explore the world at your own pace.' : index === 0 ? 'Learn the controls with a smaller collection goal and fewer obstacles.' : index === count - 1 ? 'Put your practice together with the full collection goal and the strongest challenge.' : 'Practice finding treasures while watching a more varied obstacle pattern.';
     return { id: `level-${index + 1}`, title: stage, brief: spec.arcade ? arcadeLevelBrief(spec, goal, index === 0 ? 'Learn the controls.' : index === count - 1 ? 'Combine your skills.' : 'Practice with more obstacles.') : `${focus} Collect ${goal} ${spec.objects.collectible}s and avoid ${spec.objects.hazard}s.`, theme: spec.theme, rules: { ...spec.rules, goal, difficulty }, seed: previous[index]?.seed || layoutSeed(`${seedText}|${index + 1}`) };
   });
-  return validateArcadeGameSpec({ ...spec, version: spec.version === 6 ? 6 : spec.version === 5 ? 5 : spec.version === 4 ? 4 : 2, progression: count === 1 ? 'One complete adventure with a saved layout. Lives and time reset when you retry.' : 'Start with the controls and a smaller goal, practice avoiding obstacles, then finish with the full goal and a greater challenge. Each level starts with fresh lives and time.', levels });
+  return validateArcadeGameSpec({ ...spec, version: spec.version === 7 ? 7 : spec.version === 6 ? 6 : spec.version === 5 ? 5 : spec.version === 4 ? 4 : 2, ...(spec.flow ? { flow: reconcileGameFlow(spec.flow, levels) } : {}), progression: count === 1 ? 'One complete adventure with a saved layout. Lives and time reset when you retry.' : 'Start with the controls and a smaller goal, practice avoiding obstacles, then finish with the full goal and a greater challenge. Each level starts with fresh lives and time.', levels });
 }
 
 export function defaultGameSpec(): ArcadeGameSpec {
-  return { version: 1, title: 'Axolotl Pond Adventure', description: 'Help a curious axolotl gather water snacks and steer clear of rocks.', genre: 'collect', theme: 'pond', player: { name: 'Axolotl', color: '#efadc4', speed: 5, jump: 10 }, rules: { goal: 10, timeLimit: 60, lives: 3, difficulty: 2 }, objects: { collectible: 'water snack', hazard: 'rock' }, instructions: 'Use the arrow keys or WASD to swim. Collect 10 water snacks before time runs out. Avoid rocks. Touch controls are available below the game.' };
+  return { version: 1, title: 'Treasure Adventure', description: 'Gather treasures and steer clear of rocks.', genre: 'collect', theme: 'pond', player: { name: 'Explorer', color: '#efadc4', speed: 5, jump: 10 }, rules: { goal: 10, timeLimit: 60, lives: 3, difficulty: 2 }, objects: { collectible: 'treasure', hazard: 'rock' }, instructions: 'Use the arrow keys or WASD to move. Collect 10 treasures before time runs out. Avoid rocks. Touch controls are available below the game.' };
 }
 
 export function defaultPowerUps(): GamePowerUps { return { spawnInterval: 12, duration: 10, types: ['triple-shot', 'rapid-fire', 'shield', 'speed-boost'] }; }
@@ -171,6 +230,7 @@ export function defaultPowerUps(): GamePowerUps { return { spawnInterval: 12, du
 export function defaultAsteroidSettings(): GameAsteroidSettings { return { endless: false, difficultyInterval: 30, sizes: 2, enemies: { enabled: false, difficulty: 'easy', hitPoints: 1, spawnInterval: 15, maxShips: 2 } }; }
 export function updateAsteroidSettings(spec: ArcadeGameSpec, patch: Partial<Omit<GameAsteroidSettings, 'enemies'>> & { enemies?: Partial<GameAsteroidEnemies> }): ArcadeGameSpec {
   if (spec.genre !== 'dodge' || !spec.arcade?.shooting) throw new Error('Enable Asteroids shooting before changing its advanced settings.');
+  if (patch.endless && spec.flow) throw new Error('Remove the level flow before switching to continuous play.');
   const previous = spec.asteroids ?? defaultAsteroidSettings();
   const asteroids = { ...previous, ...patch, enemies: { ...previous.enemies, ...patch.enemies } };
   const candidate = { ...structuredClone(spec), version: 6 as const, levels: getGameLevels(spec), progression: spec.progression ?? 'Learn the controls, build confidence, and finish your adventure one level at a time.', asteroids };
@@ -182,8 +242,8 @@ export function updateAsteroidEnemies(spec: ArcadeGameSpec, patch: Partial<GameA
 /** Retain compatible authored data while removing mechanics unsupported by the new style. */
 export function reconcileArcadeFormat(spec: ArcadeGameSpec): ArcadeGameSpec {
   if (spec.genre === 'dodge' && spec.arcade?.shooting) return spec;
-  if (!spec.asteroids && !spec.powerUps) return spec;
-  const { asteroids: _advanced, powerUps: _prizes, ...compatible } = spec;
+  if (!spec.asteroids && !spec.powerUps && !spec.sprites) return spec;
+  const { asteroids: _advanced, powerUps: _prizes, sprites: _sprites, ...compatible } = spec;
   if (compatible.genre !== 'dodge') delete compatible.arcade;
   return { ...compatible, version: spec.multiplayer ? 4 : spec.levels ? 2 : 1 };
 }
@@ -241,8 +301,8 @@ export function designArcadeGame(message: string, current?: ArcadeGameSpec): { s
   const hasArcadeToggle = toggles.some(([, value]) => value !== undefined);
   let explicitOtherGenre = false;
   if (has(/\b(platformer|platforming|jumping game|jump across|jump between)\b/)) { spec.genre = 'platformer'; explicitOtherGenre = true; changes.push('a jumping platform game'); }
-  else if (has(/\b(dodge|dodging|avoid(?:ing)? falling|survival)\b/)) { spec.genre = 'dodge'; changes.push('a falling-obstacle dodging game'); }
-  else if (has(/\b(?:collection|collecting|collector)(?:[- ]style)? game\b|\bcollector\b|\bcollect game\b|\b(?:genre|style)\s*[:=]?\s*collect\b|\b(?:switch|change)(?: it)? to (?:a )?collect(?:ion)?\b/) || (!current && !arcadeRequest && !hasArcadeToggle && has(/\b(collect|collecting|gather|gathering)\b/))) { spec.genre = 'collect'; explicitOtherGenre = true; changes.push('a swimming collection game'); }
+  else if (has(/\b(dodge|dodging|avoid(?:ing)? falling|survival)\b/)) { spec.genre = 'dodge'; changes.push('an Asteroids game'); }
+  else if (has(/\b(?:collection|collecting|collector)(?:[- ]style)? game\b|\bcollector\b|\bcollect game\b|\b(?:genre|style)\s*[:=]?\s*collect\b|\b(?:switch|change)(?: it)? to (?:a )?collect(?:ion)?\b/) || (!current && !arcadeRequest && !hasArcadeToggle && has(/\b(collect|collecting|gather|gathering)\b/))) { spec.genre = 'collect'; explicitOtherGenre = true; changes.push('a collection game'); }
   if ((arcadeRequest || hasArcadeToggle) && !explicitOtherGenre) {
     spec.genre = 'dodge';
     if (arcadeRequest && !spec.arcade) {
@@ -260,6 +320,7 @@ export function designArcadeGame(message: string, current?: ArcadeGameSpec): { s
     if (toggles.find(([key]) => key === 'shooting')?.[1] === false) spec.arcade.shooting = spec.arcade.splitAsteroids = false;
     if (toggles.find(([key]) => key === 'scoring')?.[1] === false) spec.arcade.scoring = spec.arcade.highScores = false;
   }
+  if (spec.version === 7 && spec.genre !== 'platformer') spec.version = 2;
   if (spec.genre !== 'dodge') {
     delete spec.arcade;
     if (hasArcadeToggle) notes.push('Rotation, shooting, and arcade score options are supported in dodge games.');
@@ -318,7 +379,7 @@ export function designArcadeGame(message: string, current?: ArcadeGameSpec): { s
   if (quotedTitle) { const previous = spec.title; spec.title = quotedTitle[1].trim(); try { validateArcadeGameSpec(spec); changes.push('title'); } catch { spec.title = previous; notes.push('Keep the title to 80 plain-text characters.'); } }
   if (changes.length && !customInstructions && spec.arcade) spec.instructions = arcadeInstructions(spec);
   else if (changes.length && !customInstructions) {
-    const controls = spec.genre === 'platformer' ? 'Use the arrow keys or WASD to move; Space or Up jumps.' : 'Use the arrow keys or WASD to swim.';
+    const controls = spec.genre === 'platformer' ? 'Use the arrow keys or WASD to move; Space or Up jumps.' : 'Use the arrow keys or WASD to move.';
     spec.instructions = `${controls} Collect ${spec.rules.goal} ${spec.objects.collectible}${spec.rules.goal === 1 ? '' : 's'} before time runs out. Avoid ${spec.objects.hazard}s. Touch controls are available below the game.`;
   }
   const countWords: Record<string, number> = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8 };
@@ -361,7 +422,7 @@ export function designArcadeGame(message: string, current?: ArcadeGameSpec): { s
     spec.levels = getGameLevels(spec).map(level => ({ ...level, brief: refreshArcadeBrief(before, spec, level.brief) }));
   }
   if (spec.version !== 1 && !customInstructions && (changes.length || !current)) {
-    const controls = spec.genre === 'platformer' ? 'Use arrows or WASD to move; Space or Up jumps.' : 'Use arrows or WASD to swim.';
+    const controls = spec.genre === 'platformer' ? 'Use arrows or WASD to move; Space or Up jumps.' : 'Use arrows or WASD to move.';
     spec.instructions = spec.arcade ? arcadeInstructions(spec) : `${controls} Complete each level’s collection goal and avoid ${spec.objects.hazard}s. Each level starts with fresh lives and time. Touch controls are available below the game.`;
   }
   if (has(/\b(3d|chat|weapons?|upload|custom code|javascript|payment|purchase|soundtrack|music)\b/) || has(/\bonline\b/) && !has(/\b(?:high[ -]?scores?|leaderboards?)\b/) || /https?:\/\/|<script|javascript:/iu.test(message)) notes.push('This builder supports 2D games, optional two-player cooperation, and shared high scores for signed-in players. It cannot add custom code, external assets, music, chat, or purchases.');
@@ -370,6 +431,7 @@ export function designArcadeGame(message: string, current?: ArcadeGameSpec): { s
     else notes.push('Advanced Asteroids settings require a dodge game with shooting enabled.');
   }
   const cooperative = arcadeToggle(lower, 'multiplayer|two[ -]player|2[ -]player|cooperative|co-op');
+  if (cooperative === true && (spec.flow || spec.version === 7)) throw new Error('Pixel platformers and custom level flows currently support solo play.');
   if (cooperative === true) {
     if (spec.version === 1) spec = planGameLevels(spec, 1, seedText);
     spec = validateArcadeGameSpec({ ...spec, version: spec.version === 6 ? 6 : spec.version === 5 ? 5 : 4, multiplayer: { mode: 'cooperative', maxPlayers: 2 } });
@@ -391,16 +453,18 @@ export function designArcadeGame(message: string, current?: ArcadeGameSpec): { s
     changes.push('prizes off');
   }
   const summary = changes.length ? `Updated ${[...new Set(changes)].join(', ')}.` : 'I can build a collection, dodging, or platform game in a pond, space, or garden.';
-  const help = changes.length ? 'Review the level plan, then test each level. Ask for “5 levels”, “level 2 harder”, or “shuffle layouts”. The free guided plan uses fixed progression rules; a configured AI assistant can design a tailored progression.' : 'Try “a space platformer, 3 levels, collect 12, 90 seconds, 3 lives,” or use a line such as “Title: Moon Axolotl”.';
+  const help = changes.length ? 'Review the level plan, then test each level. Ask for “5 levels”, “level 2 harder”, or “shuffle layouts”. The free guided plan uses fixed progression rules; a configured AI assistant can design a tailored progression.' : 'Try “a space platformer, 3 levels, collect 12, 90 seconds, 3 lives,” or use a line such as “Title: Moon Patrol”.';
   return { spec: validateArcadeGameSpec(spec), reply: [summary, ...notes, help].join(' ') };
 }
 
 /** Preserve legacy layouts and dispatch only validated data to the matching fixed engine. */
 export function validateGameSpec(value: unknown): GameSpec {
+  if (value && typeof value === 'object' && (value as { version?: unknown }).version === 8) return validateMultiGameSpec(value);
   return value && typeof value === 'object' && (value as { version?: unknown }).version === 3 ? createWordGameEngine().validate(value) : validateArcadeGameSpec(value);
 }
 export function designGame(message: string, current?: GameSpec): { spec: GameSpec; reply: string } {
   const validated = current ? validateGameSpec(current) : undefined;
+  if (validated?.version === 8 || multiGameRequested(message)) return designMultiGame(message, validated?.version === 8 ? validated : undefined);
   if (validated?.version === 3 || wordGameGenre(message)) return designWordGame(message, validated?.version === 3 ? validated : undefined);
   return designArcadeGame(message, validated);
 }

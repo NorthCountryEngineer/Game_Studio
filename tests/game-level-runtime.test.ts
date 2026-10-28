@@ -164,11 +164,11 @@ test('level instructions retain authored briefs and always state the actual curr
   const spec = campaign(); spec.levels![0].brief = 'Collect five treasures to learn the controls.';
   spec.levels![0].rules.goal = 7;
   const harness = sandboxHarness(spec);
-  const objective = 'Objective: Collect 7 water snacks in 60 seconds. 5 lives. Avoid rocks.';
+  const objective = 'Objective: Collect 7 treasures in 60 seconds. 5 lives. Avoid rocks.';
   assert.equal(harness.elements.get('instruction')!.textContent, `${spec.levels![0].brief} ${objective}`);
-  harness.click('start'); assert.match(harness.elements.get('instruction')!.textContent, /Collect 7 water snacks/);
+  harness.click('start'); assert.match(harness.elements.get('instruction')!.textContent, /Collect 7 treasures/);
   harness.complete(); harness.click('next');
-  assert.match(harness.elements.get('instruction')!.textContent, /Objective: Collect 6 water snacks in 90 seconds. 3 lives. Avoid rocks./);
+  assert.match(harness.elements.get('instruction')!.textContent, /Objective: Collect 6 treasures in 90 seconds. 3 lives. Avoid rocks./);
   const legacy = defaultGameSpec(); legacy.instructions = 'My original instructions, exactly as written.';
   const old = sandboxHarness(legacy); assert.equal(old.elements.get('instruction')!.textContent, legacy.instructions);
   old.click('start'); assert.equal(old.elements.get('instruction')!.textContent, legacy.instructions);

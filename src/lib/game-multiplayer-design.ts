@@ -3,18 +3,18 @@ import type { ArcadeGameSpec, GameLevel, GamePowerUps, GamePowerUpType, GameSpec
 const defaultProgression = 'Learn the controls, build confidence, and finish your adventure one level at a time.';
 /** Preserve the saved level data when the optional cooperative format is changed. */
 export function setCooperativeMode(spec: GameSpec, enabled: boolean): ArcadeGameSpec {
-  if (spec.version === 3) throw new Error('Two-player mode is available for arcade adventures.');
+  if ((spec.version === 3 || spec.version === 8)) throw new Error('Two-player mode is available for arcade adventures.');
   const { multiplayer: _previous, ...arcade } = structuredClone(spec);
   return { ...arcade, version: spec.version === 6 ? 6 : spec.version === 5 ? 5 : enabled ? 4 : 2, levels: getGameLevels(spec), progression: spec.progression ?? defaultProgression, ...(enabled ? { multiplayer: { mode: 'cooperative', maxPlayers: 2 } as const } : {}) };
 }
-export function updateArcadeLevelPlan(spec: GameSpec, levels: GameLevel[], progression = spec.version === 3 ? defaultProgression : spec.progression ?? defaultProgression): ArcadeGameSpec {
-  if (spec.version === 3) throw new Error('Word games do not have an arcade level plan.');
-  return { ...spec, version: spec.version === 6 ? 6 : spec.version === 5 ? 5 : spec.version === 4 ? 4 : 2, levels, progression };
+export function updateArcadeLevelPlan(spec: GameSpec, levels: GameLevel[], progression = (spec.version === 3 || spec.version === 8) ? defaultProgression : spec.progression ?? defaultProgression): ArcadeGameSpec {
+  if ((spec.version === 3 || spec.version === 8)) throw new Error('Word games do not have an arcade level plan.');
+  return { ...spec, version: spec.version === 7 ? 7 : spec.version === 6 ? 6 : spec.version === 5 ? 5 : spec.version === 4 ? 4 : 2, levels, progression };
 }
 
 /** New prize editions always copy the authored plan rather than re-generating it. */
 export function setPowerUpsEnabled(spec: GameSpec, enabled: boolean): ArcadeGameSpec {
-  if (spec.version === 3) throw new Error('Periodic prizes are available for Asteroids arcade games.');
+  if ((spec.version === 3 || spec.version === 8)) throw new Error('Periodic prizes are available for Asteroids arcade games.');
   if (enabled && (spec.genre !== 'dodge' || !spec.arcade?.shooting)) throw new Error('Enable Asteroids shooting before adding periodic prizes.');
   const { powerUps: previous, ...arcade } = structuredClone(spec);
   if (!enabled && spec.version !== 5 && spec.version !== 6) return arcade;
