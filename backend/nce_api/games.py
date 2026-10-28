@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 import base64
 import hashlib
 import importlib.util
+from itertools import combinations
 import json
 import math
 import os
@@ -1048,6 +1049,43 @@ def crossword_candidate_entries(value):
     return entries
 
 
+def fit_crossword_entries(target, value):
+    # Validate the entire provider pool before considering any subset. Unsafe
+    # fields, duplicate answers and oversized vocabulary cannot be filtered out.
+    entries = crossword_candidate_entries(value)
+    def fits(indices, budget):
+        candidate = deepcopy(target)
+        candidate['puzzle']['entries'] = [entries[index] for index in sorted(indices)]
+        try:
+            word_games().crossword(candidate, work_limit=min(budget, word_games().CROSSWORD_WORK_LIMIT))
+            return True
+        except word_games().WordGameError:
+            return False
+    indices = list(range(len(entries)))
+    if fits(indices, 200000): return entries
+    letters = [set(entry['answer']) for entry in entries]
+    selected, attempts = None, 0
+    for triple in combinations(indices, 3):
+        a, b, c = triple
+        if sum((bool(letters[a] & letters[b]), bool(letters[a] & letters[c]), bool(letters[b] & letters[c]))) < 2:
+            continue
+        attempts += 1
+        if fits(triple, 8000):
+            selected = set(triple); break
+        if attempts >= 48: break
+    if selected is None: crossword_response_failure('grid')
+    # At most 48 triple searches and two passes over the other 13 entries.
+    # Including the initial pool, fallback search budgets total <=1,104,000;
+    # the successful subset then passes the ordinary complete validator below.
+    for _ in range(2):
+        added = False
+        for index in indices:
+            if index in selected or not any(letters[index] & letters[other] for other in selected): continue
+            if fits(selected | {index}, 20000): selected.add(index); added = True
+        if not added: break
+    return [entries[index] for index in sorted(selected)]
+
+
 def crossword_model_entries(af, agent, model, target):
     instructions = (
         'Suggest answer and clue pairs for a crossword about the supplied game title and description. '
@@ -1087,7 +1125,7 @@ def crossword_model_entries(af, agent, model, target):
     except (ValueError, TypeError, UnicodeError): crossword_response_failure('json')
     try: fields(result, ('entries',))
     except GameError: crossword_response_failure('schema')
-    entries = crossword_candidate_entries(result['entries'])
+    entries = fit_crossword_entries(target, result['entries'])
     candidate = deepcopy(target); candidate['puzzle']['entries'] = entries
     try: candidate = validate_spec(candidate)
     except GameError: crossword_response_failure('grid')
