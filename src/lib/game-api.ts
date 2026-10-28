@@ -3,6 +3,7 @@ import { LocalGameLibrary, validateGameConfig } from './game-local';
 import { validateGameSpec } from './game-design';
 import type { Game, GameConfig, GameSettings, GameSpec } from './game-types';
 import { validateCrosswordSuggestionRequest, validateCrosswordSuggestionResponse, type CrosswordSuggestionResponse } from './crossword-suggestions';
+import { validateWordSearchSuggestionRequest, validateWordSearchSuggestionResponse, type WordSearchSuggestionResponse } from './word-search-suggestions';
 
 function local(): LocalGameLibrary {
   if (import.meta.env.VITE_APP_MODE === 'cloud') throw new Error('The game studio requires the NCE Core API deployment. Games are unavailable in the legacy backend.');
@@ -37,6 +38,13 @@ export async function generateCrosswordSuggestions(game: Game, requestId: string
   if (!isCore) throw new Error('AI crossword suggestions require the connected site and an administrator-configured model. Local preview makes no model calls.');
   const response = await coreRequest<unknown>(`/games/${encodeURIComponent(context.game.id)}/crossword-suggestions`, 'POST', { revision: context.game.revision, requestId, path: context.path, title, description });
   return validateCrosswordSuggestionResponse(response, context);
+}
+export async function generateWordSearchSuggestions(game: Game, requestId: string, path: string[], title: string, description: string): Promise<WordSearchSuggestionResponse> {
+  const context = { game: structuredClone(game), requestId, path: [...path], title, description };
+  validateWordSearchSuggestionRequest(context);
+  if (!isCore) throw new Error('AI word-search suggestions require the connected site and an administrator-configured model. Local preview makes no model calls.');
+  const response = await coreRequest<unknown>(`/games/${encodeURIComponent(context.game.id)}/word-search-suggestions`, 'POST', { revision: context.game.revision, requestId, path: context.path, title, description });
+  return validateWordSearchSuggestionResponse(response, context);
 }
 export async function markGameTested(game: Game, reviewedLevelIds?: string[]): Promise<Game> { return isCore ? coreRequest(`/games/${encodeURIComponent(game.id)}/test`, 'POST', { revision: game.revision, ...(reviewedLevelIds ? { reviewedLevelIds } : {}) }) : local().test(game.id, game.revision, reviewedLevelIds); }
 export async function publishGame(game: Game): Promise<Game> { return isCore ? coreRequest(`/games/${encodeURIComponent(game.id)}/publish`, 'POST', { revision: game.revision }) : local().publish(game.id, game.revision); }
