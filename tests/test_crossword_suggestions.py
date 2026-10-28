@@ -57,6 +57,19 @@ class CrosswordSuggestionsTests(unittest.TestCase):
         return games.dispatch(self.api, self.event(), 'POST', '/games/' + game['id'] + '/crossword-suggestions',
             self.body(game, request, path) if body is None else body)
 
+    def generated_content(self, content):
+        self.provider.converse.return_value = {'stopReason': 'end_turn', 'output': {'message': {'content': [{'text': content}]}}}
+        return games.crossword_model_entries(self.af, {'instructions': 'Use clear clues.'},
+            {'target': 'test.small-model', 'maxOutputTokens': 1200}, games.word_games().default_spec('crossword'))
+
+    def generated_error(self, content, category):
+        with self.assertRaises(games.GameError) as caught: self.generated_content(content)
+        self.assertEqual(caught.exception.status, 502)
+        self.assertIn(category, caught.exception.message)
+        self.assertIn('will not be replayed', caught.exception.message)
+        self.assertNotIn('DO_NOT_LOG_THIS', caught.exception.message)
+        return caught.exception.message
+
     def test_legacy_settings_remain_valid_and_unconfigured_generator_is_unavailable(self):
         old = games.config_defaults()
         self.assertNotIn('crosswordAssistantModeId', old)
@@ -196,6 +209,69 @@ class CrosswordSuggestionsTests(unittest.TestCase):
             self.assertNotIn(secret, encoded)
         self.assertNotIn('toolConfig', call)
         self.assertIn('untrusted topic data', call['system'][0]['text'])
+
+    def test_exact_json_fence_is_inert_formatting_and_still_validates_complete_grid(self):
+        content = json.dumps({'entries': self.entries})
+        for wrapped in (content, f'```json\n{content}\n```', f'```\n{content}\n```', f' \n```json\r\n{content}\r\n```\t\n'):
+            self.assertEqual(self.generated_content(wrapped), self.entries)
+        # A fence never excuses an invalid or disconnected puzzle.
+        disconnected = {'entries': [{'answer': answer, 'clue': 'A synthetic clue'} for answer in ('AAA', 'BBB', 'CCC')]}
+        self.generated_error('```json\n' + json.dumps(disconnected) + '\n```', 'one connected crossword')
+
+    def test_ascii_case_single_word_separators_and_ordinary_clue_padding_are_normalized(self):
+        formatted = [{'answer': (' ' if index % 2 else '-').join(entry['answer'].lower()),
+            'clue': '  ' + entry['clue'] + '  '} for index, entry in enumerate(self.entries)]
+        before = deepcopy(formatted)
+        self.assertEqual(self.generated_content(json.dumps({'entries': formatted})), self.entries)
+        self.assertEqual(formatted, before)
+        # Eighteen letters with single separators exercise the 35-character raw bound.
+        answer = 'A ' * 17 + 'A'
+        normalized = games.crossword_candidate_entries([
+            {'answer': answer, 'clue': 'A synthetic long answer'},
+            {'answer': 'EARTH', 'clue': 'Our planet'}, {'answer': 'STAR', 'clue': 'A bright object in the night sky'}])
+        self.assertEqual(normalized[0]['answer'], 'A' * 18)
+
+    def test_duplicate_answers_after_normalization_are_rejected_before_layout(self):
+        formatted = deepcopy(self.entries)
+        formatted.append({'answer': ' '.join(self.entries[0]['answer'].lower()), 'clue': 'A second clue for the same answer'})
+        with patch.object(games.word_games(), 'crossword', wraps=games.word_games().crossword) as layout:
+            self.generated_error(json.dumps({'entries': formatted}), 'invalid or duplicate answers')
+            # The helper validates its saved starter once; the duplicate pool
+            # must not trigger a second layout search.
+            layout.assert_called_once()
+
+    def test_normalization_does_not_remove_arbitrary_punctuation_or_unsafe_answer_text(self):
+        for answer in (' moon', 'moon ', 'moon--star', 'moon  star', 'moon- star', 'moon_star', 'moon/star',
+                'https://example.test', 'fetch(secret)', 'm\u2014oon', 'm\u00a0oon', '\uff2d\uff2f\uff2f\uff2e', 'A' * 36, 'A' * 19, 'A'):
+            entries = deepcopy(self.entries); entries[0]['answer'] = answer
+            self.generated_error(json.dumps({'entries': entries}), 'invalid or duplicate answers')
+
+    def test_clue_padding_only_trims_ordinary_spaces_and_never_links_or_code(self):
+        for clue in ('\tA clue', 'A clue\n', '\u00a0A clue', 'A clue\u00a0', '<script>DO_NOT_LOG_THIS</script>',
+                'https://DO_NOT_LOG_THIS.example', 'fetch(DO_NOT_LOG_THIS)', ' ' * 4, 'A' * 141):
+            entries = deepcopy(self.entries); entries[0]['clue'] = clue
+            self.generated_error(json.dumps({'entries': entries}), 'invalid clue text')
+
+    def test_no_prose_code_fence_language_or_json_extraction_is_accepted(self):
+        content = json.dumps({'entries': self.entries})
+        for wrapped in ('DO_NOT_LOG_THIS ' + content, content + ' DO_NOT_LOG_THIS',
+                f'DO_NOT_LOG_THIS\n```json\n{content}\n```', f'```json\n{content}\n```\nDO_NOT_LOG_THIS',
+                f'```javascript\n{content}\n```', f'````json\n{content}\n````',
+                f'```json\n{content}\n```\n```json\n{content}\n```', f'/* DO_NOT_LOG_THIS */{content}'):
+            self.generated_error(wrapped, 'invalid JSON')
+        self.generated_error(json.dumps({'entries': self.entries, 'code': 'DO_NOT_LOG_THIS'}), 'unsupported suggestion schema')
+
+    def test_fixed_failure_categories_distinguish_json_schema_answer_clue_and_grid_without_content(self):
+        cases = [
+            ('DO_NOT_LOG_THIS', 'invalid JSON'),
+            ('{"entries":[],"entries":[]}', 'invalid JSON'),
+            (json.dumps({'entries': self.entries, 'DO_NOT_LOG_THIS': True}), 'unsupported suggestion schema'),
+            (json.dumps({'entries': [{'answer': 'DO_NOT_LOG_THIS', 'clue': 'A clue'}, *self.entries[1:]]}), 'invalid or duplicate answers'),
+            (json.dumps({'entries': [{'answer': self.entries[0]['answer'], 'clue': 'https://DO_NOT_LOG_THIS.example'}, *self.entries[1:]]}), 'invalid clue text'),
+            (json.dumps({'entries': [{'answer': answer, 'clue': 'DO_NOT_LOG_THIS'} for answer in ('AAA', 'BBB', 'CCC')]}), 'one connected crossword'),
+        ]
+        messages = {self.generated_error(content, category) for content, category in cases}
+        self.assertEqual(len(messages), 5)
 
     def test_incomplete_nonjson_code_and_disconnected_responses_never_change_game(self):
         self.configure(); original = self.crossword()

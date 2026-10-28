@@ -1017,6 +1017,37 @@ def crossword_at_path(spec, path):
     return target
 
 
+def crossword_response_failure(category):
+    # Fixed labels distinguish failures without disclosing provider or game text.
+    reasons = {'json': 'invalid JSON', 'schema': 'an unsupported suggestion schema',
+        'answer': 'invalid or duplicate answers', 'clue': 'invalid clue text',
+        'grid': 'answers that do not fit one connected crossword'}
+    fail('The crossword generator returned ' + reasons[category]
+        + '. Edit the draft before starting a new request; this request will not be replayed.', 502)
+
+
+def crossword_candidate_entries(value):
+    if not isinstance(value, list) or not 3 <= len(value) <= 16: crossword_response_failure('schema')
+    entries = []
+    for raw in value:
+        try: fields(raw, ('answer', 'clue'))
+        except GameError: crossword_response_failure('schema')
+        answer = raw['answer']
+        # Crosswords omit word separators. Admit only ASCII letters and single
+        # interior spaces/hyphens; never remove arbitrary punctuation or code.
+        if not isinstance(answer, str) or not 2 <= len(answer) <= 35 or not re.fullmatch(r'[A-Za-z]+(?:[ -][A-Za-z]+)*', answer):
+            crossword_response_failure('answer')
+        answer = answer.replace(' ', '').replace('-', '').upper()
+        if not 2 <= len(answer) <= 18: crossword_response_failure('answer')
+        clue = raw['clue'].strip(' ') if isinstance(raw['clue'], str) else raw['clue']
+        try: word_games().text(clue, 140, 'Clue')
+        except word_games().WordGameError: crossword_response_failure('clue')
+        entries.append({'answer': answer, 'clue': clue})
+    if len({entry['answer'] for entry in entries}) != len(entries) or sum(len(entry['answer']) for entry in entries) > 200:
+        crossword_response_failure('answer')
+    return entries
+
+
 def crossword_model_entries(af, agent, model, target):
     instructions = (
         'Suggest answer and clue pairs for a crossword about the supplied game title and description. '
@@ -1040,6 +1071,10 @@ def crossword_model_entries(af, agent, model, target):
         fail('The crossword generator did not return plain JSON suggestions.', 502)
     content = '\n'.join(part['text'] for part in parts)
     if len(content.encode('utf-8')) > 12000: fail('The crossword generator returned too much content.', 502)
+    # Accept one inert Markdown JSON envelope, never surrounding prose, nested
+    # extraction, another fence language or executable repair instructions.
+    fence = re.fullmatch(r'```(?:json)?\r?\n(.*)\r?\n```', content.strip(' \t\r\n'), re.S)
+    if fence: content = fence[1]
     def unique_fields(pairs):
         result = {}
         for name, value in pairs:
@@ -1049,11 +1084,13 @@ def crossword_model_entries(af, agent, model, target):
     try:
         result = json.loads(content, object_pairs_hook=unique_fields,
             parse_constant=lambda _: (_ for _ in ()).throw(ValueError()))
-        fields(result, ('entries',))
-        candidate = deepcopy(target); candidate['puzzle']['entries'] = result['entries']
-        candidate = validate_spec(candidate)
-    except (GameError, ValueError, TypeError, UnicodeError):
-        fail('The crossword generator returned suggestions that do not fit the fixed crossword. Edit the draft before starting a new request; this request will not be replayed.', 502)
+    except (ValueError, TypeError, UnicodeError): crossword_response_failure('json')
+    try: fields(result, ('entries',))
+    except GameError: crossword_response_failure('schema')
+    entries = crossword_candidate_entries(result['entries'])
+    candidate = deepcopy(target); candidate['puzzle']['entries'] = entries
+    try: candidate = validate_spec(candidate)
+    except GameError: crossword_response_failure('grid')
     return candidate['puzzle']['entries']
 
 
