@@ -58,3 +58,11 @@
 .player-surface-active>.game-player-note{display:none}
 .player-surface-active>p[role="status"]:not(.player-display-notice){flex:0 0 auto;margin:8px 16px}
 @media(max-width:640px){.player-display-toolbar>span{display:none}.player-display-toolbar{justify-content:flex-end}.player-display-toolbar small{font-size:10px}.player-surface-active .player-display-toolbar{padding:5px 9px}.player-surface-active .player-display-toolbar>span{display:none}}
+
+.asteroid-sprite-editor { margin: 1.2rem 0; padding: 1rem; border: 1px solid #b9ccc5; border-radius: 12px; }
+.asteroid-sprite-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 1rem; }
+.asteroid-sprite-slot { padding: .8rem; background: #f0f5f2; border-radius: 10px; min-width: 0; }
+.asteroid-sprite-slot input[type=file] { max-width: 100%; }
+.asteroid-sprite-slot small { display: block; margin-top: .4rem; }
+.asteroid-sprite-preview { display: flex; align-items: center; gap: .7rem; margin-top: .8rem; }
+.asteroid-sprite-preview canvas { width: 64px; height: 64px; object-fit: contain; image-rendering: pixelated; background: repeating-conic-gradient(#dce4e9 0% 25%, #f8fbff 0% 50%) 0 0 / 12px 12px; border: 1px solid #b9ccc5; }

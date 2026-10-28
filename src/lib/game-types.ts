@@ -1,3 +1,6 @@
+export type GameSpriteRole = 'player' | 'asteroid' | 'reward' | 'enemy';
+export type GameSprite = { width: number; height: number; pixels: string };
+export type GameSprites = Partial<Record<GameSpriteRole, GameSprite>>;
 export type GameRules = { goal: number; timeLimit: number; lives: number; difficulty: number };
 export type GameArcadeOptions = { rotation: boolean; shooting: boolean; splitAsteroids: boolean; scoring: boolean; highScores: boolean };
 export type GamePowerUpType = 'triple-shot' | 'rapid-fire' | 'shield' | 'speed-boost';
@@ -28,6 +31,7 @@ export type ArcadeGameSpec = {
   multiplayer?: { mode: 'cooperative'; maxPlayers: 2 };
   powerUps?: GamePowerUps;
   asteroids?: GameAsteroidSettings;
+  sprites?: GameSprites;
 };
 
 export type CooperativeGameSpec = ArcadeGameSpec & { version: 4 | 5 | 6; progression: string; levels: GameLevel[]; multiplayer: { mode: 'cooperative'; maxPlayers: 2 } };

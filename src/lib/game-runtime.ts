@@ -1,5 +1,5 @@
 import { validateArcadeGameSpec } from './game-design';
-import type { GameLevel, GameResult, ArcadeGameSpec, GameSpec, GamePowerUpType, GamePowerUps } from './game-types';
+import type { GameLevel, GameResult, ArcadeGameSpec, GameSpec, GamePowerUpType, GamePowerUps, GameSprites, GameSpriteRole } from './game-types';
 
 export type GameInput = { left?: boolean; right?: boolean; up?: boolean; down?: boolean; jump?: boolean; fire?: boolean };
 export type GameEntity = { id: number; kind: 'snack' | 'hazard'; x: number; y: number; w: number; h: number; vx: number; vy: number; asteroid?: 'large' | 'medium' | 'small'; grace?: number };
@@ -43,6 +43,48 @@ export function createGameEngine() {
     return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
   }
   function random(state: { seed: number }) { state.seed = (Math.imul(state.seed, 1664525) + 1013904223) >>> 0; return state.seed / 4294967296; }
+  /** Pixel-only assets use an in-memory canvas; no image URL or network is involved. */
+  function spritePainter(sprites?: GameSprites) {
+    const cache = new Map<string, HTMLCanvasElement>();
+    return (ctx: CanvasRenderingContext2D, role: GameSpriteRole, x: number, y: number, w: number, h: number) => {
+      const sprite = sprites?.[role]; if (!sprite) return false;
+      let bitmap = cache.get(role);
+      if (!bitmap) {
+        bitmap = document.createElement('canvas'); bitmap.width = sprite.width; bitmap.height = sprite.height;
+        const surface = bitmap.getContext('2d'); if (!surface) return false;
+        const pixels = surface.createImageData(sprite.width, sprite.height), bytes = atob(sprite.pixels);
+        for (let i = 0; i < bytes.length; i++) pixels.data[i] = bytes.charCodeAt(i);
+        surface.putImageData(pixels, 0, 0); cache.set(role, bitmap);
+      }
+      const scale = Math.min(w / sprite.width, h / sprite.height), drawnWidth = sprite.width * scale, drawnHeight = sprite.height * scale;
+      ctx.drawImage(bitmap, x + (w - drawnWidth) / 2, y + (h - drawnHeight) / 2, drawnWidth, drawnHeight); return true;
+    };
+  }
+  /** Select a deterministic edge and aim inward, avoiding a parallel off-screen path. */
+  function edgeSpawn(state: { seed: number }, size: number, speed: number) {
+    const edge = Math.floor(random(state) * 4), position = random(state);
+    const x = edge === 2 ? -size : edge === 3 ? width : position * (width - size);
+    const y = edge === 0 ? -size : edge === 1 ? height : position * (height - size);
+    const dx = width * (0.2 + random(state) * 0.6) - x, dy = height * (0.2 + random(state) * 0.6) - y, length = Math.hypot(dx, dy);
+    return { x, y, vx: dx / length * speed, vy: dy / length * speed };
+  }
+  function collectPrize(player: { effects: GamePowerUpEffects }, pickup: GamePowerUpPickup, config: GamePowerUps) {
+    if (pickup.type === 'shield') player.effects.shield = 1;
+    else if (pickup.type === 'triple-shot') player.effects.tripleShot = config.duration;
+    else if (pickup.type === 'rapid-fire') player.effects.rapidFire = config.duration;
+    else player.effects.speedBoost = config.duration;
+  }
+  function shotPrize(bullet: GameBullet, dt: number, world: GamePowerUpWorld | undefined, config: GamePowerUps | undefined, player: { effects?: GamePowerUpEffects; lives: number }, before = Infinity) {
+    if (!world || !config || !player.lives || !player.effects) return false;
+    let nearest: GamePowerUpPickup | undefined, first = before;
+    for (const pickup of world.pickups) {
+      const hit = sweptHit(bullet.x, bullet.y, bullet.vx * dt, (bullet.vy - 72) * dt, { id: pickup.id, kind: 'snack', x: pickup.x, y: pickup.y - 72 * dt, w: 28, h: 28, vx: 0, vy: 72 });
+      if (hit !== undefined && hit < first) { nearest = pickup; first = hit; }
+    }
+    if (!nearest) return false;
+    collectPrize(player as { effects: GamePowerUpEffects }, nearest, config);
+    world.pickups = world.pickups.filter(pickup => pickup.id !== nearest!.id); return true;
+  }
   function newEffects(): GamePowerUpEffects { return { tripleShot: 0, rapidFire: 0, speedBoost: 0, shield: 0 }; }
   function tickEffects(effects: GamePowerUpEffects, dt: number) {
     effects.tripleShot = Math.max(0, effects.tripleShot - dt); effects.rapidFire = Math.max(0, effects.rapidFire - dt); effects.speedBoost = Math.max(0, effects.speedBoost - dt);
@@ -60,10 +102,7 @@ export function createGameEngine() {
       for (const index of pickup.id % 2 && players.length > 1 ? [1, 0] : players.map((_player, i) => i)) {
         const player = players[index];
         if (!player.lives || !overlaps({ x: player.x, y: player.y, w: 42, h: 34 }, { x: pickup.x, y: pickup.y, w: 28, h: 28 })) continue;
-        if (pickup.type === 'shield') player.effects.shield = 1;
-        else if (pickup.type === 'triple-shot') player.effects.tripleShot = config.duration;
-        else if (pickup.type === 'rapid-fire') player.effects.rapidFire = config.duration;
-        else player.effects.speedBoost = config.duration;
+        collectPrize(player, pickup, config);
         return false;
       }
       return true;
@@ -78,12 +117,15 @@ export function createGameEngine() {
     if (effects.shield) labels.push('Shield: 1 extra hit');
     return labels.join(' · ') || 'No active prizes';
   }
-  function drawPrizes(ctx: CanvasRenderingContext2D, pickups: GamePowerUpPickup[]) {
+  function drawPrizes(ctx: CanvasRenderingContext2D, pickups: GamePowerUpPickup[], paint?: ReturnType<typeof spritePainter>) {
     for (const pickup of pickups) {
       const color = pickup.type === 'triple-shot' ? '#c369e0' : pickup.type === 'rapid-fire' ? '#ffb23e' : pickup.type === 'shield' ? '#36cad7' : '#7ddc62';
       const symbol = pickup.type === 'triple-shot' ? '3' : pickup.type === 'rapid-fire' ? '»' : pickup.type === 'shield' ? 'S' : '↑';
-      ctx.fillStyle = color; ctx.strokeStyle = '#211d3e'; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(pickup.x + 14, pickup.y + 14, 14, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-      ctx.fillStyle = '#211d3e'; ctx.font = 'bold 20px system-ui'; ctx.textAlign = 'center'; ctx.fillText(symbol, pickup.x + 14, pickup.y + 21);
+      const custom = paint?.(ctx, 'reward', pickup.x, pickup.y, 28, 28);
+      if (!custom) {
+      ctx.fillStyle = color; ctx.strokeStyle = '#211d3e'; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(pickup.x + 14, pickup.y + 14, 14, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); }
+      if (custom) { ctx.fillStyle = color; ctx.fillRect(pickup.x + 18, pickup.y - 5, 15, 17); }
+      ctx.fillStyle = '#211d3e'; ctx.font = `bold ${custom ? 14 : 20}px system-ui`; ctx.textAlign = 'center'; ctx.fillText(symbol, pickup.x + (custom ? 25 : 14), pickup.y + (custom ? 8 : 21));
     }
   }
   function getLevels(spec: ArcadeGameSpec): GameLevel[] {
@@ -138,10 +180,11 @@ export function createGameEngine() {
     const reserved = kind === 'hazard' && spec.arcade?.splitAsteroids ? spec.asteroids!.sizes === 3 ? 4 : 2 : 1;
     if (descendantBudget(world.entities, spec) + reserved > 64 || world.nextId >= 2147483600) return;
     const size = kind === 'snack' ? 22 : 42;
+    const edge = kind === 'hazard' ? edgeSpawn(world, size, Math.min(700, (85 + spec.rules.difficulty * 28) * pressure)) : {};
     world.entities.push({ id: world.nextId++, kind, x: 28 + random(world) * (width - size - 56), y: -size - random(world) * 45,
       w: size, h: size, vx: kind === 'hazard' ? (random(world) - 0.5) * 60 * pressure : 0,
       vy: Math.min(700, (kind === 'snack' ? 75 + spec.rules.difficulty * 12 : 85 + spec.rules.difficulty * 28) * pressure),
-      ...(kind === 'hazard' ? { asteroid: 'large' as const } : {}) });
+      ...(kind === 'hazard' ? { asteroid: 'large' as const } : {}), ...edge });
   }
   function fragments(world: AdvancedWorld, spec: ArcadeGameSpec, target: GameEntity, dt: number, hit: number): GameEntity[] {
     if (!spec.arcade?.splitAsteroids || target.asteroid === 'small' || world.nextId >= 2147483600) return [];
@@ -220,7 +263,7 @@ export function createGameEngine() {
     world.bullets = world.bullets.filter(bullet => {
       const dx = bullet.vx * dt, dy = bullet.vy * dt;
       let nearest: GameEntity | GameEnemy | undefined, first = Infinity, enemyHit = false;
-      for (const entity of world.entities) if (entity.kind === 'hazard' && !removed.has(entity.id)) {
+      for (const entity of world.entities) if (!removed.has(entity.id) && (entity.kind === 'hazard' || players[bullet.owner || 0].lives && (persistent || players[bullet.owner || 0].score < spec.rules.goal))) {
         const hit = sweptHit(bullet.x, bullet.y, dx - entity.vx * dt, dy - entity.vy * dt, entity);
         if (hit !== undefined && hit < first) { nearest = entity; first = hit; enemyHit = false; }
       }
@@ -228,9 +271,11 @@ export function createGameEngine() {
         const hit = sweptHit(bullet.x, bullet.y, dx, dy, { ...enemy, kind: 'hazard' });
         if (hit !== undefined && hit < first) { nearest = enemy; first = hit; enemyHit = true; }
       }
+      if (shotPrize(bullet, dt, world.powerUps, spec.powerUps, players[bullet.owner || 0], first)) return false;
       if (nearest) {
         let earned = 0;
         if (enemyHit) { const enemy = nearest as GameEnemy; enemy.hp--; if (!enemy.hp) { deadEnemies.add(enemy.id); earned = spec.asteroids!.enemies.difficulty === 'hard' ? 300 : spec.asteroids!.enemies.difficulty === 'medium' ? 200 : 100; } }
+        else if ((nearest as GameEntity).kind === 'snack') { removed.add(nearest.id); const owner = players[bullet.owner || 0]; owner.score = Math.min(persistent ? 2147483647 : spec.rules.goal, owner.score + 1); earned = 10; }
         else { const asteroid = nearest as GameEntity; removed.add(asteroid.id); earned = asteroid.asteroid === 'small' ? 50 : asteroid.asteroid === 'medium' ? 30 : 20; children.push(...fragments(world, spec, asteroid, dt, first)); }
         const owner = players[bullet.owner || 0]; if (spec.arcade?.scoring) owner.points = Math.min(2147483647, owner.points + earned);
         return false;
@@ -248,7 +293,7 @@ export function createGameEngine() {
         if (!entity.grace) advancedImpact(player, persistent);
       }
     }
-    world.entities = world.entities.filter(entity => !removed.has(entity.id) && entity.y < height + 60 && entity.x > -64 && entity.x < width + 64).concat(children);
+    world.entities = world.entities.filter(entity => !removed.has(entity.id) && entity.y > -128 && entity.y < height + 60 && entity.x > -64 && entity.x < width + 64).concat(children);
     for (const enemy of world.advanced.enemies) for (const player of players) if (overlaps({ x: player.x, y: player.y, w: 42, h: 34 }, enemy)) advancedImpact(player, persistent);
     world.advanced.enemyBullets = world.advanced.enemyBullets.filter(bullet => {
       const dx = bullet.vx * dt, dy = bullet.vy * dt;
@@ -261,9 +306,10 @@ export function createGameEngine() {
     else if (!persistent && players.every(player => player.score >= spec.rules.goal)) world.outcome = 'won';
     else if (!persistent && world.elapsed >= spec.rules.timeLimit) world.outcome = 'lost';
   }
-  function drawAdvanced(ctx: CanvasRenderingContext2D, advanced: GameAdvancedWorld) {
+  function drawAdvanced(ctx: CanvasRenderingContext2D, advanced: GameAdvancedWorld, paint?: ReturnType<typeof spritePainter>) {
     for (const enemy of advanced.enemies) {
-      ctx.fillStyle = '#e36b63'; ctx.strokeStyle = '#4c183f'; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(enemy.x + 19, enemy.y + 28); ctx.lineTo(enemy.x, enemy.y + 2); ctx.lineTo(enemy.x + 19, enemy.y + 9); ctx.lineTo(enemy.x + 38, enemy.y + 2); ctx.closePath(); ctx.fill(); ctx.stroke();
+      if (!paint?.(ctx, 'enemy', enemy.x, enemy.y, enemy.w, enemy.h)) {
+      ctx.fillStyle = '#e36b63'; ctx.strokeStyle = '#4c183f'; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(enemy.x + 19, enemy.y + 28); ctx.lineTo(enemy.x, enemy.y + 2); ctx.lineTo(enemy.x + 19, enemy.y + 9); ctx.lineTo(enemy.x + 38, enemy.y + 2); ctx.closePath(); ctx.fill(); ctx.stroke(); }
       ctx.fillStyle = '#28192c'; ctx.fillRect(enemy.x, enemy.y - 8, 38, 4); ctx.fillStyle = '#f6dd8d'; ctx.fillRect(enemy.x, enemy.y - 8, 38 * enemy.hp / enemy.maxHp, 4);
     }
     for (const bullet of advanced.enemyBullets) { ctx.strokeStyle = '#ff6868'; ctx.lineWidth = 5; ctx.beginPath(); ctx.moveTo(bullet.x - bullet.vx / 60, bullet.y - bullet.vy / 60); ctx.lineTo(bullet.x, bullet.y); ctx.stroke(); }
@@ -283,6 +329,7 @@ export function createGameEngine() {
       } else if (spec.genre === 'dodge') {
         y = -size - random(state) * 50;
         vy = kind === 'snack' ? 75 + spec.rules.difficulty * 12 : 85 + spec.rules.difficulty * 28;
+        if (kind === 'hazard' && arcade) ({ x, y, vx, vy } = edgeSpawn(state, size, vy));
       } else if (kind === 'hazard') {
         vx = (random(state) > 0.5 ? 1 : -1) * (25 + spec.rules.difficulty * 10);
         vy = (random(state) > 0.5 ? 1 : -1) * (15 + spec.rules.difficulty * 5);
@@ -390,11 +437,13 @@ export function createGameEngine() {
         const dx = bullet.vx * dt, dy = bullet.vy * dt;
         let nearest: GameEntity | undefined, first = Infinity;
         for (const entity of state.entities) {
-          if (entity.kind !== 'hazard' || destroyed.has(entity.id)) continue;
+          if (destroyed.has(entity.id) || collected.has(entity.id) || entity.kind === 'snack' && (state.score >= spec.rules.goal || !state.lives)) continue;
           const hit = sweptHit(bullet.x, bullet.y, dx - entity.vx * dt, dy - entity.vy * dt, entity);
           if (hit !== undefined && hit < first) { nearest = entity; first = hit; }
         }
+        if (shotPrize(bullet, dt, state.powerUps, spec.powerUps, { lives: state.lives, effects: state.powerUps?.effects }, first)) return false;
         if (nearest) {
+          if (nearest.kind === 'snack') { collected.add(nearest.id); state.score++; if (arcade.scoring) state.points = (state.points || 0) + 10; return false; }
           destroyed.add(nearest.id);
           if (arcade.scoring) state.points = (state.points || 0) + (nearest.asteroid === 'small' ? 50 : 20);
           if (arcade.splitAsteroids && nearest.asteroid !== 'small') {
@@ -411,7 +460,7 @@ export function createGameEngine() {
       });
     }
     for (const entity of state.entities) {
-      if (destroyed.has(entity.id)) continue;
+      if (destroyed.has(entity.id) || collected.has(entity.id)) continue;
       entity.x += entity.vx * dt; entity.y += entity.vy * dt;
       if (entity.grace) entity.grace = Math.max(0, entity.grace - dt);
       if (spec.genre === 'collect') {
@@ -429,7 +478,7 @@ export function createGameEngine() {
         if (spec.genre === 'platformer') { player.x = 48; player.y = 464; player.vy = 0; }
       }
     }
-    state.entities = state.entities.filter(entity => !collected.has(entity.id) && !destroyed.has(entity.id) && entity.y < height + 60 && (!arcade || entity.x > -60 && entity.x < width + 60)).concat(fragments);
+    state.entities = state.entities.filter(entity => !collected.has(entity.id) && !destroyed.has(entity.id) && entity.y > -128 && entity.y < height + 60 && (!arcade || entity.x > -60 && entity.x < width + 60)).concat(fragments);
     if (spec.genre !== 'dodge') for (let i = 0; i < collected.size && state.score < spec.rules.goal; i++) spawn(state, spec, 'snack');
     if (state.lives <= 0) { state.lives = 0; state.outcome = 'lost'; }
     else if (state.score >= spec.rules.goal) { state.score = spec.rules.goal; state.outcome = 'won'; }
@@ -441,7 +490,7 @@ export function createGameEngine() {
     if (state.outcome !== 'won' || state.levelIndex + 1 >= getLevels(spec).length) return undefined;
     return create(spec, state.levelIndex + 1);
   }
-  return { create, step, nextLevel, getLevels, forLevel, overlaps, sweptHit, maxPoints, newEffects, tickEffects, advancePrizes, effectLabel, drawPrizes, endless, advancedWorld, difficulty, descendantBudget, advancedImpact, stepAdvanced, drawAdvanced, width, height };
+  return { spritePainter, edgeSpawn, shotPrize, collectPrize, create, step, nextLevel, getLevels, forLevel, overlaps, sweptHit, maxPoints, newEffects, tickEffects, advancePrizes, effectLabel, drawPrizes, endless, advancedWorld, difficulty, descendantBudget, advancedImpact, stepAdvanced, drawAdvanced, width, height };
 }
 
 /** Treat the opaque frame's results as untrusted messages, never as permissions. */
@@ -506,6 +555,7 @@ export function startGameSandbox(engine: ReturnType<typeof createGameEngine>, va
   const next = document.getElementById('next') as HTMLButtonElement;
   const restart = document.getElementById('restart') as HTMLButtonElement;
   const finishReview = document.getElementById('finish-review') as HTMLButtonElement | null;
+  let paintSprite = engine.spritePainter();
   let gameSpec: ArcadeGameSpec | undefined, spec: ArcadeGameSpec | undefined, selectedLevel: string | undefined, state: GameState | undefined, running = false, paused = false, notified = false, playtest = false;
   let previous = 0, accumulator = 0;
   const reviews = new Map<string, { score: number; elapsed: number; points?: number }>();
@@ -515,7 +565,7 @@ export function startGameSandbox(engine: ReturnType<typeof createGameEngine>, va
   function controlHelp() {
     if (!spec) return '';
     const movement = spec.arcade?.rotation ? 'Left / Right or A / D turn the ship through 360°. Up / W thrusts forward; Down / S reverses.' : spec.genre === 'platformer' ? 'Arrow keys or WASD move. Space or Up jumps.' : 'Arrow keys or WASD move.';
-    return `${movement}${spec.arcade?.shooting ? ` Space or Z fires.${spec.arcade.splitAsteroids ? spec.version === 6 && spec.asteroids!.sizes === 3 ? ' Large asteroids split into two medium rocks; each medium splits into two small pieces; shoot small pieces once to destroy them.' : ' Large asteroids split into two small pieces; shoot each small piece once to destroy it.' : ' One shot destroys an asteroid.'}` : ''}${spec.arcade?.scoring ? ` Collectibles: 10 points.${spec.arcade.shooting ? ` Large asteroids: 20 points.${spec.version === 6 && spec.asteroids!.sizes === 3 ? ' Medium rocks: 30 points.' : ''}${spec.arcade.splitAsteroids ? ' Small pieces: 50 points.' : ''}` : ''}` : ''}${spec.version === 6 && spec.asteroids!.enemies.enabled ? ` Enemy ships: ${spec.asteroids!.enemies.hitPoints} hits; ${spec.asteroids!.enemies.difficulty === 'easy' ? 'wander without pursuit' : spec.asteroids!.enemies.difficulty === 'medium' ? 'track your ship gradually' : 'pursue and fire aimed, dodgeable shots'}.` : ''}${spec.powerUps ? ` Falling prizes: 3 = triple shot, » = rapid fire, S = one-hit shield, ↑ = speed boost. ${engine.endless(spec) ? 'Prizes last until any damaging impact; shield absorbs one hit, which clears all prizes.' : 'Collect with your ship; timed prizes refresh without stacking.'}` : ''} P pauses. R restarts this level.`;
+    return `${movement}${spec.arcade?.shooting ? ` Space or Z fires.${spec.arcade.splitAsteroids ? spec.version === 6 && spec.asteroids!.sizes === 3 ? ' Large asteroids split into two medium rocks; each medium splits into two small pieces; shoot small pieces once to destroy them.' : ' Large asteroids split into two small pieces; shoot each small piece once to destroy it.' : ' One shot destroys an asteroid.'}` : ''}${spec.arcade?.scoring ? ` Collectibles: 10 points.${spec.arcade.shooting ? ` Large asteroids: 20 points.${spec.version === 6 && spec.asteroids!.sizes === 3 ? ' Medium rocks: 30 points.' : ''}${spec.arcade.splitAsteroids ? ' Small pieces: 50 points.' : ''}` : ''}` : ''}${spec.version === 6 && spec.asteroids!.enemies.enabled ? ` Enemy ships: ${spec.asteroids!.enemies.hitPoints} hits; ${spec.asteroids!.enemies.difficulty === 'easy' ? 'wander without pursuit' : spec.asteroids!.enemies.difficulty === 'medium' ? 'track your ship gradually' : 'pursue and fire aimed, dodgeable shots'}.` : ''}${spec.powerUps ? ` Shoot or collect prizes: 3 = triple shot, » = rapid fire, S = one-hit shield, ↑ = speed boost. ${engine.endless(spec) ? 'Prizes last until any damaging impact; shield absorbs one hit, which clears all prizes.' : 'Shoot or fly over a prize to collect it; timed prizes refresh without stacking.'}` : ''} P pauses. R restarts this level.`;
   }
   function levelInstructions(brief: string) {
     if (!gameSpec || !spec) return '';
@@ -579,7 +629,7 @@ export function startGameSandbox(engine: ReturnType<typeof createGameEngine>, va
   window.addEventListener('message', event => {
     if (event.source !== parent || !event.data || event.data.type !== 'axolotl-game-load' || event.data.nonce !== nonce || gameSpec) return;
     try {
-      gameSpec = validate(event.data.spec);
+      gameSpec = validate(event.data.spec); paintSprite = engine.spritePainter(gameSpec.sprites);
       playtest = event.data.playtest === true;
       selectedLevel = typeof event.data.levelId === 'string' ? event.data.levelId : undefined;
       state = engine.create(gameSpec, selectedLevel || 0); spec = engine.forLevel(gameSpec, state.levelIndex);
@@ -588,7 +638,7 @@ export function startGameSandbox(engine: ReturnType<typeof createGameEngine>, va
       restart.hidden = engine.endless(spec) || engine.getLevels(gameSpec).length === 1 || Boolean(selectedLevel);
       canvas.setAttribute('aria-label', `${spec.title}. ${controlHelp()} ${engine.endless(spec) ? 'Survive until all lives are lost.' : `Collect ${spec.rules.goal} ${spec.objects.collectible}s and avoid ${spec.objects.hazard}s.`}`);
       document.getElementById('controls-help')!.textContent = controlHelp();
-      document.getElementById('legend')!.textContent = `Glowing snack: ${spec.objects.collectible} · Obstacle: ${spec.objects.hazard}`;
+      document.getElementById('legend')!.textContent = `Reward: ${spec.objects.collectible} · Obstacle: ${spec.objects.hazard}`;
       document.getElementById('jump')!.hidden = spec.genre !== 'platformer';
       document.getElementById('fire')!.hidden = !spec.arcade?.shooting;
       const labels: Record<string, string> = spec.arcade?.rotation ? { left: 'Turn left', right: 'Turn right', up: 'Thrust forward', down: 'Reverse thrust' } : { left: 'Move left', right: 'Move right', up: spec.genre === 'platformer' ? 'Move up or jump' : 'Move up', down: 'Move down' };
@@ -614,6 +664,7 @@ export function startGameSandbox(engine: ReturnType<typeof createGameEngine>, va
     for (const entity of state.entities) {
       const x = entity.x + entity.w / 2, y = entity.y + entity.h / 2;
       ctx.beginPath();
+      if (paintSprite(ctx, entity.kind === 'snack' ? 'reward' : 'asteroid', entity.x, entity.y, entity.w, entity.h)) continue;
       if (entity.kind === 'snack') {
         ctx.fillStyle = '#ecc96b'; ctx.strokeStyle = '#9c702d'; ctx.lineWidth = 2;
         ctx.moveTo(x, y - 12); ctx.lineTo(x + 11, y); ctx.lineTo(x, y + 12); ctx.lineTo(x - 11, y); ctx.closePath(); ctx.fill(); ctx.stroke();
@@ -625,8 +676,8 @@ export function startGameSandbox(engine: ReturnType<typeof createGameEngine>, va
         ctx.fillStyle = '#c5cec3'; ctx.beginPath(); ctx.arc(x - 4 * scale, y - 4 * scale, 3 * scale, 0, Math.PI * 2); ctx.fill();
       }
     }
-    if (state.advanced) engine.drawAdvanced(ctx, state.advanced);
-    if (state.powerUps) engine.drawPrizes(ctx, state.powerUps.pickups);
+    if (state.advanced) engine.drawAdvanced(ctx, state.advanced, paintSprite);
+    if (state.powerUps) engine.drawPrizes(ctx, state.powerUps.pickups, paintSprite);
     if (spec.arcade?.shooting) for (const bullet of state.bullets || []) {
       const length = 11 / 620;
       ctx.strokeStyle = '#fff4a2'; ctx.lineWidth = 5; ctx.lineCap = 'round'; ctx.beginPath(); ctx.moveTo(bullet.x - bullet.vx * length, bullet.y - bullet.vy * length); ctx.lineTo(bullet.x, bullet.y); ctx.stroke();
@@ -637,23 +688,13 @@ export function startGameSandbox(engine: ReturnType<typeof createGameEngine>, va
     if (!(state.invulnerable > 0 && Math.floor(state.elapsed * 9) % 2)) {
       const x = p.x + p.w / 2, y = p.y + p.h / 2;
       ctx.save(); ctx.translate(x, y);
-      if (spec.arcade?.rotation || spec.arcade?.shooting) {
-        // Local up is the forward nose. Rotate both the hull and the axolotl
-        // together so direction stays obvious while turning or reversing.
-        ctx.rotate((state.angle ?? -Math.PI / 2) + Math.PI / 2);
-        ctx.fillStyle = '#e8e3f2'; ctx.strokeStyle = '#615273'; ctx.lineWidth = 2;
+      if (spec.arcade?.rotation || spec.arcade?.shooting) ctx.rotate((state.angle ?? -Math.PI / 2) + Math.PI / 2);
+      if (!paintSprite(ctx, 'player', -23, -25, 46, 46)) {
+        ctx.fillStyle = spec.player.color; ctx.strokeStyle = '#edf8ff'; ctx.lineWidth = 2;
         ctx.beginPath(); ctx.moveTo(0, -25); ctx.lineTo(23, 17); ctx.lineTo(0, 11); ctx.lineTo(-23, 17); ctx.closePath(); ctx.fill(); ctx.stroke();
-        ctx.fillStyle = '#fff2a1'; ctx.beginPath(); ctx.moveTo(0, -25); ctx.lineTo(5, -15); ctx.lineTo(-5, -15); ctx.closePath(); ctx.fill();
-        ctx.fillStyle = '#a9d9e8'; ctx.beginPath(); ctx.ellipse(0, -1, 15, 15, 0, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#a9d9e8'; ctx.beginPath(); ctx.ellipse(0, -1, 7, 10, 0, 0, Math.PI * 2); ctx.fill();
       }
-      ctx.fillStyle = spec.player.color; ctx.strokeStyle = '#593e55'; ctx.lineWidth = 2;
-      if (!spec.arcade?.rotation && !spec.arcade?.shooting) { ctx.beginPath(); ctx.moveTo(12, 7); ctx.quadraticCurveTo(38, 4, 29, -7); ctx.quadraticCurveTo(21, 3, 10, -5); ctx.fill(); ctx.stroke(); }
-      ctx.strokeStyle = '#b7658c'; ctx.lineWidth = 3;
-      for (const side of [-1, 1]) for (let i = -1; i <= 1; i++) { ctx.beginPath(); ctx.moveTo(side * 12, i * 4); ctx.lineTo(side * (23 - Math.abs(i) * 2), i * 10); ctx.stroke(); }
-      ctx.fillStyle = spec.player.color; ctx.strokeStyle = '#593e55'; ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.ellipse(0, 0, 16, 13, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-      ctx.fillStyle = '#473b46'; ctx.beginPath(); ctx.arc(-6, -2, 2, 0, Math.PI * 2); ctx.arc(6, -2, 2, 0, Math.PI * 2); ctx.fill();
-      ctx.beginPath(); ctx.arc(0, 3, 4, 0, Math.PI); ctx.stroke(); ctx.restore();
+      ctx.restore();
     }
     if (!running || paused || state.outcome !== 'playing') {
       ctx.fillStyle = spec.theme === 'space' ? '#211d3ed9' : '#fffaf0df'; ctx.fillRect(0, 0, 960, 540);

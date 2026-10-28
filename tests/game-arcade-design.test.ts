@@ -46,7 +46,7 @@ test('Asteroids defaults and conversational switches produce independent support
   assert.match(first.spec.instructions, /two pieces/); assert.match(first.spec.instructions, /snacks 10, large hits 20, small pieces 50/);
   assert.doesNotMatch(first.reply, /cannot add.*(?:shooting|leaderboard)/);
   const rotation = designGame('Turn rotation off.', first.spec).spec;
-  assert.deepEqual(rotation.arcade, { ...allOptions, rotation: false }); assert.match(rotation.instructions, /WASD to swim/);
+  assert.deepEqual(rotation.arcade, { ...allOptions, rotation: false }); assert.match(rotation.instructions, /WASD to move/);
   const shooting = designGame('Disable shooting.', first.spec).spec;
   assert.deepEqual(shooting.arcade, { ...allOptions, shooting: false, splitAsteroids: false });
   assert.doesNotMatch(shooting.instructions, /Space fires|large hits|small pieces/);

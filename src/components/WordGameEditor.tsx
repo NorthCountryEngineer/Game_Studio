@@ -3,13 +3,13 @@ import type { GameSpec, WordGameSpec, WordGenre } from '../lib/game-types';
 
 export const wordGenreNames: Record<WordGenre, string> = { crossword: 'Crossword', 'word-search': 'Word search', 'mad-libs': 'Mad Libs' };
 export const gameFormatStarters = [
-  { id: 'arcade', label: 'Arcade adventure', symbol: '✦', description: 'Collect, dodge or jump through designed levels.', example: 'A gentle pond adventure with 4 levels: learn to collect, then gradually add more challenge.' },
+  { id: 'arcade', label: 'Asteroids', symbol: '✦', description: 'Pilot a ship, blast rocks and collect rewards in space.', example: 'An Asteroids game with endless survival, three asteroid sizes and collectible prizes.' },
   { id: 'crossword', label: 'Crossword', symbol: '▦', description: 'Write answers and clues for an interlocking puzzle.', example: 'Create a crossword about nature with clear clues for young learners.' },
   { id: 'word-search', label: 'Word search', symbol: '⌕', description: 'Hide a word list in a repeatable letter grid.', example: 'Create a word search about space. Grid size 14. No backwards words.' },
   { id: 'mad-libs', label: 'Mad Libs', symbol: '✎', description: 'Write a story template with playful word prompts.', example: 'Create a Mad Libs story about a surprising trip to space.' },
 ] as const;
 export type StarterFormat = typeof gameFormatStarters[number]['id'];
-export function formatCreationPrompt(format: StarterFormat, idea: string) { const text = idea.trim(); return format === 'arcade' ? text : `Create a ${wordGenreNames[format]} game.\n${text}`; }
+export function formatCreationPrompt(format: StarterFormat, idea: string) { const text = idea.trim(); return format === 'arcade' ? `Create an Asteroids game in space.\nTitle: Asteroids\nDescription: Pilot your spaceship, blast incoming asteroids and collect rewards.\nPlayer: Pilot\nColor: #65cadd\nCollectible: energy orb\nHazard: asteroid\n${text}` : `Create a ${wordGenreNames[format]} game.\n${text}`; }
 export function wordGameSummary(spec: WordGameSpec) { return spec.genre === 'crossword' ? `${spec.puzzle.entries.length} clues` : spec.genre === 'word-search' ? `${spec.puzzle.words.length} words · ${spec.puzzle.size} × ${spec.puzzle.size}` : `${spec.puzzle.blanks.length} word prompts`; }
 const nextSeed = (old: number) => { const random = new Uint32Array(1); crypto.getRandomValues(random); const value = random[0] % 2147483647 + 1; return value === old ? value % 2147483647 + 1 : value; };
 

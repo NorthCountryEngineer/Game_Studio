@@ -1,0 +1,19 @@
+# Asteroids workshop and custom sprites
+
+The former Arcade adventure starter is now **Asteroids**. New drafts use a space setting, a spaceship, energy orbs and Asteroids controls. The fixed engine uses a plain spaceship instead of an axolotl. Existing authored titles, descriptions, level plans and published records are not rewritten. Legacy collection and platform definitions remain readable.
+
+The creation panel and saved Asteroids editor offer four optional image slots: player ship, asteroids, rewards and enemy ships. PNG, JPEG and WebP files up to 2 MB and 4096 × 4096 source pixels are decoded locally, resized proportionally to fit 64 × 64, and reduced to RGBA pixels. Point a ship image upward. Transparent backgrounds are supported; fully transparent images are rejected by the uploader. Removing a slot restores standard artwork. Reward sprites keep small prize-type badges; enemy sprites retain their health bars.
+
+Saving stores the pixel asset with the private game definition. Publication copies that exact asset into the public edition, and later private edits do not change it. The source file, filename and metadata are not retained. Version 6 optionally accepts `sprites`, containing one to four of `player`, `asteroid`, `reward`, `enemy`. Each sprite has exactly integer `width` and `height` in 1–64 plus canonical base64 `pixels` with exactly width × height × 4 decoded bytes. Both browser and Python validators enforce this shape and its size. Uploaded assets are preserved through compatible guided/model edits, duplication and publishing; model requests omit the pixel arrays and cannot introduce new uploaded assets. Disabling shooting or leaving Asteroids removes incompatible sprite settings from that edited draft.
+
+Rendering reconstructs tiny in-memory canvases. No image URL, executable upload, SVG, remote fetch, new media endpoint, bucket grant or relaxed sandbox policy is required. Both solo and cooperative players retain `img-src 'none'` and `connect-src 'none'`. Assets travel with the already-validated public definition; shared snapshots contain only world state. A new draft with uploads is created first and then saved with its assets; if that save fails, the draft stays open with those unsaved assets available for retry.
+
+Asteroids enter from the top, bottom, left and right with inward trajectories. General legacy dodge games without Asteroids controls keep their falling-obstacle behavior. Expired rocks are removed beyond every boundary. The seeded random stream still makes a saved layout repeatable.
+
+Both energy collectibles and periodic prize pickups can be collected by ship contact or a shot. The first collision consumes the reward and the projectile once. In cooperative play, the firing ship receives the reward; the other ship does not receive its points or effect. Closer asteroids/enemies block a shot from collecting a reward behind them. Existing score values, prize durations, shields, pickup limits and human publication review remain in effect.
+
+## Verification and release
+
+Tests cover four-edge spawns in solo/cooperative finite and advanced games, relay-compatible snapshots, swept reward hits, blocking rocks, single consumption and ownership, sprite size/shape/base64 validation in Python and TypeScript, local image normalization, saved/public separation, model asset preservation without transmission to the provider, and serialized sandbox rendering with pixel assets. Browser checks use synthetic PNGs and local storage; they do not publish production games or call paid models.
+
+Run the normal README validation commands, including the real-WebSocket rehearsal. Release the main API and relay's validated game-definition reader before the frontend/SDK. Existing published games need no data migration or automatic republishing. A live release must separately verify actual source bytes, browser upload/save/playtest behavior and preserved records.

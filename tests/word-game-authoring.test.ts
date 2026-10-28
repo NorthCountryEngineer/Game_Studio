@@ -16,7 +16,7 @@ test('explicit format starters preserve field-based conversation input on separa
   const designed = designWordGame(message).spec;
   assert.equal(designed.genre, 'crossword');
   if (designed.genre === 'crossword') assert.deepEqual(designed.puzzle.entries.map(entry => entry.answer), ['MOON', 'MARS', 'STAR']);
-  assert.equal(formatCreationPrompt('arcade', '  A pond adventure  '), 'A pond adventure');
+  assert.match(formatCreationPrompt('arcade', '  A space adventure  '), /^Create an Asteroids game in space\.[\s\S]*\nA space adventure$/);
 });
 
 test('crossword editing exposes authored answers, clues and repeatable layout only', () => {

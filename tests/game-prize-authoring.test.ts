@@ -49,7 +49,7 @@ test('prize form presents four effects, valid timing choices, and keeps one priz
   assert.match(disabled, /Drop prizes during the game/); assert.doesNotMatch(disabled, /Prizes that may appear/);
   const spec = updatePowerUps(setPowerUpsEnabled(original, true), { types: ['shield'] });
   const markup = renderToStaticMarkup(createElement(AsteroidPrizeEditor, { spec, change() {} }));
-  for (const label of ['Triple shot', 'Rapid fire', 'Shield', 'Speed boost', 'Drop a prize every', 'Timed effects last', 'only the ship that collects it', 'Save, playtest and publish']) assert.ok(markup.includes(label));
+  for (const label of ['Triple shot', 'Rapid fire', 'Shield', 'Speed boost', 'Drop a prize every', 'Timed effects last', 'the ship that shoots or collects it', 'Save, playtest and publish']) assert.ok(markup.includes(label));
   assert.match(markup, /disabled="" checked=""/); assert.match(markup, /value="5"/); assert.match(markup, /value="60"/); assert.match(markup, /value="3"/); assert.match(markup, /value="30"/);
   assert.equal(renderToStaticMarkup(createElement(AsteroidPrizeEditor, { spec: defaultGameSpec(), change() {} })), '');
 });

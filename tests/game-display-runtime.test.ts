@@ -18,7 +18,7 @@ class Element {
   append(node: Element) { node.parentElement = this; this.children.push(node); }
   replaceChildren() { this.children = []; }
   setAttribute(key: string, value: string) { this.attributes[key] = value; }
-  getContext() { return new Proxy({}, { get: () => () => {} }); }
+  getContext() { return new Proxy({}, { get: (_target, key) => key === 'createImageData' ? (w: number, h: number) => ({ data: new Uint8ClampedArray(w * h * 4) }) : () => {} }); }
   focus() {} setPointerCapture() {}
   closest() {
     for (let node: Element | undefined = this; node; node = node.parentElement) {
@@ -36,7 +36,7 @@ function boot(format: typeof documents[number], channel = nonce) {
   const elements = new Map<string, Element>(), messages: any[] = [], keyHandlers: Handler[] = [], windowHandlers: Record<string, Handler> = {};
   const getElement = (id: string) => { if (!elements.has(id)) elements.set(id, new Element(id === 'game' ? 'canvas' : ['start', 'pause', 'next', 'restart', 'finish-review'].includes(id) ? 'button' : 'div')); return elements.get(id)!; };
   const parent = { postMessage(message: unknown, targetOrigin: string) { assert.equal(targetOrigin, '*'); messages.push(JSON.parse(JSON.stringify(message))); } };
-  const context = createContext({ parent, document: { hidden: false, getElementById: getElement, createElement: (tag: string) => new Element(tag), querySelectorAll: () => [], addEventListener(name: string, fn: Handler) { if (name === 'keydown') keyHandlers.push(fn); } }, window: { addEventListener(name: string, fn: Handler) { windowHandlers[name] = fn; } }, requestAnimationFrame() {}, performance: { now: () => 100 }, structuredClone });
+  const context = createContext({ parent, document: { hidden: false, getElementById: getElement, createElement: (tag: string) => new Element(tag), querySelectorAll: () => [], addEventListener(name: string, fn: Handler) { if (name === 'keydown') keyHandlers.push(fn); } }, window: { addEventListener(name: string, fn: Handler) { windowHandlers[name] = fn; } }, requestAnimationFrame() {}, performance: { now: () => 100 }, structuredClone, atob, btoa });
   const html = format.render(channel);
   new Script(html.match(/<script nonce="[^"]+">([\s\S]*)<\/script>/u)![1]).runInContext(context);
   new Script(`globalThis.fixtureSpec = ${JSON.stringify(format.spec)};`).runInContext(context);
@@ -90,3 +90,16 @@ for (const format of documents) {
     assert.throws(() => format.render('unsafe nonce'));
   });
 }
+
+
+test('serialized solo and cooperative players load bounded custom pixels without image URLs or network', () => {
+  const sprites = { player: { width: 1, height: 1, pixels: btoa('\xff\0\0\xff') }, asteroid: { width: 1, height: 1, pixels: btoa('\0\xff\0\xff') } };
+  const base = { ...planGameLevels(defaultGameSpec(), 1, 'sprites'), version: 6, genre: 'dodge', theme: 'space', arcade: { rotation: true, shooting: true, splitAsteroids: true, scoring: true, highScores: false }, asteroids: { endless: true, difficultyInterval: 30, sizes: 3, enemies: { enabled: false, difficulty: 'easy', hitPoints: 1, spawnInterval: 15, maxShips: 2 } }, sprites };
+  for (const format of [documents[0], documents[2]]) {
+    const spec = { ...base, ...(format.name === 'cooperative' ? { multiplayer: { mode: 'cooperative', maxPlayers: 2 } } : {}) };
+    const h = boot({ ...format, spec } as typeof documents[number]); h.load();
+    assert.equal(h.messages.at(-1).type, format.loaded);
+    assert.match(h.html, /connect-src 'none'/);
+    assert.match(h.html, /img-src 'none'/);
+  }
+});

@@ -15,7 +15,7 @@ export function validateGameConfig(value: GameConfig): GameConfig {
   return { version: 1, revision: value.revision, creationEnabled: value.creationEnabled, assistantModeId: value.assistantModeId };
 }
 
-/** Browser-only game rehearsal. No generated code, model calls, uploads, or cloud writes. */
+/** Browser-only game rehearsal. No generated code, model calls, network uploads, or cloud writes. */
 export class LocalGameLibrary {
   constructor(private storage: StoragePort) {}
   private read(): State {

@@ -494,5 +494,31 @@ class GameTests(unittest.TestCase):
             event = {'rawPath': '/games/published', 'requestContext': {'http': {'method': 'OPTIONS'}}}
             self.assertEqual(handler.handler(event, None)['statusCode'], 204)
 
+    def test_uploaded_pixel_sprites_preserve_saved_drafts_and_published_snapshot(self):
+        sprite = {'width': 1, 'height': 1, 'pixels': '/wAA/w=='}
+        state = self.create(prompt='Asteroids with endless survival and prizes.')
+        proposed = deepcopy(state['spec']); proposed['sprites'] = {'player': sprite}
+        state = games.update(self.api, self.claims, GAME, {'revision': state['revision'], 'spec': proposed})
+        state = games.complete_test(self.api, self.claims, GAME, {'revision': state['revision'], 'reviewedLevelIds': ['level-1']}); published = self.publish(state)
+        proposed['sprites'] = {'asteroid': sprite}
+        games.update(self.api, self.claims, GAME, {'revision': published['revision'], 'spec': proposed})
+        public = games.dispatch(self.api, {}, 'GET', '/games/published/' + GAME, {})
+        self.assertEqual(public['spec']['sprites'], {'player': sprite})
+        self.assertNotIn('messages', public)
+
+    def test_model_edits_preserve_uploaded_pixels_without_sending_them_to_provider(self):
+        self.configure_model()
+        state = self.create(prompt='Asteroids with endless survival and prizes.')
+        proposed = deepcopy(state['spec']); proposed['sprites'] = {'player': {'width': 1, 'height': 1, 'pixels': '/wAA/w=='}}
+        state = games.update(self.api, self.claims, GAME, {'revision': state['revision'], 'spec': proposed})
+        generated = deepcopy(proposed); generated.pop('sprites'); generated['title'] = 'Comet Patrol'
+        self.provider.converse.return_value = {'output': {'message': {'content': [{'text': json.dumps({'text': 'Updated title.', 'spec': generated})}]}}}
+        changed = self.message(state, 'Title: Comet Patrol')
+        self.assertEqual(changed['spec']['sprites'], proposed['sprites'])
+        sent = json.loads(self.provider.converse.call_args.kwargs['messages'][0]['content'][0]['text'])
+        self.assertNotIn('sprites', sent['currentGame'])
+        self.assertNotIn('/wAA/w==', json.dumps(sent))
+
+
 
 if __name__ == '__main__': unittest.main()
