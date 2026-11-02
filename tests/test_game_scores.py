@@ -51,60 +51,48 @@ class ScoreTests(unittest.TestCase):
     def stored_board(self):
         return self.database.rows['published-games'][games.key('game-score', support.GAME)]
 
-    def test_cooperative_enabled_edition_cannot_write_to_a_solo_scoreboard(self):
+    def test_cooperative_enabled_edition_accepts_individual_terminal_reports(self):
         saved = games.update(self.api, self.claims, support.GAME, {
             'revision': self.published['revision'], 'spec': {**self.published['spec'],
             'version': 4, 'multiplayer': {'mode': 'cooperative', 'maxPlayers': 2}}})
-        published = self.publish(self.finish_test(saved))
-        self.revision = published['publishedRevision']
-        self.error(404, self.get)
-        self.error(404, self.submit)
-        self.assertNotIn(games.key('game-score', support.GAME), self.database.rows['published-games'])
+        published = self.publish(self.finish_test(saved)); self.revision = published['publishedRevision']
+        self.assertEqual(self.get()['ranking'], 'points')
+        self.assertTrue(self.submit(self.report(points=1000000))['qualified'])
+        self.error(400, lambda: self.submit(self.report(points=1000001, request=support.SECOND)))
+        self.assertEqual(self.submit(self.report(50, support.SECOND))['entries'][1]['points'], 50)
 
-    def test_solo_prizes_accept_bounded_scores_but_cooperative_prizes_cannot_enter_solo_board(self):
+    def test_solo_and_cooperative_prizes_have_current_edition_boards(self):
         spec = {**self.published['spec'], 'version': 5, 'powerUps': {
             'spawnInterval': 12, 'duration': 10, 'types': ['triple-shot', 'rapid-fire', 'shield', 'speed-boost']}}
         saved = games.update(self.api, self.claims, support.GAME, {'revision': self.published['revision'], 'spec': spec})
-        published = self.publish(self.finish_test(saved))
-        self.revision = published['publishedRevision']
+        published = self.publish(self.finish_test(saved)); self.revision = published['publishedRevision']
         self.assertEqual(self.submit()['entries'][0]['points'], 100)
         spec['multiplayer'] = {'mode': 'cooperative', 'maxPlayers': 2}
         saved = games.update(self.api, self.claims, support.GAME, {'revision': self.revision, 'spec': spec})
-        published = self.publish(self.finish_test(saved))
-        self.revision = published['publishedRevision']
-        self.error(404, self.get)
-        self.error(404, self.submit)
+        published = self.publish(self.finish_test(saved)); self.revision = published['publishedRevision']
+        self.assertEqual(self.get()['entries'], [])
+        self.assertTrue(self.submit()['qualified'])
 
-    def test_public_board_is_readable_without_authorization_and_projects_only_safe_fields(self):
+    def test_public_read_and_write_project_only_safe_fields_without_authorization(self):
         empty = self.get()
-        self.assertEqual(empty, {'scope': 'shared', 'publishedRevision': self.revision, 'limit': 10, 'entries': []})
-        self.authorization.assert_not_called()
-        shared = self.submit()
-        self.authorization.reset_mock()
+        self.assertEqual(empty, {'scope': 'shared', 'publishedRevision': self.revision, 'limit': 10, 'ranking': 'points', 'entries': []})
+        shared = self.submit(); self.assertTrue(shared.pop('qualified'))
         self.assertEqual(self.get(), shared); self.authorization.assert_not_called()
-        self.assertEqual(set(shared), {'scope', 'publishedRevision', 'limit', 'entries'})
-        self.assertEqual(set(shared['entries'][0]), {'name', 'points', 'createdAt'})
+        self.assertEqual(set(shared['entries'][0]), {'name', 'points', 'elapsed', 'createdAt'})
         encoded = json.dumps(shared)
         for value in [support.USER, support.REQUEST, 'owner', 'receipts', 'fingerprint', 'permissions']:
             self.assertNotIn(value, encoded)
         stored = json.loads(self.stored_board()['payload'])
-        self.assertEqual(set(stored['entries'][0]), {'owner', 'name', 'points', 'createdAt'})
-        self.assertRegex(stored['entries'][0]['owner'], r'^[0-9a-f]{64}$')
+        self.assertEqual(set(stored['entries'][0]), {'requestId', 'fingerprint', 'name', 'points', 'elapsed', 'createdAt'})
         self.assertNotIn(support.USER, self.stored_board()['payload'])
         self.provider.converse.assert_not_called()
 
-    def test_every_write_freshly_authorizes_app_members_without_editor_permissions(self):
-        self.claims['permissions'] = []
-        value = self.submit()
-        self.assertEqual(value['entries'][0]['points'], 100)
-        self.authorization.assert_called_once_with(self.event())
-        self.submit(self.report(110, support.SECOND))
-        self.assertEqual(self.authorization.call_count, 2)
-        self.error(401, lambda: scores.dispatch(self.api, {}, 'POST', '/game-scores/' + support.GAME, self.report()))
-        self.assertEqual(len(json.loads(self.stored_board()['payload'])['entries']), 1)
-        self.authorization.side_effect = games.GameError(403, 'Application access revoked.')
-        self.error(403, lambda: self.submit(self.report(200, str(uuid.uuid4()))))
-        self.assertEqual(self.get()['entries'][0]['points'], 110)
+    def test_score_submission_does_not_depend_on_core_identity_or_membership(self):
+        self.authorization.side_effect = AssertionError('Public scores must never introspect Core.')
+        self.assertEqual(self.submit()['entries'][0]['points'], 100)
+        value = scores.dispatch(self.api, {}, 'POST', '/game-scores/' + support.GAME, self.report(110, support.SECOND))
+        self.assertEqual(len(value['entries']), 2)
+        self.authorization.assert_not_called()
 
     def test_player_session_does_not_grant_editor_access_or_expose_identity(self):
         for permissions in [[], ['games-create'], ['games-publish']]:
@@ -129,39 +117,37 @@ class ScoreTests(unittest.TestCase):
             event['queryStringParameters']['revision'] = '0'
             self.assertEqual(handler.handler(event, None)['statusCode'], 400)
 
-    def test_invalid_subject_cannot_write_even_after_a_malformed_authorization_response(self):
+    def test_supplied_identity_cannot_change_anonymous_attempt_identity(self):
+        first = self.submit()
         for subject in [None, True, '', 'not-a-core-subject', [support.USER]]:
             self.claims['sub'] = subject
-            self.error(401, self.submit)
-        self.assertNotIn(games.key('game-score', support.GAME), self.database.rows['published-games'])
+            self.assertEqual(self.submit(), first)
+        self.authorization.assert_not_called()
 
-    def test_private_missing_foreign_and_nonarcade_games_never_publish_a_board(self):
+    def test_private_missing_foreign_games_fail_but_all_public_games_have_boards(self):
         self.create(game=support.COPY, prompt='Asteroids')
         self.error(404, lambda: scores.get_scores(self.api, support.COPY, 2))
-        self.error(404, lambda: scores.submit_score(self.api, self.claims, support.COPY, self.report()))
+        self.error(404, lambda: scores.submit_score(self.api, {}, support.COPY, self.report()))
         for game in [support.OTHER, support.SECOND]: self.error(404, lambda: scores.get_scores(self.api, game, self.revision))
         row = self.database.rows['published-games'][games.key('game', support.GAME)]
         row['organization_id'] = support.OTHER
         self.error(404, self.get); self.error(404, self.submit)
         row['organization_id'] = support.ORG; row['service_id'] = support.OTHER
-        self.error(404, self.get)
-        row['service_id'] = support.SERVICE
+        self.error(404, self.get); row['service_id'] = support.SERVICE
         source = json.loads(row['payload'])
-        for mutate in [lambda value: value['spec'].pop('arcade'),
-                lambda value: value['spec']['arcade'].update(highScores=False),
-                lambda value: value['spec']['arcade'].update(scoring=False, highScores=False)]:
+        for mutate, metric in [(lambda value: value['spec'].pop('arcade'), 'time'),
+                (lambda value: value['spec']['arcade'].update(highScores=False), 'points'),
+                (lambda value: value['spec']['arcade'].update(scoring=False, highScores=False), 'time')]:
             changed = deepcopy(source); mutate(changed); row['payload'] = json.dumps(changed)
-            self.error(404, self.get); self.error(404, self.submit)
+            self.assertEqual(self.get()['ranking'], metric)
         self.assertNotIn(games.key('game-score', support.GAME), self.database.rows['published-games'])
 
-    def test_names_are_bounded_arcade_labels_not_html_links_or_contact_fields(self):
-        self.assertEqual(scores.validate_name(' tiny  axo '), 'TINY AXO')
-        self.assertEqual(scores.validate_name('A_1-B'), 'A_1-B')
-        self.assertEqual(scores.validate_name('a' * 16), 'A' * 16)
-        for invalid in ['', ' ', 'a' * 17, 'éclair', '🦎', '<b>hi</b>', 'https://x.y', 'a@b.com', 'a\nb', 'a\tb',
-                'A\x80B', 1, True, None, [], {}]:
+    def test_names_are_arbitrary_nfc_text_with_eight_codepoints_and_no_controls(self):
+        for name, expected in [(' tiny ', 'tiny'), (' \ufefftiny\ufeff ', 'tiny'), ('A_1-B', 'A_1-B'), ('a' * 8, 'a' * 8), ('e\u0301clair', 'éclair'), ('🦎🚀', '🦎🚀'), ('<b>hi', '<b>hi'), ('a@b.com', 'a@b.com')]:
+            self.assertEqual(scores.validate_name(name), expected)
+        for invalid in ['', ' ', 'a' * 9, 'a\nb', 'a\tb', ' A\n', 'A\x80B', '\u202eA', '\u2067A', '\u2028A', '\ud800', '\u200b', '\u0301', 1, True, None, [], {}]:
             self.error(400, lambda: self.submit(self.report(name=invalid)))
-        self.assertEqual(self.submit(self.report(name=' tiny  axo '))['entries'][0]['name'], 'TINY AXO')
+        self.assertEqual(self.submit(self.report(name=' tiny '))['entries'][0]['name'], 'tiny')
 
     def test_fields_ids_edition_and_names_are_strict_before_any_board_write(self):
         for field in ['publishedRevision', 'requestId', 'name', 'result']:
@@ -178,12 +164,12 @@ class ScoreTests(unittest.TestCase):
         self.error(400, lambda: self.submit(self.report(request='AAAAaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa')))
         self.assertNotIn(games.key('game-score', support.GAME), self.database.rows['published-games'])
 
-    def test_only_positive_terminal_bounded_reports_are_accepted(self):
+    def test_terminal_bounded_reports_are_accepted_including_zero_point_rounds(self):
         original = self.report()['result']
         mutations = [
             {}, None, [], {**original, 'extra': 1}, {key: value for key, value in original.items() if key != 'points'},
             *[{**original, 'outcome': outcome} for outcome in ['playing', 'level-complete', True, None, []]],
-            *[{**original, 'points': points} for points in [0, -1, 1.5, True, '100', None, math.inf, math.nan, 99999999]],
+            *[{**original, 'points': points} for points in [-1, 1.5, True, '100', None, math.inf, math.nan, 99999999]],
             *[{**original, 'score': score} for score in [-1, True, 1.5, '1', 1000]],
             *[{**original, 'elapsed': elapsed} for elapsed in [0, -1, True, '10', None, math.inf, math.nan, 100000]],
         ]
@@ -212,37 +198,34 @@ class ScoreTests(unittest.TestCase):
         self.submit(self.report(request=support.SECOND, result={**original,
             'reviewedLevelIds': ['level-1', 'level-2'], 'score': previous_goal}))
 
-    def test_request_identity_is_owner_and_content_bound_and_retries_do_not_write_twice(self):
+    def test_request_identity_is_attempt_and_content_bound_and_retries_do_not_write_twice(self):
         first = self.submit(); count = self.database.meta.client.transact_write_items.call_count
-        retry = self.submit(); self.assertEqual(first, retry)
+        self.assertEqual(self.submit(), first)
         self.assertEqual(self.database.meta.client.transact_write_items.call_count, count)
-        self.assertEqual(self.submit(self.report(name='TINY')), first)
-        for body in [self.report(points=200), self.report(name='someone'), self.report(result={**self.report()['result'], 'elapsed': 11})]:
+        for body in [self.report(points=200), self.report(name='someone'), self.report(name='TINY'), self.report(result={**self.report()['result'], 'elapsed': 11})]:
             self.error(409, lambda: self.submit(body))
         self.claims['sub'] = support.OTHER
-        self.assertEqual(len(self.submit()['entries']), 2)
+        self.assertEqual(self.submit(), first)
+        self.assertEqual(len(self.submit(self.report(request=support.SECOND))['entries']), 2)
 
-    def test_top_ten_is_one_personal_best_per_account_and_lesser_scores_do_not_rename_it(self):
-        first = self.submit(self.report(100, name='first'))
-        best = self.submit(self.report(200, support.SECOND, 'best'))
-        self.assertEqual(len(best['entries']), 1); self.assertEqual(best['entries'][0]['name'], 'BEST')
-        self.assertEqual(self.submit(self.report(150, str(uuid.uuid4()), 'lower'))['entries'], best['entries'])
-        self.assertEqual(self.submit(self.report(200, str(uuid.uuid4()), 'equal'))['entries'], best['entries'])
+    def test_top_ten_contains_independent_runs_and_duplicate_names_without_overwrites(self):
+        first = self.submit(self.report(100, name='same'))
+        best = self.submit(self.report(200, support.SECOND, 'same'))
+        self.assertEqual(len(best['entries']), 2)
+        self.assertEqual([entry['name'] for entry in best['entries']], ['same', 'same'])
         for index in range(1, 13):
-            self.claims['sub'] = str(uuid.UUID(int=index))
             self.submit(self.report(200 + index * 10, str(uuid.uuid4()), f'AXO-{index}'))
-        board = self.get()
-        self.assertEqual(len(board['entries']), 10)
+        board = self.get(); self.assertEqual(len(board['entries']), 10)
         self.assertEqual([entry['points'] for entry in board['entries']], list(range(320, 220, -10)))
-        self.assertEqual(len(json.loads(self.stored_board()['payload'])['entries']), 10)
-        self.assertEqual(first['entries'][0]['name'], 'FIRST')
+        self.assertEqual(first['entries'][0]['name'], 'same')
+        self.assertFalse(self.submit(self.report(230, str(uuid.uuid4())))['qualified'])
 
     def test_receipts_have_a_fixed_limit_and_never_accumulate_unbounded_storage(self):
         for index in range(scores.MAX_RECEIPTS + 5):
             self.submit(self.report(100 + index, str(uuid.uuid4())))
         stored = json.loads(self.stored_board()['payload'])
         self.assertEqual(len(stored['receipts']), scores.MAX_RECEIPTS)
-        self.assertEqual(len(stored['entries']), 1)
+        self.assertEqual(len(stored['entries']), 10)
         self.assertLess(len(self.stored_board()['payload'].encode()), 80000)
 
     def test_published_editions_reset_boards_and_old_tabs_cannot_resubmit(self):

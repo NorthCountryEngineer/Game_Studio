@@ -425,7 +425,7 @@ export function designArcadeGame(message: string, current?: ArcadeGameSpec): { s
     const controls = spec.genre === 'platformer' ? 'Use arrows or WASD to move; Space or Up jumps.' : 'Use arrows or WASD to move.';
     spec.instructions = spec.arcade ? arcadeInstructions(spec) : `${controls} Complete each level’s collection goal and avoid ${spec.objects.hazard}s. Each level starts with fresh lives and time. Touch controls are available below the game.`;
   }
-  if (has(/\b(3d|chat|weapons?|upload|custom code|javascript|payment|purchase|soundtrack|music)\b/) || has(/\bonline\b/) && !has(/\b(?:high[ -]?scores?|leaderboards?)\b/) || /https?:\/\/|<script|javascript:/iu.test(message)) notes.push('This builder supports 2D games, optional two-player cooperation, and shared high scores for signed-in players. It cannot add custom code, external assets, music, chat, or purchases.');
+  if (has(/\b(3d|chat|weapons?|upload|custom code|javascript|payment|purchase|soundtrack|music)\b/) || has(/\bonline\b/) && !has(/\b(?:high[ -]?scores?|leaderboards?)\b/) || /https?:\/\/|<script|javascript:/iu.test(message)) notes.push('This builder supports 2D games, optional two-player cooperation, and public leaderboards without signing in. It cannot add custom code, external assets, music, chat, or purchases.');
   if (advanced.requested) {
     if (spec.genre === 'dodge' && spec.arcade?.shooting) { spec = updateAsteroidSettings(spec, advanced.patch); changes.push('advanced Asteroids settings'); if (!customInstructions) spec.instructions = arcadeInstructions(spec); }
     else notes.push('Advanced Asteroids settings require a dodge game with shooting enabled.');

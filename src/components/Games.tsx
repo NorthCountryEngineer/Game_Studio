@@ -1,4 +1,4 @@
-import type { MultiGameProgress, MultiMaterialRequest } from '../lib/multi-game-session';
+import type { MultiGameProgress, MultiGameResult, MultiMaterialRequest } from '../lib/multi-game-session';
 import type { FlowProgress, MaterialRequest } from '../lib/game-flow-session';
 import { useEffect, useRef, useState } from 'react';
 import { isCooperativeGameSpec, isEndlessAsteroids, type Game, type GameResult, type GameSettings, type GameSpec } from '../lib/game-types';
@@ -11,9 +11,10 @@ import { AsteroidPrizeGuide } from './AsteroidPrizeEditor';
 import { getGameLevels } from '../lib/game-design';
 import { ItemActions } from './ItemActions';
 import { useConfirm } from './Confirm';
-import { beginCoreLogin, isCore } from '../lib/core';
-import { getGameScores, getLocalGameScores, saveLocalGameScore, submitGameScore, validateArcadeName } from '../lib/game-scores';
+import { isCore } from '../lib/core';
+import { getGameScores, submitGameScore } from '../lib/game-scores';
 import type { GameScoreBoard } from '../lib/game-scores';
+import { leaderboardRanking, leaderboardValue, qualifiesLeaderboard, validateLeaderboardName, validateLeaderboardResult } from '../lib/game-leaderboard';
 import { useBranding } from '../lib/branding';
 import { ServiceBadge } from './ServiceBadge';
 import { wordGameSummary, wordGenreNames } from './WordGameEditor';
@@ -80,83 +81,75 @@ export function GamePage(props: Props & { id: string; embedded?: boolean; onGame
 }
 
 
-type ScoreRun = { id: string; result: GameResult };
-export function PublishedGame({ game, signed, embedded = false, onGameEvent, onMaterialRequest, onMultiMaterialRequest }: { game: Game; signed: boolean; embedded?: boolean; onGameEvent?: (event: PublishedGameEvent) => void; onMaterialRequest?: PublishedMaterialHandler; onMultiMaterialRequest?: PublishedMultiMaterialHandler }) {
+type ScoreRun = { id: string; result: GameResult | MultiGameResult };
+export function PublishedGame({ game, onGameEvent, onMaterialRequest, onMultiMaterialRequest }: { game: Game; signed: boolean; embedded?: boolean; onGameEvent?: (event: PublishedGameEvent) => void; onMaterialRequest?: PublishedMaterialHandler; onMultiMaterialRequest?: PublishedMultiMaterialHandler }) {
   const [run, setRun] = useState<ScoreRun>();
-  const enabled = game.spec.version !== 3 && game.spec.version !== 8 && !isCooperativeGameSpec(game.spec) && Boolean(game.spec.arcade?.highScores && game.spec.arcade.scoring);
+  function recordResult(result: GameResult | MultiGameResult) {
+    const checked = validateLeaderboardResult(game.spec, result);
+    if (checked) setRun({ id: crypto.randomUUID(), result: checked });
+  }
   function record(result: GameResult) {
     if (game.spec.version !== 8 && !(game.spec.version !== 3 && game.spec.flow) && !isCooperativeGameSpec(game.spec) && result.outcome !== 'level-complete') onGameEvent?.({ type: 'completed', gameId: game.id, publishedRevision: game.publishedRevision ?? game.revision, ...(game.spec.version === 6 ? { specVersion: 6, mode: isEndlessAsteroids(game.spec) ? 'endless' : 'levels' } as const : {}), result: { ...result, reviewedLevelIds: [...result.reviewedLevelIds] } });
-    if (!enabled || result.outcome === 'level-complete' || !Number.isSafeInteger(result.points) || (result.points ?? 0) <= 0) return;
-    setRun({ id: crypto.randomUUID(), result });
+    recordResult(result);
   }
-  const solo = <><GamePlayer spec={game.spec} onComplete={record} onMultiMaterialRequest={onMultiMaterialRequest ? (request, signal) => onMultiMaterialRequest({ ...request, gameId: game.id, publishedRevision: game.publishedRevision ?? game.revision }, signal) : undefined} onMultiProgress={progress => onGameEvent?.({ type: 'multi-progress', gameId: game.id, publishedRevision: game.publishedRevision ?? game.revision, progress })} onMaterialRequest={onMaterialRequest ? (request, signal) => onMaterialRequest({ ...request, gameId: game.id, publishedRevision: game.publishedRevision ?? game.revision }, signal) : undefined} onFlowProgress={(progress, result) => onGameEvent?.({ type: 'flow-progress', gameId: game.id, publishedRevision: game.publishedRevision ?? game.revision, progress, ...(result ? { result } : {}) })} />{enabled && <GameHighScores game={game} signed={signed} run={run} embedded={embedded} />}</>;
-  return isCooperativeGameSpec(game.spec) ? <CooperativeGame game={{ ...game, spec: game.spec }}>{solo}</CooperativeGame> : solo;
+  const solo = <GamePlayer spec={game.spec} onComplete={record} onMultiComplete={recordResult} onMultiMaterialRequest={onMultiMaterialRequest ? (request, signal) => onMultiMaterialRequest({ ...request, gameId: game.id, publishedRevision: game.publishedRevision ?? game.revision }, signal) : undefined} onMultiProgress={progress => onGameEvent?.({ type: 'multi-progress', gameId: game.id, publishedRevision: game.publishedRevision ?? game.revision, progress })} onMaterialRequest={onMaterialRequest ? (request, signal) => onMaterialRequest({ ...request, gameId: game.id, publishedRevision: game.publishedRevision ?? game.revision }, signal) : undefined} onFlowProgress={(progress, result) => onGameEvent?.({ type: 'flow-progress', gameId: game.id, publishedRevision: game.publishedRevision ?? game.revision, progress, ...(result ? { result } : {}) })} />;
+  return <>{isCooperativeGameSpec(game.spec) ? <CooperativeGame game={{ ...game, spec: game.spec }} onComplete={recordResult}>{solo}</CooperativeGame> : solo}<GameHighScores game={game} run={run}/></>;
 }
 
-function GameHighScores({ game, signed, run, embedded }: { game: Game; signed: boolean; run?: ScoreRun; embedded: boolean }) {
-  const [scope, setScope] = useState<'shared' | 'browser'>(isCore ? 'shared' : 'browser');
-  const [board, setBoard] = useState<GameScoreBoard>(), [loading, setLoading] = useState(false), [busy, setBusy] = useState(false), [signingIn, setSigningIn] = useState(false);
+function scoreValue(game: Game, result: GameResult | MultiGameResult) {
+  const value = leaderboardValue(game.spec, result);
+  return leaderboardRanking(game.spec) === 'points' ? `${value.toLocaleString()} points` : `${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} seconds`;
+}
+
+export function GameHighScores({ game, run }: { game: Game; run?: ScoreRun }) {
+  const [board, setBoard] = useState<GameScoreBoard>(), [loading, setLoading] = useState(true), [busy, setBusy] = useState(false);
   const [name, setName] = useState(''), [error, setError] = useState(''), [notice, setNotice] = useState(''), [savedRuns, setSavedRuns] = useState<Set<string>>(() => new Set());
-  const loadGeneration = useRef(0), saving = useRef(false), signInLock = useRef(false), active = useRef(true);
+  const loadGeneration = useRef(0), saving = useRef(false), active = useRef(true), latestRun = useRef(run);
   const request = useRef<{ id: string; key: string }>();
-  const submissionScope = isCore && signed && scope === 'shared' ? 'shared' : 'browser';
+  latestRun.current = run;
+  const ranking = leaderboardRanking(game.spec), qualified = Boolean(board && run && qualifiesLeaderboard(board, run.result));
   useEffect(() => { active.current = true; return () => { active.current = false; loadGeneration.current += 1; }; }, []);
-  useEffect(() => { setName(''); request.current = undefined; setError(''); setNotice(''); }, [signed]);
-  useEffect(() => { setError(''); setNotice(''); }, [run?.id]);
   async function reload() {
     const generation = ++loadGeneration.current; setLoading(true); setError('');
     try {
-      const next = scope === 'shared' ? await getGameScores(game) : getLocalGameScores(game);
+      const next = await getGameScores(game);
       if (active.current && generation === loadGeneration.current) setBoard(next);
     } catch (value) {
-      if (active.current && generation === loadGeneration.current) { setBoard(undefined); setError(value instanceof Error ? value.message : 'The high-score board could not be loaded.'); }
+      if (active.current && generation === loadGeneration.current) { setBoard(undefined); setError(value instanceof Error ? value.message : 'The leaderboard could not be loaded.'); }
     } finally { if (active.current && generation === loadGeneration.current) setLoading(false); }
   }
-  useEffect(() => { setBoard(undefined); void reload(); return () => { loadGeneration.current += 1; }; }, [game.id, game.publishedRevision, game.revision, scope]);
+  useEffect(() => { setBoard(undefined); setNotice(''); setError(''); request.current = undefined; void reload(); return () => { loadGeneration.current += 1; }; }, [game.id, game.publishedRevision, game.revision, run?.id]);
   async function save() {
-    if (!run || saving.current || signInLock.current || savedRuns.has(`${run.id}:${submissionScope}`)) return;
+    if (!run || !board || loading || saving.current || savedRuns.has(run.id) || !qualifiesLeaderboard(board, run.result)) return;
     let nickname: string;
-    try { nickname = validateArcadeName(name); } catch (value) { setError(value instanceof Error ? value.message : 'Choose an arcade name with 1–16 letters, numbers, spaces, underscores, or hyphens.'); return; }
-    const targetScope = submissionScope, currentRun = run;
-    const key = JSON.stringify([game.id, game.publishedRevision ?? game.revision, targetScope, nickname, currentRun.id]);
+    try { nickname = validateLeaderboardName(name); } catch (value) { setError(value instanceof Error ? value.message : 'Choose a name with 1–8 printable characters.'); return; }
+    const currentRun = run, key = JSON.stringify([game.id, game.publishedRevision ?? game.revision, currentRun.id]);
     if (request.current?.key !== key) request.current = { id: crypto.randomUUID(), key };
     saving.current = true; setBusy(true); setError(''); setNotice('');
     const generation = ++loadGeneration.current;
     try {
-      const report = { requestId: request.current.id, name: nickname, result: currentRun.result };
-      const next = targetScope === 'shared' ? await submitGameScore(game, report) : saveLocalGameScore(game, report);
+      const next = await submitGameScore(game, { requestId: request.current.id, name: nickname, result: currentRun.result });
       if (!active.current) return;
-      setSavedRuns(previous => new Set([...previous, `${currentRun.id}:${targetScope}`]));
-      setNotice(targetScope === 'shared' ? 'Your round was recorded. The shared board keeps each player’s best score.' : 'Your score was saved on this browser.');
-      // A guest saving while viewing the shared board explicitly changes to the local board.
-      setScope(targetScope);
+      setSavedRuns(previous => new Set([...previous, currentRun.id]));
+      if (latestRun.current?.id === currentRun.id) setNotice(next.qualified ? next.scope === 'shared' ? 'Your result is on the shared top 10!' : 'Your result is on this browser’s top 10!' : 'The board changed before your result was saved. This result no longer makes the top 10. Try another round!');
       if (generation === loadGeneration.current) { setBoard(next); setLoading(false); }
-    } catch (value) { if (active.current) setError(value instanceof Error ? value.message : 'Your score could not be saved. Try again with the same arcade name.'); }
+    } catch (value) { if (active.current && latestRun.current?.id === currentRun.id) setError(value instanceof Error ? value.message : 'Your result could not be saved. Try again with the same name.'); }
     finally { saving.current = false; if (active.current) { setBusy(false); if (generation === loadGeneration.current) setLoading(false); } }
   }
-  async function signIn() {
-    if (saving.current || signInLock.current) return;
-    signInLock.current = true; setSigningIn(true); setError('');
-    try { await beginCoreLogin('login', `/games/${game.id}`); }
-    catch (value) {
-      signInLock.current = false;
-      if (active.current) { setSigningIn(false); setError(value instanceof Error ? value.message : 'Sign-in could not be started. Try again.'); }
-    }
-  }
+  const unsavedRun = run && !savedRuns.has(run.id);
   return <section className="game-high-scores" aria-labelledby="game-high-scores-heading">
-    <div className="game-section-heading"><div><span className="eyebrow">THE ARCADE</span><h2 id="game-high-scores-heading">High scores</h2></div><span className="game-score-version">This published edition</span></div>
-    <p className="game-small-note">{isCore ? 'Each game has its own board. Publishing a new edition starts a fresh board so different editions compete fairly.' : 'Local preview keeps scores on this browser. Shared scores are available on the connected site.'}</p>
-    {isCore && <div className="filter-tabs game-score-tabs" role="group" aria-label="High-score board"><button disabled={busy} className={scope === 'shared' ? 'active' : ''} aria-pressed={scope === 'shared'} onClick={() => setScope('shared')}>Shared</button><button disabled={busy} className={scope === 'browser' ? 'active' : ''} aria-pressed={scope === 'browser'} onClick={() => setScope('browser')}>This browser</button></div>}
-    <p className="game-score-scope">{scope === 'shared' ? 'Shared · scores submitted by signed-in players' : 'This browser · saved only on this device and browser'}</p>
-    {loading ? <p role="status">Opening the high-score board…</p> : board ? board.entries.length ? <ol className="game-score-list" aria-label={scope === 'shared' ? 'Shared high scores' : 'High scores on this browser'}>{board.entries.map((entry, index) => <li key={`${entry.createdAt}-${index}`}><span className="game-score-rank" aria-hidden="true">{String(index + 1).padStart(2, '0')}</span><span className="game-score-name">{entry.name}</span><strong>{entry.points.toLocaleString()} <small>points</small></strong></li>)}</ol> : <p className="game-score-empty">No scores yet. Finish a round and leave your arcade name!</p> : <button className="button secondary" disabled={busy} onClick={() => void reload()}>Try loading scores again</button>}
-    {run && !savedRuns.has(`${run.id}:${submissionScope}`) && <form className="game-score-form" onSubmit={event => { event.preventDefault(); void save(); }}>
-      <div><strong>You earned {(run.result.points ?? 0).toLocaleString()} points!</strong><p>{submissionScope === 'shared' ? 'Leave an arcade name on the shared board. Everyone can see this name, so use a nickname.' : 'Keep this score on this browser. Use a nickname for your arcade name.'}</p></div>
-      <label htmlFor="game-score-name">Arcade name<input id="game-score-name" autoComplete="off" maxLength={16} value={name} disabled={busy || signingIn} onChange={event => setName(event.target.value)} placeholder="e.g. GillPilot" aria-describedby="game-score-name-help" /></label>
-      <span id="game-score-name-help" className="game-small-note">1–16 letters, numbers, spaces, underscores, or hyphens.</span>
-      <button className="button primary" disabled={busy || signingIn || !name.trim()}>{busy ? 'Saving score…' : submissionScope === 'shared' ? 'Save shared score →' : 'Save on this browser →'}</button>
+    <div className="game-section-heading"><div><span className="eyebrow">THE TOP 10</span><h2 id="game-high-scores-heading">{ranking === 'points' ? 'High scores' : ranking === 'survival' ? 'Longest survival' : 'Fastest completions'}</h2></div><span className="game-score-version">This published edition</span></div>
+    <p className="game-small-note">{isCore ? 'Everyone can join this game’s shared board. No sign-in needed. Publishing a new edition starts a fresh board.' : 'Local preview keeps this top 10 on this browser. The connected site shares its board with everyone.'} {ranking === 'points' ? 'Highest points first.' : ranking === 'survival' ? 'Longest active survival time first.' : 'Completed games rank by fastest active play time.'} These are casual, player-reported results.</p>
+    <p className="game-score-scope">{isCore ? 'Shared · public names and results' : 'This browser · saved only on this device and browser'}</p>
+    {loading ? <p role="status">Opening the leaderboard…</p> : board ? board.entries.length ? <ol className="game-score-list" aria-label={ranking === 'points' ? 'Top 10 point scores' : ranking === 'survival' ? 'Top 10 survival times' : 'Top 10 completion times'}>{board.entries.map((entry, index) => <li key={`${entry.createdAt}-${index}`}><span className="game-score-rank" aria-hidden="true">{String(index + 1).padStart(2, '0')}</span><span className="game-score-name">{entry.name}</span><strong>{ranking === 'points' ? entry.points!.toLocaleString() : entry.elapsed!.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} <small>{ranking === 'points' ? 'points' : 'seconds'}</small></strong></li>)}</ol> : <p className="game-score-empty">No results yet. {ranking === 'time' ? 'Complete the game' : 'Finish a round'} to join the top 10!</p> : <button className="button secondary" disabled={busy} onClick={() => void reload()}>Try loading the leaderboard again</button>}
+    {unsavedRun && loading && <p className="game-score-qualification" role="status">Checking your result against the current top 10…</p>}
+    {unsavedRun && !loading && board && qualified && <form className="game-score-form" onSubmit={event => { event.preventDefault(); void save(); }}>
+      <div><strong>{scoreValue(game, run.result)} · you made the top 10!</strong><p>Choose a public nickname. Everyone can see it, so keep personal details private.</p></div>
+      <label htmlFor="game-score-name">Leaderboard name<input id="game-score-name" autoComplete="off" value={name} disabled={busy} onChange={event => setName(event.target.value)} placeholder="e.g. Nova" aria-describedby="game-score-name-help" /></label>
+      <span id="game-score-name-help" className="game-small-note">1–8 characters. Letters, punctuation and emoji are welcome. {[...name.normalize('NFC').trim()].length}/8</span>
+      <button className="button primary" disabled={busy || !name.trim()}>{busy ? 'Saving result…' : 'Save to the top 10 →'}</button>
     </form>}
-    {isCore && !signed && <p className="game-score-signin">Want to join the shared board? {embedded ? <a className="text-button" href={`/games/${encodeURIComponent(game.id)}`} target="_blank" rel="noopener noreferrer">Open this game to sign in ↗</a> : <button className="text-button" disabled={busy || signingIn} onClick={() => void signIn()}>{signingIn ? 'Opening sign-in…' : 'Sign in to save shared scores →'}</button>}</p>}
+    {unsavedRun && !loading && board && !qualified && <p className="game-score-qualification" role="status">Your result: {scoreValue(game, run.result)}. {ranking === 'points' ? 'Earn more points' : ranking === 'survival' ? 'Survive longer' : 'Complete the game faster'} to make the top 10.</p>}
     {notice && <p className="game-score-notice" role="status">{notice}</p>}{error && <p className="error" role="alert">{error}</p>}
-
   </section>;
 }

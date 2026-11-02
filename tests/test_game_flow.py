@@ -125,7 +125,7 @@ class FlowTests(unittest.TestCase):
         self.assertEqual(reduced['flow']['nodes'], [node for node in original['flow']['nodes'] if node.get('levelId') != 'level-3'])
         self.error(400, lambda: games.design_game('Add multiplayer.', original))
 
-    def test_arcade_score_validation_uses_flow_order_and_pixel_platformer_has_no_board(self):
+    def test_arcade_score_validation_uses_flow_order_and_pixel_platformer_has_points_board(self):
         spec = games.design_game('Asteroids with 3 levels.')['spec']
         spec['flow'] = campaign()['flow']
         spec = games.validate_spec(spec)
@@ -133,8 +133,8 @@ class FlowTests(unittest.TestCase):
         self.assertEqual(scores.validate_result(result, spec), result)
         with self.assertRaises(scores.ScoreError): scores.validate_result({**result, 'reviewedLevelIds': ['level-1']}, spec)
         state = self.publish(self.finish_test(self.save(self.create(), campaign())))
-        with self.assertRaises(scores.ScoreError) as caught: scores.publication(self.api, state['id'], state['publishedRevision'])
-        self.assertEqual(caught.exception.status, 404)
+        self.assertEqual(scores.publication(self.api, state['id'], state['publishedRevision'])[0]['version'], 7)
+        self.assertEqual(scores.get_scores(self.api, state['id'], state['publishedRevision'])['ranking'], 'points')
 
 
 if __name__ == '__main__': unittest.main()
