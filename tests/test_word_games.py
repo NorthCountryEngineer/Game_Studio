@@ -252,12 +252,12 @@ class WordLifecycleTests(unittest.TestCase):
         self.error(404, lambda: games.load(self.api, self.claims, state['id']))
         self.provider.converse.assert_not_called()
 
-    def test_word_games_cannot_read_or_write_shared_arcade_boards(self):
+    def test_word_games_have_time_boards_but_invalid_results_do_not_create_rows(self):
         state = self.publish(self.finish_test(self.create(prompt='word search')))
-        for fn in (lambda: scores.get_scores(self.api, state['id'], state['publishedRevision']),
-                lambda: scores.submit_score(self.api, self.claims, state['id'], {'publishedRevision': state['publishedRevision'], 'requestId': support.REQUEST, 'name': 'PLAYER', 'result': {}})):
-            with self.assertRaises(scores.ScoreError) as error: fn()
-            self.assertEqual(error.exception.status, 404)
+        self.assertEqual(scores.get_scores(self.api, state['id'], state['publishedRevision'])['ranking'], 'time')
+        with self.assertRaises(scores.ScoreError) as error:
+            scores.submit_score(self.api, {}, state['id'], {'publishedRevision': state['publishedRevision'], 'requestId': support.REQUEST, 'name': 'PLAYER', 'result': {}})
+        self.assertEqual(error.exception.status, 400)
         self.assertFalse(any(key.startswith('game-score:') for key in self.database.rows['published-games']))
         with self.assertRaises(scores.ScoreError): scores.validate_result({}, state['spec'])
 

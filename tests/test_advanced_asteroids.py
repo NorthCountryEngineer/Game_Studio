@@ -130,7 +130,7 @@ class AdvancedScoreTests(unittest.TestCase):
             self.assertEqual(scores.validate_result(maximal, spec), maximal)
             self.assertEqual(scores.max_points(spec, games.get_levels(spec), 10), 22000)
             cooperative = dict(spec, multiplayer={'mode': 'cooperative', 'maxPlayers': 2})
-            with self.assertRaises(scores.ScoreError): scores.validate_result(report, cooperative)
+            self.assertEqual(scores.validate_result(report, cooperative), report)
 
     def test_finite_v6_keeps_authored_completion_and_timer_requirements(self):
         spec = advanced(False); levels = spec['levels']; maximum = sum(level['rules']['goal'] for level in levels)

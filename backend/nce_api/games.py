@@ -610,7 +610,7 @@ def design_game(message, current=None):
         controls = 'Use arrows or WASD to move; Space or Up jumps.' if spec['genre'] == 'platformer' else 'Use arrows or WASD to move.'
         spec['instructions'] = arcade_instructions(spec) if 'arcade' in spec else f"{controls} Complete each level’s collection goal and avoid {spec['objects']['hazard']}s. Each level starts with fresh lives and time. Touch controls are available below the game."
     if has(r'\b(3d|chat|weapons?|upload|custom code|javascript|payment|purchase|soundtrack|music)\b') or has(r'\bonline\b') and not has(r'\b(?:high[ -]?scores?|leaderboards?)\b') or re.search(r'https?://|<script|javascript:', message, re.I):
-        notes.append('This builder supports 2D games, optional two-player cooperation, and shared high scores for signed-in players. It cannot add custom code, external assets, music, chat, or purchases.')
+        notes.append('This builder supports 2D games, optional two-player cooperation, and public leaderboards without signing in. It cannot add custom code, external assets, music, chat, or purchases.')
     if advanced['requested']:
         if spec['genre'] == 'dodge' and spec.get('arcade', {}).get('shooting'):
             spec = update_asteroid_settings(spec, advanced['patch']); changes.append('advanced Asteroids settings')
@@ -840,9 +840,9 @@ def list_games(api, claims, event, public=False):
             cursor = json.loads(base64.b64decode(raw, altchars=b'-_', validate=True))
             if not isinstance(cursor, dict) or set(cursor) != {'id'} or not isinstance(cursor['id'], str): raise ValueError()
             parts = cursor['id'].split(':')
-            if len(parts) != 4 or parts[0] not in ({'game', 'game-score', 'game-mafia-room', 'game-mafia-index', 'game-mafia-narration'} if public else {'game', 'game-config', 'integration-config'}): raise ValueError()
+            if len(parts) != 4 or parts[0] not in ({'game', 'game-score', 'game-score-rate', 'game-mafia-room', 'game-mafia-index', 'game-mafia-narration'} if public else {'game', 'game-config', 'integration-config'}): raise ValueError()
             if not UUID.fullmatch(parts[1]) or not UUID.fullmatch(parts[2]): raise ValueError()
-            if parts[0] in {'game', 'feedback', 'game-score', 'game-mafia-room'} and not UUID.fullmatch(parts[3]) or (parts[0].endswith('-config') or parts[0] in {'game-mafia-index', 'game-mafia-narration'}) and parts[3]: raise ValueError()
+            if parts[0] in {'game', 'feedback', 'game-score', 'game-mafia-room'} and not UUID.fullmatch(parts[3]) or (parts[0].endswith('-config') or parts[0] in {'game-score-rate', 'game-mafia-index', 'game-mafia-narration'}) and parts[3]: raise ValueError()
             # Scan cursors are positions, never authorization. A mixed table page
             # can end on settings or another scope; records are filtered below.
             options['ExclusiveStartKey'] = cursor

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import type { CooperativeGameSpec, Game } from '../lib/game-types';
+import type { CooperativeGameSpec, Game, GameResult } from '../lib/game-types';
 import { cooperativeGameSandboxDocument, validateCooperativeState } from '../lib/game-cooperative';
+import { createCooperativeLeaderboardTracker } from '../lib/cooperative-leaderboard';
 import { PlayerSurface } from './PlayerSurface';
 import { isCore } from '../lib/core';
 import { createPublicationBinding } from '../lib/game-scoring';
@@ -16,14 +17,18 @@ const statusText: Record<MultiplayerStatus, string> = { connecting: 'Connecting 
 const reasonText: Record<string, string> = { 'publication-changed': 'The creator changed or unpublished this edition. Reload the game before starting a new room.', 'host-disconnected': 'Player 1 left the room.', 'connection-lost': 'The live connection could not be restored. Create a new room to try again.', 'invalid-message': 'The live room sent an unsupported message. Start a new room.', 'invalid-room': 'The room could not be verified. Start a new room.', 'invalid-lease': 'The room could not renew its connection. Start a new room.', rejected: 'The live service ended this connection. Start a new room.' };
 
 /** The parent owns networking. The opaque game frame receives only validated gameplay data. */
-export function CooperativePlayer({ spec, room, onStatus }: { spec: CooperativeGameSpec; room: MultiplayerRoom; onStatus: (status: MultiplayerStatus, reason?: string) => void }) {
+export function CooperativePlayer({ spec, room, onStatus, onComplete }: { spec: CooperativeGameSpec; room: MultiplayerRoom; onStatus: (status: MultiplayerStatus, reason?: string) => void; onComplete?: (result: GameResult) => void }) {
   const fingerprint = JSON.stringify(spec);
   const instance = useMemo(() => { const nonce = crypto.randomUUID().replaceAll('-', ''); return { nonce, document: cooperativeGameSandboxDocument(nonce) }; }, [fingerprint, room.roomId, room.seat]);
-  const frame = useRef<HTMLIFrameElement>(null), connection = useRef<MultiplayerConnection>(), peerConnected = useRef(false), lastSnapshot = useRef<{ seq: number; state: unknown }>(), statusCallback = useRef(onStatus);
+  const frame = useRef<HTMLIFrameElement>(null), connection = useRef<MultiplayerConnection>(), peerConnected = useRef(false), lastSnapshot = useRef<{ seq: number; state: unknown }>(), statusCallback = useRef(onStatus), completeCallback = useRef(onComplete);
   const [loaded, setLoaded] = useState(false), [failed, setFailed] = useState(false);
   useEffect(() => { statusCallback.current = onStatus; }, [onStatus]);
+  useEffect(() => { completeCallback.current = onComplete; }, [onComplete]);
   useEffect(() => {
     setLoaded(false); setFailed(false); lastSnapshot.current = undefined; peerConnected.current = false;
+    const leaderboard = createCooperativeLeaderboardTracker(spec, room.seat);
+    let lastHostSnapshotSeq = 0;
+    const complete = (state: unknown) => { const result = leaderboard.observe(state); if (result) completeCallback.current?.(result); };
     const post = (data: unknown) => frame.current?.contentWindow?.postMessage(data, '*');
     const sendLoad = () => post({ type: 'game-coop-load', nonce: instance.nonce, spec, seat: room.seat });
     const sendPeer = () => post({ type: 'game-coop-peer', nonce: instance.nonce, connected: peerConnected.current });
@@ -36,7 +41,7 @@ export function CooperativePlayer({ spec, room, onStatus }: { spec: CooperativeG
         else { setLoaded(true); sendPeer(); if (room.seat === 1 && lastSnapshot.current) post({ type: 'game-coop-state', nonce: instance.nonce, ...lastSnapshot.current }); }
       }
       if (data.type === 'game-coop-input' && room.seat === 1 && keys.length === 4 && keys.every(key => ['type', 'nonce', 'seq', 'mask'].includes(key)) && validMultiplayerSequence(data.seq) && validMultiplayerInput(data.mask)) connection.current?.sendInput(data.seq, data.mask);
-      if (data.type === 'game-coop-state' && room.seat === 0 && keys.length === 4 && keys.every(key => ['type', 'nonce', 'seq', 'state'].includes(key)) && validMultiplayerSequence(data.seq) && validateCooperativeState(data.state, spec)) connection.current?.sendState(data.seq, data.state);
+      if (data.type === 'game-coop-state' && room.seat === 0 && keys.length === 4 && keys.every(key => ['type', 'nonce', 'seq', 'state'].includes(key)) && validMultiplayerSequence(data.seq) && data.seq > lastHostSnapshotSeq && validateCooperativeState(data.state, spec)) { lastHostSnapshotSeq = data.seq; connection.current?.sendState(data.seq, data.state); complete(data.state); }
     };
     window.addEventListener('message', receive);
     connection.current = connectMultiplayer(room, {
@@ -44,7 +49,7 @@ export function CooperativePlayer({ spec, room, onStatus }: { spec: CooperativeG
       onStatus: (status, reason) => statusCallback.current(status, reason),
       onPeer: connected => { peerConnected.current = connected; sendPeer(); },
       onInput: (seq, mask, pressedMask) => post({ type: 'game-coop-input', nonce: instance.nonce, seq, mask, ...(pressedMask === undefined ? {} : { pressedMask }) }),
-      onState: (seq, state) => { lastSnapshot.current = { seq, state }; post({ type: 'game-coop-state', nonce: instance.nonce, seq, state }); },
+      onState: (seq, state) => { lastSnapshot.current = { seq, state }; post({ type: 'game-coop-state', nonce: instance.nonce, seq, state }); complete(state); },
     });
     sendLoad();
     const timeout = window.setTimeout(() => setFailed(true), 12000);
@@ -57,7 +62,7 @@ export function CooperativePlayer({ spec, room, onStatus }: { spec: CooperativeG
   </PlayerSurface>;
 }
 
-export function CooperativeGame({ game, children }: { game: Game & { spec: CooperativeGameSpec }; children: ReactNode }) {
+export function CooperativeGame({ game, children, onComplete }: { game: Game & { spec: CooperativeGameSpec }; children: ReactNode; onComplete?: (result: GameResult) => void }) {
   const [room, setRoom] = useState<MultiplayerRoom>(), [invitation, setInvitation] = useState(''), [joinText, setJoinText] = useState(''), [showJoin, setShowJoin] = useState(false);
   const [visibility, setVisibility] = useState<'private' | 'public'>('private');
   const [status, setStatus] = useState<MultiplayerStatus>('connecting'), [reason, setReason] = useState(''), [busy, setBusy] = useState(false), [error, setError] = useState(''), [copied, setCopied] = useState(false);
@@ -120,8 +125,8 @@ export function CooperativeGame({ game, children }: { game: Game & { spec: Coope
       <div className="game-section-heading"><div><span className="eyebrow">PLAY YOUR WAY</span><h2 id="game-play-mode-heading">Solo or together</h2></div>{room && <span className="game-cooperative-seat">Player {room.seat + 1} of 2</span>}</div>
       {!room ? <><p>Play solo, invite a friend privately, or offer an open seat on the homepage. Both players use their own session. No account, name, chat or camera is needed.</p><div className="game-cooperative-actions"><button className="button secondary" disabled={busy} aria-pressed={!showJoin} onClick={() => { setShowJoin(false); setError(''); }}>Play solo</button><button className="button primary" disabled={busy} onClick={() => void host('private')}>{busy && !showJoin ? 'Connecting…' : 'Invite a friend'}</button><button className="button secondary" disabled={busy} onClick={() => void host('public')}>Find a partner</button><button className="button secondary" disabled={busy} aria-expanded={showJoin} onClick={() => setShowJoin(value => !value)}>Join using invitation</button></div>{showJoin && <form className="game-cooperative-invitation" onSubmit={event => { event.preventDefault(); void join(joinText); }}><label htmlFor="game-coop-join">Invitation link<input id="game-coop-join" type="text" value={joinText} onChange={event => setJoinText(event.target.value)} autoComplete="off" autoCapitalize="none" spellCheck={false} maxLength={2300} placeholder="Paste the private invitation link" disabled={busy} /></label><button className="button primary" disabled={busy || !joinText.trim()}>{busy ? 'Joining…' : 'Join game'}</button></form>}</> : <><p className={`game-cooperative-status ${status}`} role="status">{statusText[status]}{reasonText[reason] && <> {reasonText[reason]}</>}</p>{room.seat === 0 && visibility === 'public' && !ended && <p className="game-partner-host-note">{status === 'connected' ? 'Your partner has joined. The room is no longer listed.' : 'You chose an open room. Other players can claim its one open seat from the homepage or invitation. End the room to stop hosting.'}</p>}{room.seat === 0 && invitation && !ended && <div className="game-cooperative-invitation"><label htmlFor="game-coop-invitation">{visibility === 'private' ? 'Private invitation for Player 2' : 'Invitation for Player 2'}<input id="game-coop-invitation" value={invitation} readOnly autoComplete="off" spellCheck={false} onFocus={event => event.target.select()} /></label><button className="button secondary" onClick={() => void copy()}>{copied ? 'Invitation copied' : 'Copy invitation'}</button><p className="game-small-note">{visibility === 'private' ? 'Send this link privately to one player. It admits one guest. Share it only with the intended player.' : 'You can also invite a friend with this link. The first player to join takes the open seat.'} Rooms stay open while players remain connected, with no fixed session limit. Leaving the host page ends the room.</p></div>}<button className="text-button" onClick={() => { currentRoom.current = undefined; setRoom(undefined); setInvitation(''); setReason(''); setError(''); setShowJoin(false); }}>{ended ? 'Return to solo / create another room' : room.seat === 0 ? 'End room and return to solo' : 'Leave room and return to solo'}</button></>}
       {error && <p className="error" role="alert">{error}</p>}
-      <p className="game-small-note">Two-player points and progress describe this play session. They are separate from solo high scores and assignment credit. Player 1 runs the shared simulation; this is a cooperative practice game.</p>
+      <p className="game-small-note">Each player's completed round can be entered on this edition's leaderboard. These are casual, player-reported results. Player 1 runs the shared simulation.</p>
     </section>
-    {room ? !ended && <CooperativePlayer spec={game.spec} room={room} onStatus={(next, why) => { setStatus(next); setReason(why ?? ''); }} /> : children}
+    {room ? !ended && <CooperativePlayer spec={game.spec} room={room} onComplete={onComplete} onStatus={(next, why) => { setStatus(next); setReason(why ?? ''); }} /> : children}
   </>;
 }

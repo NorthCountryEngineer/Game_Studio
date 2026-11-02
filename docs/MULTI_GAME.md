@@ -56,7 +56,7 @@ The client owns identity, run admission, required-object evidence, persistence, 
 
 Every outer step requires review in the saved revision, including client objects and free play. Preview a selected game to review every child level; a partial loss in its first level cannot acknowledge later levels. Child object references have an explicit inspection acknowledgment. Continuous free play uses the existing five-second private review or a real terminal round. Editing any step clears review. Material references and requirements are listed for final acknowledgment; their actual client adapter needs separate client acceptance.
 
-Version 8 carries the `multi-game` definition and copied steps. It is excluded from the legacy unversioned catalog and global casual score boards. Current catalog consumers request `specVersion=all` and must support version 8. No new infrastructure, account roles, data migrations or third-party service connections are required by these source changes.
+Version 8 carries the `multi-game` definition and copied steps. It is excluded from the legacy unversioned catalog. Its public casual leaderboard uses the frozen main-journey point total; later free play cannot change that total. See [public leaderboards](PUBLIC_LEADERBOARDS.md). Current catalog consumers request `specVersion=all` and must support version 8. No new infrastructure, account roles, data migrations or third-party service connections are required by these source changes.
 
 ## Rehearse locally
 

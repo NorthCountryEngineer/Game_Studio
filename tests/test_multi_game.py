@@ -69,11 +69,10 @@ class MultiGameTests(unittest.TestCase):
         for value in cases: self.error(400, lambda: games.validate_spec(value))
         self.assertEqual(games.validate_spec(base), base)
 
-    def test_journeys_cannot_read_or_create_casual_arcade_boards(self):
+    def test_journeys_have_public_points_boards_without_creating_rows_on_read(self):
         published = self.publish(self.review(self.save(self.create(), journey())))
-        with self.assertRaises(scores.ScoreError) as caught:
-            scores.publication(self.api, published['id'], published['publishedRevision'])
-        self.assertEqual(caught.exception.status, 404)
+        self.assertEqual(scores.publication(self.api, published['id'], published['publishedRevision'])[0]['version'], 8)
+        self.assertEqual(scores.get_scores(self.api, published['id'], published['publishedRevision'])['ranking'], 'points')
         self.assertNotIn(games.key('game-score', published['id']), self.database.rows['published-games'])
 
     def test_compositions_are_independent_deep_copies_with_bounded_combined_sprite_bytes(self):
