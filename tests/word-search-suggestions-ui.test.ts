@@ -152,7 +152,7 @@ function workshop(generate: (game: Game, requestId: string, path: string[], titl
     '../lib/game-multiplayer-design': {}, './WordGameEditor': { WordGameEditor, wordGenreNames: { crossword: 'Crossword', 'word-search': 'Word search', 'mad-libs': 'Mad Libs' } },
     '../lib/agent-api': {}, '../lib/core': { isCore: false }, './Confirm': { useConfirm: () => async () => true }, './ItemActions': {}, './GamePlayer': {}, './AsteroidSpriteEditor': {}, './AsteroidChallengeEditor': {}, '../lib/asteroid-authoring': {}, './AsteroidPrizeEditor': {}, './ServiceBadge': {}, './MultiplayerLobby': {},
     '../lib/branding': { useBranding: () => ({ appName: 'Synthetic Game Studio' }), useIntegrationConfig: () => ({ hosts: [] }) }, '../lib/integration': {}, '../lib/game-multiplayer': {}, '../lib/game-flow': {}, './LevelFlowEditor': {}, './MultiGameEditor': { multiStepLabel, multiStepTitle }, '../lib/multi-game': {},
-    '../lib/crossword-generation-request': { CrosswordGenerationRequest }, '../lib/word-search-generation-request': { WordSearchGenerationRequest }, './HostSelectionLink': {},
+    '../lib/crossword-generation-request': { CrosswordGenerationRequest }, '../lib/word-search-generation-request': { WordSearchGenerationRequest }, './HostSelectionLink': {}, './MafiaCategoryCard': {},
   }, { window: { location: { origin: 'https://synthetic.invalid' }, addEventListener() {}, removeEventListener() {} } });
   const props = { adminMode: false, onDirty() {}, navigate: async () => {}, initialGameId: selected.id };
   function render() { cursor = 0; tree = component(props); while (queued.length) queued.shift()!(); }
