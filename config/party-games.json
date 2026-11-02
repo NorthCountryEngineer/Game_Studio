@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "games": [
+    { "id": "mafia", "title": "Mafia", "category": "Social deduction", "minPlayers": 5, "maxPlayers": 24, "symbol": "☾", "description": "A secret team, a watchful detective and a doctor who might save the night." },
+    { "id": "starship-suspects", "title": "Starship Suspects", "category": "Social deduction", "minPlayers": 4, "maxPlayers": 12, "symbol": "✦", "description": "Keep a ship running, finish tasks and find the impostor before sabotage wins." },
+    { "id": "sketch-guess", "title": "Sketch & Guess", "category": "Drawing party", "minPlayers": 2, "maxPlayers": 12, "symbol": "✎", "description": "Take turns drawing a secret prompt while everyone else races to guess it." },
+    { "id": "trivia", "title": "Trivia Rally", "category": "Quick quiz", "minPlayers": 2, "maxPlayers": 24, "symbol": "?", "description": "A fast, friendly mix of questions with hidden answers and automatic scoring." },
+    { "id": "hand-duel", "title": "Rock–Paper–Scissors Duel", "category": "Two-player duel", "minPlayers": 2, "maxPlayers": 2, "symbol": "✋", "description": "Lock in a secret hand, reveal together and play a best-of-five match." },
+    { "id": "drop-four", "title": "Drop Four", "category": "Two-player strategy", "minPlayers": 2, "maxPlayers": 2, "symbol": "●", "description": "Take turns dropping discs and connect four across, up or diagonally." }
+  ]
+}

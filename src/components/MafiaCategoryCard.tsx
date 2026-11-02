@@ -1,6 +1,6 @@
 export function MafiaCategoryCard({ navigate }: { navigate: (path: string) => unknown }) {
   return <section className="mafia-category-card" aria-labelledby="mafia-category-heading">
     <div className="mafia-category-art" aria-hidden="true"><span>☾</span><i>?</i><b>✦</b></div>
-    <div><span className="eyebrow">SOCIAL DEDUCTION · LIVE PARTY GAMES</span><h2 id="mafia-category-heading">A town full of secrets.</h2><p>Play Mafia together online. Choose an avatar, discover your secret role, and decide who to trust. Private rooms for 5–24 players, with a human or AI narrator.</p><button className="button primary" onClick={() => void navigate('/mafia')}>Host or join Mafia →</button><small>No account needed to play. Share your invitation with your group.</small></div>
+    <div><span className="eyebrow">PARTY GAMES · ONLINE OR IN PERSON</span><h2 id="mafia-category-heading">Bring your people. Pick your game.</h2><p>Uncover a hidden impostor, draw something ridiculous or challenge a friend. Six party games for two people or a whole group, with a shared screen for in-person play.</p><button className="button primary" onClick={() => void navigate('/party')}>Explore party games →</button><small>No account needed to play. Private rooms, or host the game on one screen.</small></div>
   </section>;
 }

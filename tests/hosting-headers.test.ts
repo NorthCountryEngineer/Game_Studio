@@ -16,7 +16,7 @@ test('embedding headers permit only deployment-bound exact hosts', () => {
 
 test('creator OAuth and settings responses explicitly deny framing', () => {
   const rules = hostingHeaders(config).customHeaders;
-  for (const pattern of ['/game-studio', '/game-studio/**', '/oauth/**', '/settings', '/settings/**']) {
+  for (const pattern of ['/game-studio', '/game-studio/**', '/oauth/**', '/settings', '/settings/**', '/party', '/party/**']) {
     const rule = rules.find((r: {pattern: string}) => r.pattern === pattern);
     assert.equal(rule.headers.find((h: {key: string}) => h.key === 'X-Frame-Options').value, 'DENY');
     assert.match(rule.headers.find((h: {key: string}) => h.key === 'Content-Security-Policy').value, /frame-ancestors 'none'/);

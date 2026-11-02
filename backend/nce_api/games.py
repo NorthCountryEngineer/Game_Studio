@@ -840,9 +840,9 @@ def list_games(api, claims, event, public=False):
             cursor = json.loads(base64.b64decode(raw, altchars=b'-_', validate=True))
             if not isinstance(cursor, dict) or set(cursor) != {'id'} or not isinstance(cursor['id'], str): raise ValueError()
             parts = cursor['id'].split(':')
-            if len(parts) != 4 or parts[0] not in ({'game', 'game-score', 'game-score-rate', 'game-mafia-room', 'game-mafia-index', 'game-mafia-narration'} if public else {'game', 'game-config', 'integration-config'}): raise ValueError()
+            if len(parts) != 4 or parts[0] not in ({'game', 'game-score', 'game-score-rate', 'game-mafia-room', 'game-mafia-index', 'game-mafia-narration', 'game-party-room', 'game-party-index'} if public else {'game', 'game-config', 'integration-config'}): raise ValueError()
             if not UUID.fullmatch(parts[1]) or not UUID.fullmatch(parts[2]): raise ValueError()
-            if parts[0] in {'game', 'feedback', 'game-score', 'game-mafia-room'} and not UUID.fullmatch(parts[3]) or (parts[0].endswith('-config') or parts[0] in {'game-score-rate', 'game-mafia-index', 'game-mafia-narration'}) and parts[3]: raise ValueError()
+            if parts[0] in {'game', 'feedback', 'game-score', 'game-mafia-room', 'game-party-room'} and not UUID.fullmatch(parts[3]) or (parts[0].endswith('-config') or parts[0] in {'game-score-rate', 'game-mafia-index', 'game-mafia-narration', 'game-party-index'}) and parts[3]: raise ValueError()
             # Scan cursors are positions, never authorization. A mixed table page
             # can end on settings or another scope; records are filtered below.
             options['ExclusiveStartKey'] = cursor

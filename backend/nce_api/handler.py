@@ -26,6 +26,7 @@ _games = None
 _integration = None
 _game_scores = None
 _mafia = None
+_party = None
 
 class APIError(Exception):
     def __init__(self, status, message):
@@ -148,6 +149,17 @@ def dispatch(event):
         from types import SimpleNamespace
         try: return _integration.update_branding(SimpleNamespace(clients=clients), body)
         except _integration.ConfigurationError as error: raise APIError(error.status, error.message)
+    if path == '/party' or path.startswith('/party/'):
+        global _party
+        if _party is None:
+            import importlib.util
+            from pathlib import Path
+            spec = importlib.util.spec_from_file_location('game_studio_party', Path(__file__).with_name('party.py'))
+            _party = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(_party)
+        from types import SimpleNamespace
+        try: return _party.dispatch(SimpleNamespace(clients=clients), event, method, path, body)
+        except _party.PartyError as error: raise APIError(error.status, error.message)
     if path == '/mafia' or path.startswith('/mafia/'):
         global _mafia
         if _mafia is None:
