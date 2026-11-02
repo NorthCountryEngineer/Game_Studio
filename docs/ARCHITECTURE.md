@@ -24,6 +24,14 @@ The optional existing model path is restricted to the current word-game format a
 
 Publishing updates one canonical live edition. Hosts embed that canonical game ID, so a later publication becomes visible there; a stale score submission receives a reload error. Boards reset with each edition. Unpublishing removes public play and its board everywhere using that installation, while retaining the private draft. Deletion is explicit and requires the administrative capability.
 
+## Live social deduction
+
+Mafia is a separate live session category at `/mafia`; it does not extend or reinterpret the saved arcade/word-game specification union, publication records or assignment SDK. Names, avatars, private roles, choices, votes and text messages belong to temporary room sessions. The server assigns roles, validates authority and phase IDs, resolves rules and returns a separate projection for each capability-bound seat. A human narrator can see the room's private roles; automatic narration has no human omniscient seat. Anonymous players never gain creator or administrator permissions.
+
+The existing game table holds at most 32 tracked room rows and one bounded installation index. Index and room creation, retirement and renewal are atomic. Active requests renew the room lease; abandoned rooms expire, and later room admission reclaims their rows. Public catalog scans filter out all room/index/narrator payloads and accept only structurally valid cursors across those rows. Capabilities are random, stored only as hashes on the server and never projected to another player. The client keeps its own seat locally and sends no Core token to room operations.
+
+Optional AI narration reuses a reviewed installation-wide Nova Micro text vocabulary. Only protected administrator generation or separately authorized deployment initialization can invoke the model. Room creation, polling, actions and rematches are provider-free. Generated prose is inert, contains no player or secret-state inputs, and precedes canonical server facts. The game state machine alone controls progression and outcomes. See [Mafia](MAFIA.md) and [narration](MAFIA_NARRATION.md).
+
 ## Host embedding
 
 `/embed/games/{id}` is the public player surface. Host IDs resolve only against operator-configured exact origins; the parent referrer must match. The hosting policy allows framing only by those origins. Private creation, account, settings and OAuth pages reject framing. The common SDK verifies sender origin, source window, channel, game ID, protocol version and message shape. Messages never carry identity, access tokens, roles or private drafts.
