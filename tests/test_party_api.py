@@ -371,6 +371,128 @@ class PartyAPITests(unittest.TestCase):
         self.error(413,lambda:party.put('game-party-room',self.room_id,{'drawing':'x'*320001},None))
         self.assertEqual(before,self.database.rows)
 
+    def sketch(self, count=3):
+        self.create(kind='sketch-guess', settings={'roundSeconds': 180})
+        for number in range(2, count + 1): self.join(number)
+        return self.action(self.room_id, 'start')
+
+    def segment(self, number, points=None):
+        return {'id': uuid(number), 'color': '#abcdef', 'width': 12,
+                'points': points or [[.1234, .9876], [.9999, .0001]]}
+
+    def test_sketch_streamed_batches_and_legacy_strokes_have_no_forced_pause(self):
+        self.sketch()
+        for number in range(3):
+            room = self.action(self.room_id, 'drawing-batch', drawingEpoch=0, segments=[self.segment(2000 + number)])
+        room = self.action(self.room_id, 'stroke', color='#000000', width=2, points=[[0, 0], [1, 1]])
+        self.assertEqual(len(room['game']['strokes']), 4)
+        before = deepcopy(self.database.rows)
+        self.error(429, lambda: self.action(self.room_id, 'drawing-batch', drawingEpoch=0, segments=[self.segment(2003)]))
+        self.assertEqual(before, self.database.rows)
+        self.clock += 1
+        room = self.action(self.room_id, 'drawing-batch', drawingEpoch=0, segments=[self.segment(2003)])
+        self.assertEqual(len(room['game']['strokes']), 5)
+        other = self.get(uuid(2))
+        self.assertEqual(room['game']['strokes'], other['game']['strokes'])
+        self.assertNotIn('prompt', other['game']); self.assertNotIn('prompt', other['self'])
+        self.authorization.assert_not_called(); self.provider.converse.assert_not_called()
+
+    def test_sketch_batch_retry_and_conflict_do_not_repeat_or_drop_ink(self):
+        self.sketch()
+        body = self.body(self.room_id, 'drawing-batch', drawingEpoch=0, segments=[self.segment(2000)])
+        real = self.database.transact; raced = False
+        def race(TransactItems):
+            nonlocal raced
+            if not raced:
+                raced = True
+                self.database.meta.client.transact_write_items.side_effect = real
+                self.action(uuid(2), 'guess', text='A teapot')
+                self.database.meta.client.transact_write_items.side_effect = race
+            return real(TransactItems)
+        self.database.meta.client.transact_write_items.side_effect = race
+        room = self.send(self.room_id, body)
+        self.assertEqual(len(room['game']['strokes']), 1)
+        self.assertEqual(room['chat'][-1]['text'], 'A teapot')
+        before = deepcopy(self.database.rows)
+        self.assertEqual(self.send(self.room_id, body), room)
+        self.assertEqual(before, self.database.rows)
+        self.error(409, lambda: self.send(self.room_id, {**body, 'segments': [self.segment(2001)]}))
+        self.assertEqual(before, self.database.rows)
+
+    def test_sketch_clear_fences_queued_batches_and_requires_current_artist(self):
+        self.sketch()
+        self.action(self.room_id, 'drawing-batch', drawingEpoch=0, segments=[self.segment(2000)])
+        self.error(403, lambda: self.action(uuid(2), 'clear-drawing', drawingEpoch=0))
+        self.error(403, lambda: self.action(uuid(2), 'drawing-batch', drawingEpoch=0, segments=[self.segment(2001)]))
+        clear = self.body(self.room_id, 'clear-drawing', drawingEpoch=0)
+        room = self.send(self.room_id, clear)
+        self.assertEqual(room['game']['drawingEpoch'], 1)
+        self.assertEqual(room['game']['strokes'], [])
+        saved = deepcopy(self.database.rows)
+        self.assertEqual(self.send(self.room_id, clear), room)
+        self.error(409, lambda: self.action(self.room_id, 'drawing-batch', drawingEpoch=0, segments=[self.segment(2001)]))
+        self.assertEqual(saved, self.database.rows)
+        room = self.action(self.room_id, 'drawing-batch', drawingEpoch=1, segments=[self.segment(2001)])
+        self.assertEqual([stroke['id'] for stroke in room['game']['strokes']], [uuid(2001)])
+
+    def test_sketch_concurrent_clear_wins_without_replaying_stale_batch(self):
+        self.sketch()
+        body = self.body(self.room_id, 'drawing-batch', drawingEpoch=0, segments=[self.segment(2000)])
+        real = self.database.transact; raced = False
+        def race(TransactItems):
+            nonlocal raced
+            if not raced:
+                raced = True
+                self.database.meta.client.transact_write_items.side_effect = real
+                self.action(self.room_id, 'clear-drawing', drawingEpoch=0)
+                self.database.meta.client.transact_write_items.side_effect = race
+            return real(TransactItems)
+        self.database.meta.client.transact_write_items.side_effect = race
+        self.error(409, lambda: self.send(self.room_id, body))
+        room = self.get()
+        self.assertEqual(room['game']['drawingEpoch'], 1)
+        self.assertEqual(room['game']['strokes'], [])
+        self.assertEqual(room['self']['actionSequence'], 2)
+
+    def test_sketch_streams_for_full_turn_without_minute_or_stroke_limit(self):
+        self.sketch()
+        started = self.clock
+        for batch in range(358):
+            self.clock = started + batch // 2
+            room = self.action(self.room_id, 'drawing-batch', drawingEpoch=0,
+                               segments=[self.segment(2000 + batch)])
+        self.assertEqual(room['phase'], 'draw')
+        self.assertEqual(room['self']['actionSequence'], 359)
+        self.assertEqual(len(room['game']['strokes']), 358)
+        self.assertEqual(room['game']['strokes'][-1]['id'], uuid(2357))
+        self.assertLess(self.state()['members'][self.room_id]['rate']['count'], 180)
+
+    def test_sketch_maximum_batch_and_full_unicode_room_fit_storage_and_wire_bounds(self):
+        self.sketch(count=12)
+        points = [[round(.1111 + index / 10000, 4), round(.9999 - index / 10000, 4)] for index in range(120)]
+        body = self.body(self.room_id, 'drawing-batch', drawingEpoch=0,
+                         segments=[self.segment(2000 + number, points) for number in range(6)])
+        self.assertLessEqual(len(party.canonical(body).encode()), 16000)
+        self.send(self.room_id, body)
+        state = self.state()
+        for number, player in enumerate(state['game']['players']): player['name'] = '\U0001f600' * 15 + chr(65 + number)
+        state['game']['chat'] = [{'id': 'c' + str(number), 'playerId': uuid(2), 'name': '\U0001f600' * 16,
+                                 'text': '\U0001f600' * 160, 'at': self.clock} for number in range(60)]
+        state['game']['events'] = [{'id': 'e' + str(number), 'text': '\U0001f600' * 32 + ' joined the room.',
+                                   'at': self.clock} for number in range(60)]
+        state['game']['_game']['strokes'] = [{**self.segment(3000 + number, points), 'playerId': self.room_id} for number in range(384)]
+        state['game'] = party.engine().apply_action(state['game'], self.room_id,
+            {'type': 'drawing-batch', 'drawingEpoch': 0, 'segments': [self.segment(4000, points)]}, now=self.clock + 1)
+        self.assertLess(len(party.canonical(state).encode()), 300000)
+        previous = self.database.rows['published-games'][party.key('game-party-room', self.room_id)]
+        operation = party.put('game-party-room', self.room_id, state, previous)
+        self.assertTrue(party.transact(self.api, [operation]))
+        self.clock += 1
+        room = self.action(self.room_id, 'drawing-batch', drawingEpoch=0, segments=[self.segment(4001, points)])
+        self.assertEqual(room['game']['strokes'][-1]['id'], uuid(4001))
+        self.assertLess(len(self.database.rows['published-games'][party.key('game-party-room', self.room_id)]['payload'].encode()), 300000)
+        self.assertLessEqual(len(room['game']['strokes']), 384)
+
     def test_nonfinite_or_non_json_fields_are_rejected_before_any_storage(self):
         for value in (float('nan'), float('inf'), -float('inf'), object()):
             self.error(400,lambda:party.dispatch(self.api,self.request_event(),'POST','/party/rooms',{'bad':value}))

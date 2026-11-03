@@ -41,14 +41,14 @@ function mount(options: { kind?: string; roomId?: string; href?: string; fetch?:
   let hooks: Hook[] = [], cursor = 0, dirty = true, tree: Element, effects: Hook[] = [], unmounted = false, lateSetters = 0, timerId = 0; const timers = new Map<number, () => void>(), navigated: string[] = [];
   const react = { useState(initial: any) { const i = cursor++; hooks[i] ??= { value: typeof initial === 'function' ? initial() : initial }; return [hooks[i].value, (next: any) => { if (unmounted) { lateSetters++; return; } const value = typeof next === 'function' ? next(hooks[i].value) : next; if (!Object.is(value, hooks[i].value)) { hooks[i].value = value; dirty = true; } }]; }, useRef(initial: any) { const i = cursor++; hooks[i] ??= { value: { current: initial } }; return hooks[i].value; }, useEffect(setup: () => unknown, deps: unknown[]) { const i = cursor++, prior = hooks[i]; if (!prior || !deps || !prior.deps || deps.some((v, index) => !Object.is(v, prior.deps![index]))) { const hook = { setup, deps, cleanup: prior?.cleanup }; hooks[i] = hook; effects.push(hook); } } };
   const exported: Record<string, any> = {}, browser = { location: { origin: 'http://127.0.0.1:5193', href: options.href ?? `http://127.0.0.1:5193/party/${options.roomId ? 'rooms/' + options.roomId : options.kind ?? ''}` }, setInterval: () => ++timerId, clearInterval: () => {}, setTimeout: (fn: () => void) => { const id = ++timerId; timers.set(id, fn); return id; }, clearTimeout: (id: number) => timers.delete(id) };
-  vm.runInNewContext(transpile('../src/components/PartyGames.tsx'), { exports: exported, require(name: string) { if (name === 'react') return react; if (name === 'react/jsx-runtime') return { jsx, jsxs: jsx, Fragment: 'FRAGMENT' }; if (name === '../lib/party') return api; if (name === '../lib/mafia') return mafia; if (name === './PartyInstructions') return { PartyInstructions: () => null }; if (name === '../party.css') return {}; throw new Error(name); }, window: browser, document: { visibilityState: 'visible' }, navigator: { clipboard: { writeText: async () => {} } }, crypto: webcrypto, AbortController, DOMException, Date, Promise, JSON, Error, Number, Object, String, Boolean, Set, Math });
+  vm.runInNewContext(transpile('../src/components/PartyGames.tsx'), { exports: exported, require(name: string) { if (name === 'react') return react; if (name === 'react/jsx-runtime') return { jsx, jsxs: jsx, Fragment: 'FRAGMENT' }; if (name === '../lib/party') return api; if (name === '../lib/mafia') return mafia; if (name === './PartyInstructions') return { PartyInstructions: () => null }; if (name === './SketchDrawingBoard') return { SketchDrawingBoard: () => jsx('svg', { 'aria-label': 'Shared drawing canvas' }) }; if (name === '../party.css') return {}; throw new Error(name); }, window: browser, document: { visibilityState: 'visible' }, navigator: { clipboard: { writeText: async () => {} } }, crypto: webcrypto, AbortController, DOMException, Date, Promise, JSON, Error, Number, Object, String, Boolean, Set, Math });
   function flush() { let turns = 0; while (dirty && !unmounted) { assert.ok(++turns < 40); dirty = false; cursor = 0; effects = []; const outer = exported.PartyGamesPage({ kind: options.kind, roomId: options.roomId, navigate: (path: string) => { navigated.push(path); } }); tree = typeof outer.type === 'function' ? outer.type(outer.props) : outer; for (const hook of effects) { hook.cleanup?.(); const cleanup = hook.setup!(); hook.cleanup = typeof cleanup === 'function' ? cleanup as () => void : undefined; } } }
   async function settle() { for (let i = 0; i < 45; i++) { await Promise.resolve(); flush(); } }
   function field(id: string) { return elements(tree).find(e => e.props.id === id); } function button(label: string) { return elements(tree).find(e => e.type === 'button' && content(e.props.children).includes(label)); }
   function change(id: string, value: string) { const input = field(id); assert.ok(input, id); input.props.onChange({ target: { value } }); flush(); } function submit() { const form = elements(tree).find(e => e.type === 'form'); assert.ok(form); form.props.onSubmit({ preventDefault() {} }); flush(); } function click(label: string) { const b = button(label); assert.ok(b, label); assert.equal(b.props.disabled ?? false, false, label); b.props.onClick(); flush(); }
   function markup(element = tree) { function render(value: any, key = 'r'): any { if (Array.isArray(value)) return value.map((v, i) => render(v, key + i)); if (!value || typeof value !== 'object' || !('type' in value)) return value; if (typeof value.type === 'function') return render(value.type(value.props), key + 'f'); const { children, ...props } = value.props; return createElement(value.type === 'FRAGMENT' ? 'div' : value.type, { ...props, key }, render(children, key + 'c')); } return renderToStaticMarkup(render(element)); }
   function unmount() { for (const hook of hooks) hook.cleanup?.(); unmounted = true; }
-  flush(); return { api, exported, store, settle, field, button, change, submit, click, navigated, markup, content: () => content(tree), unmount, lateSetters: () => lateSetters, poll: () => { const tasks = [...timers]; timers.clear(); for (const [, fn] of tasks) fn(); } };
+  flush(); return { api, exported, store, settle, field, button, change, submit, click, navigated, markup, stage: () => elements(tree).find(element => element.type === exported.PartyGameStage)?.props, content: () => content(tree), unmount, lateSetters: () => lateSetters, poll: () => { const tasks = [...timers]; timers.clear(); for (const [, fn] of tasks) fn(); } };
 }
 
 test('party library offers online and in-person play for all six games without a login gate', async () => { const view = mount(); await view.settle(); for (const game of catalog.games) assert.match(view.content(), new RegExp(game.title)); assert.match(view.content(), /No sign-in to play/); assert.equal((view.markup().match(/Host in person/g) ?? []).length, 6); assert.equal((view.markup().match(/Play online/g) ?? []).length, 6); view.unmount(); });
@@ -88,7 +88,7 @@ test('Starship movement, tasks and repairs wait for the caller’s authoritative
   vm.runInNewContext(transpile('../src/components/PartyGames.tsx'), { exports: exported, require(name: string) {
     if (name === 'react') return { useState: () => [true, () => {}], useEffect: () => {}, useRef: (value: any) => ({ current: value }) };
     if (name === 'react/jsx-runtime') return { jsx, jsxs: jsx, Fragment: 'FRAGMENT' };
-    if (name === '../lib/party') return api; if (name === '../lib/mafia') return mafia; if (name === './PartyInstructions') return { PartyInstructions: () => null }; if (name === '../party.css') return {}; throw new Error(name);
+    if (name === '../lib/party') return api; if (name === '../lib/mafia') return mafia; if (name === './PartyInstructions') return { PartyInstructions: () => null }; if (name === './SketchDrawingBoard') return { SketchDrawingBoard: () => jsx('svg', { 'aria-label': 'Shared drawing canvas' }) }; if (name === '../party.css') return {}; throw new Error(name);
   }, Math, Date, Number, String, Object, Boolean });
   const room = fixture({ kind: 'starship-suspects', status: 'playing', phase: 'roaming', round: 1, self: { ...fixture().self, role: 'crew', room: 'reactor', moveReadyAt: 101, taskReadyAt: 101, tasks: [{ id: 't1', room: 'reactor', label: 'Restore power', sequence: ['■', '★', '●'], progress: 1, complete: false }], teammateIds: [], emergencyAvailable: true }, game: { rooms: [{ id: 'reactor', title: 'Reactor', neighbors: ['bridge'], x: 0, y: 0 }, { id: 'bridge', title: 'Bridge', neighbors: ['reactor'], x: 1, y: 1 }], positions: [{ id: OWNER, room: 'reactor', alive: true }], bodies: [], tasksCompleted: 0, tasksTotal: 9, sabotage: { room: 'reactor', deadlineAt: 150, progress: 1 } } });
   for (const now of [100, 101]) {
@@ -106,4 +106,53 @@ test('Starship final scoreboard shows earned points after keeping scores hidden 
     const view = mount({ roomId: ROOM, session: { roomId: ROOM, playerId: OWNER, token: TOKEN }, fetch: async () => new Response(JSON.stringify({ room })) });
     await view.settle(); const markup = view.markup(); assert.equal(markup.includes('<b>50</b>'), status === 'finished'); assert.equal(markup.includes('<b>●</b>'), status === 'playing'); view.unmount();
   }
+});
+
+
+test('drawing transport shares room sequencing, keeps exact unknown retries and cannot overlap another mutation', async () => {
+  const calls: any[] = [], pending = deferred<Response>(); let delayed = false;
+  const room = fixture({ kind: 'sketch-guess', status: 'playing', phase: 'draw', phaseId: 1, round: 1, game: { artistId: OWNER, strokes: [], drawingEpoch: 0, drawingAckIds: [], guessedIds: [] } });
+  const view = mount({ roomId: ROOM, session: { roomId: ROOM, playerId: OWNER, token: TOKEN }, fetch: async (_url, init) => {
+    if (init?.method !== 'POST') return new Response(JSON.stringify({ room }));
+    const body = JSON.parse(String(init.body)); calls.push(body);
+    if (calls.length === 1) return new Response(JSON.stringify({ error: 'Lost response.' }), { status: 503 });
+    if (delayed) return pending.promise;
+    room.self.actionSequence = body.sequence;
+    room.game.drawingAckIds.push(...(body.segments ?? []).map((segment: any) => segment.id));
+    return new Response(JSON.stringify({ room }));
+  } });
+  await view.settle();
+  const first = { type: 'drawing-batch', drawingEpoch: 0, segments: [{ id: OTHER, color: '#244b50', width: 5, points: [[.1, .1], [.2, .2]] }] };
+  const second = { ...first, segments: [{ ...first.segments[0], id: ROOM }] };
+  const send = () => view.stage()!.sendDrawing;
+  assert.equal(await send()(first), 'retry'); await view.settle();
+  assert.equal(await send()(second), 'retry'); assert.equal(calls.length, 1);
+  assert.equal(await send()(JSON.parse(JSON.stringify(first))), 'accepted'); await view.settle();
+  assert.equal(JSON.stringify(calls[0]), JSON.stringify(calls[1])); assert.equal(calls[1].sequence, 1);
+  delayed = true; const saving = send()(second); await view.settle(); assert.equal(calls.length, 3);
+  assert.equal(await send()({ ...first, segments: [] }), 'retry'); assert.equal(calls.length, 3);
+  room.self.actionSequence = 2; room.game.drawingAckIds.push(ROOM); pending.resolve(new Response(JSON.stringify({ room })));
+  assert.equal(await saving, 'accepted'); await view.settle(); assert.equal(calls[2].sequence, 2); view.unmount();
+});
+
+test('drawing transport distinguishes transient rate limits from definitive validation failures', async () => {
+  let status = 429; const room = fixture({ kind: 'sketch-guess', status: 'playing', phase: 'draw', phaseId: 1, round: 1, game: { artistId: OWNER, strokes: [], drawingEpoch: 0, drawingAckIds: [], guessedIds: [] } });
+  const view = mount({ roomId: ROOM, session: { roomId: ROOM, playerId: OWNER, token: TOKEN }, fetch: async (_url, init) => init?.method === 'POST' ? new Response(JSON.stringify({ error: 'Try again.' }), { status }) : new Response(JSON.stringify({ room })) });
+  await view.settle(); const action = { type: 'drawing-batch', drawingEpoch: 0, segments: [] };
+  assert.equal(await view.stage()!.sendDrawing(action), 'retry'); await view.settle(); status = 400;
+  assert.equal(await view.stage()!.sendDrawing(action), 'rejected'); await view.settle(); assert.doesNotMatch(view.content(), /Retry the same action/); view.unmount();
+});
+
+test('an unconfirmed drawing from an old phase cannot block actions in the next phase', async () => {
+  let attempts = 0; const room = fixture({ kind: 'sketch-guess', status: 'playing', phase: 'draw', phaseId: 1, round: 1, game: { artistId: OWNER, strokes: [], drawingEpoch: 0, drawingAckIds: [], guessedIds: [] } });
+  const view = mount({ roomId: ROOM, session: { roomId: ROOM, playerId: OWNER, token: TOKEN }, fetch: async (_url, init) => {
+    if (init?.method !== 'POST') return new Response(JSON.stringify({ room }));
+    const body = JSON.parse(String(init.body));
+    if (++attempts === 1) return new Response(JSON.stringify({ error: 'Lost response.' }), { status: 503 });
+    room.self.actionSequence = body.sequence; return new Response(JSON.stringify({ room }));
+  } });
+  await view.settle(); const action = { type: 'drawing-batch', drawingEpoch: 0, segments: [{ id: OTHER, color: '#244b50', width: 5, points: [[.1, .1], [.2, .2]] }] };
+  assert.equal(await view.stage()!.sendDrawing(action), 'retry'); await view.settle(); assert.match(view.content(), /Retry the same action/);
+  room.phaseId = 3; room.round = 2; view.poll(); await view.settle(); assert.doesNotMatch(view.content(), /Retry the same action/);
+  assert.equal(await view.stage()!.sendDrawing({ ...action, segments: [{ ...action.segments[0], id: ROOM }] }), 'accepted'); await view.settle(); assert.equal(attempts, 2); view.unmount();
 });

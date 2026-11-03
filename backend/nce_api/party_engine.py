@@ -22,6 +22,15 @@ if not CATALOG_PATH.exists():
     CATALOG_PATH = Path(__file__).resolve().parents[2] / 'config/party-games.json'
 CATALOG = json.loads(CATALOG_PATH.read_text(encoding='utf-8'))['games']
 GAMES = {item['id']: item for item in CATALOG if item['id'] != 'mafia'}
+# Drawing is streamed in small batches. Compact old geometry rather than making
+# an artist stop/clear mid-turn; this also leaves room for seats/chat in the
+# adapter's 320 KB payload and DynamoDB's 400 KB item limit.
+DRAWING_BATCH_SEGMENTS = 6
+DRAWING_SEGMENT_POINTS = 120
+DRAWING_STROKES = 384
+DRAWING_POINTS = 8000
+DRAWING_BYTES = 120000
+DRAWING_ACK_IDS = 128
 DEFAULTS = {
     'starship-suspects': {'maxPlayers': 12, 'rounds': 1, 'roundSeconds': 45},
     'sketch-guess': {'maxPlayers': 12, 'rounds': 6, 'roundSeconds': 75},
@@ -285,7 +294,8 @@ def _start(state, now):
         _phase(state, 'question', now, state['settings']['roundSeconds'])
     elif kind == 'sketch-guess':
         state['_game'] = {'order': _shuffle(list(range(len(PROMPTS))))[:state['settings']['rounds']],
-                          'strokes': [], 'guessedIds': [], 'lastStrokeAt': {}, 'clearCount': 0, 'artistId': state['players'][0]['id']}
+                          'strokes': [], 'guessedIds': [], 'lastStrokeAt': {}, 'clearCount': 0,
+                          'drawingEpoch': 0, 'drawingAckIds': [], 'artistId': state['players'][0]['id']}
         _phase(state, 'draw', now, state['settings']['roundSeconds'])
     _emit(state, GAMES[kind]['title'] + ' started. Have fun!', now)
 
@@ -349,6 +359,7 @@ def _next_round(state, now):
         _phase(state, 'question', now, state['settings']['roundSeconds'])
     elif state['kind'] == 'sketch-guess':
         game.update(strokes=[], guessedIds=[], lastStrokeAt={}, clearCount=0,
+                    drawingEpoch=0, drawingAckIds=[], drawingRate={},
                     artistId=_active(state)[(state['round'] - 1) % len(_active(state))]['id'])
         _phase(state, 'draw', now, state['settings']['roundSeconds'])
     elif state['kind'] == 'hand-duel':
@@ -526,7 +537,8 @@ FIELDS = {
     'start': set(), 'close': set(), 'restart': set(), 'leave': set(), 'advance': set(),
     'kick': {'targetId'}, 'settings': {'settings'}, 'chat': {'text'},
     'choose': {'choice'}, 'drop': {'column'}, 'answer': {'answer'}, 'guess': {'text'},
-    'stroke': {'color', 'width', 'points'}, 'clear-drawing': set(),
+    'stroke': {'color', 'width', 'points'},
+    'drawing-batch': {'drawingEpoch', 'segments'}, 'clear-drawing': {'drawingEpoch'},
     'move': {'room'}, 'task': {'taskId', 'step'}, 'tag': {'targetId'}, 'sabotage': set(),
     'repair': {'step'}, 'report': {'targetId'}, 'emergency': set(), 'ready': set(), 'vote': {'targetId'},
 }
@@ -665,40 +677,95 @@ def _normalized(value):
     return ''.join(char for char in unicodedata.normalize('NFKD', value).casefold() if char.isalnum())
 
 
+def _drawing_segment(segment, actor_id, identifier):
+    if not isinstance(segment, dict) or set(segment) - {'id', 'color', 'width', 'points'}:
+        fail('Unsupported drawing segment fields.')
+    color, width, points = segment.get('color'), segment.get('width'), segment.get('points')
+    if not isinstance(color, str) or not re.fullmatch(r'#[0-9a-fA-F]{6}', color):
+        fail('Choose a drawing color.')
+    if type(width) not in (int, float) or not 1 <= width <= 12:
+        fail('Choose a pen width from one to twelve.')
+    if not isinstance(points, list) or not 1 <= len(points) <= DRAWING_SEGMENT_POINTS:
+        fail('A drawing segment needs one to 120 points.')
+    clean = []
+    for point in points:
+        if not isinstance(point, list) or len(point) != 2 or any(type(value) not in (int, float) or not 0 <= value <= 1 for value in point):
+            fail('Drawing points must stay on the canvas.')
+        point = [round(float(value), 4) for value in point]
+        if not clean or point != clean[-1]:
+            clean.append(point)
+    return {'id': identifier, 'playerId': actor_id, 'color': color.lower(), 'width': round(float(width), 2), 'points': clean}
+
+
+def _compact_drawing(game):
+    # Preserve both endpoints when reducing older polylines, including the shared
+    # endpoint between streamed chunks. Recent ink keeps its original detail.
+    strokes = game['strokes'][-DRAWING_STROKES:]
+    total = sum(len(stroke['points']) for stroke in strokes)
+    encoded = len(json.dumps(strokes, separators=(',', ':'), ensure_ascii=True))
+    while total > DRAWING_POINTS or encoded > DRAWING_BYTES:
+        for stroke in strokes:
+            points = stroke['points']
+            if len(points) <= 2:
+                continue
+            before = len(json.dumps(points, separators=(',', ':')))
+            reduced = points[::2]
+            if reduced[-1] != points[-1]:
+                reduced.append(points[-1])
+            stroke['points'] = reduced
+            total -= len(points) - len(reduced)
+            encoded -= before - len(json.dumps(reduced, separators=(',', ':')))
+            if total <= DRAWING_POINTS and encoded <= DRAWING_BYTES:
+                break
+    game['strokes'] = strokes
+
+
 def _sketch_action(state, actor, kind, action, now):
     if state['phase'] != 'draw':
         fail('The drawing turn has ended.', 409)
     game = state['_game']
     artist_id = _artist(state)
-    if kind in {'stroke', 'clear-drawing'}:
+    if kind in {'stroke', 'drawing-batch', 'clear-drawing'}:
         if actor['id'] != artist_id:
             fail('Only the current artist can draw.', 403)
+        epoch = game.get('drawingEpoch', 0)
+        if kind == 'drawing-batch' or 'drawingEpoch' in action:
+            if type(action.get('drawingEpoch')) is not int or action['drawingEpoch'] < 0:
+                fail('Use the current drawing canvas.')
+            if action['drawingEpoch'] != epoch:
+                fail('The canvas was cleared. Discard the previous drawing queue.', 409)
         if kind == 'clear-drawing':
-            if game['clearCount'] >= 5:
-                fail('The drawing can be cleared at most five times per turn.', 429)
+            rate = game.get('drawingRate', {})
+            count = rate.get('count', 0) if rate.get('second') == now else 0
+            if count >= 4:
+                fail('Drawing is syncing. Retry the queued batch shortly.', 429)
+            game['drawingRate'] = {'second': now, 'count': count + 1}
             game['clearCount'] += 1
-            game['strokes'] = []
+            game.update(strokes=[], drawingEpoch=epoch + 1, drawingAckIds=[])
             return
-        if len(game['strokes']) >= 60:
-            fail('This drawing is full. Clear it to start again.', 409)
-        if now < game['lastStrokeAt'].get(actor['id'], -10) + 1:
-            fail('Wait a moment before adding another stroke.', 429)
-        color, width, points = action.get('color'), action.get('width'), action.get('points')
-        if not isinstance(color, str) or not re.fullmatch(r'#[0-9a-fA-F]{6}', color):
-            fail('Choose a drawing color.')
-        if type(width) not in (int, float) or not 1 <= width <= 12:
-            fail('Choose a pen width from one to twelve.')
-        if not isinstance(points, list) or not 1 <= len(points) <= 120:
-            fail('A stroke needs one to 120 points.')
-        clean = []
-        for point in points:
-            if not isinstance(point, list) or len(point) != 2 or any(type(value) not in (int, float) or not 0 <= value <= 1 for value in point):
-                fail('Drawing points must stay on the canvas.')
-            clean.append([round(float(value), 4) for value in point])
-        game['lastStrokeAt'][actor['id']] = now
-        state['_sequence'] += 1
-        game['strokes'].append({'id': 's' + str(state['_sequence']), 'playerId': actor['id'],
-                               'color': color.lower(), 'width': float(width), 'points': clean})
+        if kind == 'drawing-batch':
+            segments = action.get('segments')
+            if not isinstance(segments, list) or not 1 <= len(segments) <= DRAWING_BATCH_SEGMENTS:
+                fail('Send one to six drawing segments at a time.')
+            identifiers = [_identifier(segment.get('id')) if isinstance(segment, dict) else _identifier(None) for segment in segments]
+            seen = {stroke['id'] for stroke in game['strokes']} | set(game.get('drawingAckIds', []))
+            if len(set(identifiers)) != len(identifiers) or seen.intersection(identifiers):
+                fail('A drawing segment identifier was already used.', 409)
+            clean = [_drawing_segment(segment, actor['id'], identifier) for segment, identifier in zip(segments, identifiers)]
+        else:
+            # Legacy clients still send a complete stroke. They share the same
+            # bounded canvas but no longer wait one second between strokes.
+            state['_sequence'] += 1
+            identifiers = []
+            clean = [_drawing_segment({key: action.get(key) for key in ('color', 'width', 'points')}, actor['id'], 's' + str(state['_sequence']))]
+        rate = game.get('drawingRate', {})
+        count = rate.get('count', 0) if rate.get('second') == now else 0
+        if count >= 4:
+            fail('Drawing is syncing. Retry the queued batch shortly.', 429)
+        game['drawingRate'] = {'second': now, 'count': count + 1}
+        game['strokes'].extend(clean)
+        game['drawingAckIds'] = [*game.get('drawingAckIds', []), *identifiers][-DRAWING_ACK_IDS:]
+        _compact_drawing(game)
     elif kind == 'guess':
         if actor['id'] == artist_id:
             fail('The artist cannot guess their own prompt.', 403)
@@ -866,7 +933,8 @@ def project(state, viewer_id, now=None):
         private['answer'] = game['answers'].get(viewer_id, {}).get('answer')
     elif kind == 'sketch-guess':
         prompt = PROMPTS[game['order'][state['round'] - 1]][0]
-        public.update(artistId=_artist(state), strokes=deepcopy(game['strokes']), guessedIds=list(game['guessedIds']))
+        public.update(artistId=_artist(state), strokes=deepcopy(game['strokes']), guessedIds=list(game['guessedIds']),
+                      drawingEpoch=game.get('drawingEpoch', 0), drawingAckIds=list(game.get('drawingAckIds', [])))
         if reveal:
             public['prompt'] = prompt
         if viewer_id == _artist(state):

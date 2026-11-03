@@ -45,6 +45,33 @@ function messages(value: unknown): PartyMessage[] {
   if (!Array.isArray(value) || value.length > 150) invalid();
   return (value as unknown[]).map(item => { const m = object(item); if (!text(m.id, 100) || !m.id || !text(m.text, 1500) || !timestamp(m.at) || !(m.playerId === undefined || uuid(m.playerId))) invalid(); return { id: m.id, text: m.text, at: m.at, ...(m.playerId ? { playerId: m.playerId } : {}) }; });
 }
+function gameData(value: unknown, kind: PartyKind): Record<string, any> {
+  const game = object(value);
+  if (kind !== 'sketch-guess' || game.strokes === undefined) return data(game);
+  const { strokes, ...other } = game;
+  if (!Array.isArray(strokes) || strokes.length > 384) invalid();
+  let points = 0;
+  const ids = new Set<string>();
+  const clean = strokes.map((value: unknown) => {
+    const stroke = object(value);
+    if (Object.keys(stroke).some(key => !['id', 'playerId', 'color', 'width', 'points'].includes(key)) ||
+        !(uuid(stroke.id) || typeof stroke.id === 'string' && /^s\d{1,12}$/.test(stroke.id)) || ids.has(stroke.id) || !uuid(stroke.playerId) ||
+        typeof stroke.color !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(stroke.color) || typeof stroke.width !== 'number' || !Number.isFinite(stroke.width) || stroke.width < 1 || stroke.width > 12 ||
+        !Array.isArray(stroke.points) || stroke.points.length < 1 || stroke.points.length > 120) invalid();
+    ids.add(stroke.id);
+    points += stroke.points.length;
+    if (points > 8000) invalid();
+    const geometry = stroke.points.map((point: unknown) => {
+      if (!Array.isArray(point) || point.length !== 2 || point.some(value => typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1)) invalid();
+      const coordinates = point as [number, number];
+      return [coordinates[0], coordinates[1]];
+    });
+    return { id: stroke.id, playerId: stroke.playerId, color: stroke.color, width: stroke.width, points: geometry };
+  });
+  if (!(game.drawingEpoch === undefined || integer(game.drawingEpoch)) ||
+      !(game.drawingAckIds === undefined || Array.isArray(game.drawingAckIds) && game.drawingAckIds.length <= 128 && game.drawingAckIds.every(uuid) && new Set(game.drawingAckIds).size === game.drawingAckIds.length)) invalid();
+  return { ...data(other), strokes: clean };
+}
 export function parsePartyRoom(value: unknown): PartyRoom {
   const r = object(value), self = object(r.self);
   if (r.version !== 1 || !uuid(r.roomId) || !isPartyKind(r.kind) || !uuid(r.hostId) || !['lobby', 'playing', 'finished', 'closed'].includes(r.status) || !text(r.phase, 40) || !r.phase || !integer(r.phaseId) || !integer(r.round) || !timestamp(r.createdAt) || !(r.deadlineAt === null || timestamp(r.deadlineAt)) || !(r.winner === null || text(r.winner, 100))) invalid();
@@ -53,7 +80,7 @@ export function parsePartyRoom(value: unknown): PartyRoom {
   const ids = new Set(players.map(p => p.id));
   if (ids.size !== players.length || !ids.has(r.hostId) || !uuid(self.id) || !ids.has(self.id) || typeof self.isHost !== 'boolean' || !integer(self.actionSequence)) invalid();
   const settings = object(r.settings); if (Object.entries(settings).some(([key, value]) => !text(key, 40) || !integer(value, 0, 1000))) invalid();
-  return { version: 1, roomId: r.roomId, kind: r.kind, hostId: r.hostId, status: r.status, phase: r.phase, phaseId: r.phaseId, round: r.round, createdAt: r.createdAt, deadlineAt: r.deadlineAt, settings: { ...settings }, players, winner: r.winner, events: messages(r.events), chat: messages(r.chat), self: data(self), game: data(object(r.game)) };
+  return { version: 1, roomId: r.roomId, kind: r.kind, hostId: r.hostId, status: r.status, phase: r.phase, phaseId: r.phaseId, round: r.round, createdAt: r.createdAt, deadlineAt: r.deadlineAt, settings: { ...settings }, players, winner: r.winner, events: messages(r.events), chat: messages(r.chat), self: data(self), game: gameData(r.game, r.kind) };
 }
 export function parsePartySession(value: unknown): PartySession {
   const s = object(value); if (!uuid(s.roomId) || !uuid(s.playerId) || typeof s.token !== 'string' || !CAPABILITY.test(s.token) || !(s.inviteToken === undefined || typeof s.inviteToken === 'string' && CAPABILITY.test(s.inviteToken))) invalid();
