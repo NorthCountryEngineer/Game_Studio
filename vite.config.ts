@@ -1,6 +1,11 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 const mafiaPreview = process.env.MAFIA_PREVIEW_URL;
+const partyPreview = process.env.PARTY_PREVIEW_URL;
 if (mafiaPreview && !/^http:\/\/127\.0\.0\.1:\d{4,5}$/.test(mafiaPreview)) throw new Error('The Mafia preview API must be a loopback origin.');
+if (partyPreview && !/^http:\/\/127\.0\.0\.1:\d{4,5}$/.test(partyPreview)) throw new Error('The party preview API must be a loopback origin.');
 export default defineConfig({ plugins: [react()], server: { host: '127.0.0.1', port: 5180, strictPort: true,
-  ...(mafiaPreview ? { proxy: { '/mafia-api': { target: mafiaPreview, rewrite: (path: string) => path.replace(/^\/mafia-api/, '') } } } : {}) } });
+  proxy: {
+    ...(mafiaPreview ? { '/mafia-api': { target: mafiaPreview, rewrite: (path: string) => path.replace(/^\/mafia-api/, '') } } : {}),
+    ...(partyPreview ? { '/party-api': { target: partyPreview, rewrite: (path: string) => path.replace(/^\/party-api/, '') } } : {}),
+  } } });

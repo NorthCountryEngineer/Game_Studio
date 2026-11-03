@@ -17,6 +17,10 @@ def package_api(destination):
     if not adjacent.is_file() or adjacent.is_symlink() or adjacent.read_bytes() != registry.read_bytes():
         raise SystemExit('The Core-adjacent agent-framework.json must match canonical config/agent-framework.json.')
     files.append((registry, 'agent-framework.json'))
+    party_catalog = ROOT / 'config/party-games.json'
+    if not party_catalog.is_file():
+        raise SystemExit('Missing config/party-games.json; the party catalog is required.')
+    files.append((party_catalog, 'party-games.json'))
     # The optional compatibility module reads this only if it is present.
     architecture = ROOT / 'config/feedback-architecture.json'
     if architecture.is_file():

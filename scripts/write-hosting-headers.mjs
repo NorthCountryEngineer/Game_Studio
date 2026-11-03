@@ -34,7 +34,7 @@ export function hostingHeaders(config) {
     ['Strict-Transport-Security', 'max-age=31536000'], ['X-Content-Type-Options', 'nosniff'],
     ['Referrer-Policy', 'no-referrer'], ['Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=()'],
   ]) }];
-  for (const pattern of ['/', '/index.html', '/games', '/games/**', '/mafia', '/mafia/**', '/game-studio', '/game-studio/**', '/studio', '/studio/**', '/oauth/**', '/settings', '/settings/**', '/accounts', '/accounts/**', '/agents', '/agents/**', '/feedback', '/feedback/**']) {
+  for (const pattern of ['/', '/index.html', '/games', '/games/**', '/mafia', '/mafia/**', '/party', '/party/**', '/game-studio', '/game-studio/**', '/studio', '/studio/**', '/oauth/**', '/settings', '/settings/**', '/accounts', '/accounts/**', '/agents', '/agents/**', '/feedback', '/feedback/**']) {
     rules.push({ pattern, headers: headers([
       ['X-Frame-Options', 'DENY'], ['Content-Security-Policy', "frame-ancestors 'none'; object-src 'none'; base-uri 'self'"], ['Cache-Control', 'no-store'],
     ]) });

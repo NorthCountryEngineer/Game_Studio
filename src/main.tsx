@@ -4,6 +4,7 @@ import App from './App';
 import { ConfirmProvider } from './components/Confirm';
 import { coreConfig, isCore } from './lib/core';
 import { canonicalGameStudioNavigation } from './lib/canonical-navigation';
+import { PartyPresentation } from './components/PartyPresentation';
 import './styles.css';
 class ErrorBoundary extends React.Component<{children:React.ReactNode},{error:string}>{
   state={error:''};static getDerivedStateFromError(e:Error){return {error:e.message};}
@@ -12,4 +13,9 @@ class ErrorBoundary extends React.Component<{children:React.ReactNode},{error:st
 // Run before React mounts or any sign-in effect can create origin-scoped PKCE state.
 const canonical = isCore && coreConfig ? canonicalGameStudioNavigation(location.href, coreConfig.redirect_uri, window.self !== window.top) : undefined;
 if (canonical) location.replace(canonical);
-else ReactDOM.createRoot(document.getElementById('root')!).render(<React.StrictMode><ErrorBoundary><ConfirmProvider><App/></ConfirmProvider></ErrorBoundary></React.StrictMode>);
+else {
+  // The projector mounts by itself: it receives only the redacted local view,
+  // without mounting creator tools, sign-in effects or room requests.
+  const presentation = /^\/party\/present\/([0-9a-f-]{36})$/.exec(location.pathname);
+  ReactDOM.createRoot(document.getElementById('root')!).render(<React.StrictMode><ErrorBoundary>{presentation ? <PartyPresentation sessionId={presentation[1]}/> : <ConfirmProvider><App/></ConfirmProvider>}</ErrorBoundary></React.StrictMode>);
+}
