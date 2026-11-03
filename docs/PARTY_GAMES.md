@@ -19,6 +19,17 @@ reproduction of its art. All five new online engines use fixed rules and bounded
 bundled content. They make no model calls. Existing Mafia's approved cached AI
 narration remains independent and makes no model calls during play.
 
+## How to play
+
+All six party games have a collapsible **How to play** guide before play and in
+the online room, including the lobby and active rounds. The same guide has
+in-person instructions in the host controller. Starship Suspects explains its
+secret teams, room-card movement, symbol tasks, tagging, repairs, meetings,
+voting and win conditions without assuming knowledge of another game. The
+guide contains only public rules and never reads private room state. It starts
+closed, supports normal keyboard disclosure controls and stays open through
+online room updates. Reading it does not pause an online timer.
+
 ## In-person hosting
 
 `/party/{kind}/host` is a local host controller. The lead adds names and avatars,
@@ -60,8 +71,9 @@ seat's permitted view. Private rows are filtered before catalog payload decoding
 At most 32 new-party rooms are tracked at once. Creation is limited per gateway
 source and installation in a ten-minute bucket; these limits are independent of
 Mafia's existing room limits. Active rooms renew a two-hour lease. Finished rooms
-have ten minutes for a rematch; closed rooms have one minute. Retention does not
-slide on repeated reads. Expired rows are reclaimed when another room is created,
+have ten minutes for a rematch. Closing an active room gives it one minute;
+closing an already finished room keeps its existing deadline of up to ten
+minutes. Retention does not slide on repeated reads. Expired rows are reclaimed when another room is created,
 under the same conditional index fence as renewal. Chat, events, drawing vectors,
 participants, requests and stored payloads are bounded. No table, IAM, relay,
 capacity or model configuration change is needed for these engines.
