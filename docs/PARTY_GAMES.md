@@ -30,6 +30,29 @@ guide contains only public rules and never reads private room state. It starts
 closed, supports normal keyboard disclosure controls and stays open through
 online room updates. Reading it does not pause an online timer.
 
+## Drawing on desktop and mobile
+
+Sketch & Guess accepts mouse, pen and one-finger drawing on the same canvas.
+Dragging inside the canvas draws instead of scrolling the page. Pointer capture
+keeps a line connected if the pointer leaves the canvas; additional fingers do
+not take over the current line. Normal page scrolling works outside the canvas.
+
+The artist sees ink immediately while bounded batches save in the background.
+Long lines continue across overlapping segments rather than stopping at a point
+limit. A pending save does not disable the pen. Confirmed segment identifiers
+replace local ink without drawing it twice; uncertain requests retry with their
+original action identity. Clearing the canvas changes its epoch so delayed old
+ink cannot reappear. Changing the artist or ending the turn discards old local
+work.
+
+Only the current artist can send drawing data. Batches contain at most six
+segments of 120 points each and use the existing sequenced room transport. The
+server retains at most 384 segments, 8,000 points and 120 KB of serialized
+geometry. Older lines gradually lose detail and the oldest segments eventually
+age out, allowing continued drawing within the room's storage limits. The
+existing room action budget still applies; network retries never block local
+pointer input. Legacy complete-stroke requests remain supported.
+
 ## In-person hosting
 
 `/party/{kind}/host` is a local host controller. The lead adds names and avatars,

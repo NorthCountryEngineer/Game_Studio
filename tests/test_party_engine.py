@@ -357,20 +357,88 @@ class PartyEngineTests(unittest.TestCase):
             self.error(400, lambda: self.act(state, pid(1), 'stroke', color=color, width=width, points=points))
         state = self.act(state, pid(1), 'stroke', color='#000000', width=2, points=[[.123456789, .987654321]])
         self.assertEqual(state['_game']['strokes'][0]['points'], [[.1235, .9877]])
-        self.error(429, lambda: self.act(state, pid(1), 'stroke', color='#000000', width=2, points=[[0, 0]]))
-        for _ in range(5):
-            state = self.act(state, pid(1), 'clear-drawing')
-        self.error(429, lambda: self.act(state, pid(1), 'clear-drawing'))
+        state = self.act(state, pid(1), 'stroke', color='#000000', width=2, points=[[0, 0]])
+        self.assertEqual(len(state['_game']['strokes']), 2)
+        for number in range(6):
+            state = self.act(state, pid(1), 'clear-drawing', now=1002 + number)
         self.assertEqual(state['_game']['strokes'], [])
+        self.assertEqual(engine.project(state, pid(2))['game']['drawingEpoch'], 6)
 
     def test_sketch_bounded_stroke_payload_under_storage_limit(self):
         state = self.begin('sketch-guess', settings={'roundSeconds': 180})
-        for number in range(60):
-            state = self.act(state, pid(1), 'stroke', now=1001 + number, color='#abcdef', width=12,
-                             points=[[.123456789, .987654321]] * 120)
-        self.error(409, lambda: self.act(state, pid(1), 'stroke', now=1062, color='#000000', width=2, points=[[0, 0]]))
+        first_point, last_point = [.1234, .9876], [.9321, .0012]
+        for number in range(90):
+            segments = [{'id': pid(1000 + number * 6 + item), 'color': '#abcdef', 'width': 12,
+                         'points': [first_point, *[[index / 120, .9876] for index in range(1, 119)], last_point]}
+                        for item in range(6)]
+            state = self.act(state, pid(1), 'drawing-batch', now=1001 + number,
+                             drawingEpoch=0, segments=segments)
+            self.assertLessEqual(len(state['_game']['strokes']), engine.DRAWING_STROKES)
+            self.assertLessEqual(sum(len(stroke['points']) for stroke in state['_game']['strokes']), engine.DRAWING_POINTS)
+            self.assertLessEqual(len(json.dumps(state['_game']['strokes'], separators=(',', ':'))), engine.DRAWING_BYTES)
         self.assertLess(len(json.dumps(state).encode()), 200000)
-        self.assertEqual(len(state['_game']['strokes']), 60)
+        self.assertEqual(len(state['_game']['strokes']), engine.DRAWING_STROKES)
+        self.assertEqual(len(state['_game']['drawingAckIds']), engine.DRAWING_ACK_IDS)
+        for stroke in state['_game']['strokes']:
+            self.assertEqual(stroke['points'][0], first_point)
+            self.assertEqual(stroke['points'][-1], last_point)
+        self.assertEqual(state['_game']['strokes'][-1]['id'], pid(1539))
+
+    def test_sketch_batches_stream_without_one_second_pause_and_remain_bounded(self):
+        state = self.begin('sketch-guess')
+        segment = lambda number: {'id': pid(number), 'color': '#ABCDEF', 'width': 3,
+                                  'points': [[.123456, .987654], [1, 0]]}
+        for number in range(4):
+            state = self.act(state, pid(1), 'drawing-batch', drawingEpoch=0, segments=[segment(100 + number)])
+        self.assertEqual(len(state['_game']['strokes']), 4)
+        self.assertEqual(state['_game']['strokes'][0]['points'][0], [.1235, .9877])
+        self.assertEqual(state['_game']['strokes'][0]['color'], '#abcdef')
+        self.error(429, lambda: self.act(state, pid(1), 'drawing-batch', drawingEpoch=0, segments=[segment(104)]))
+        state = self.act(state, pid(1), 'drawing-batch', now=1002, drawingEpoch=0, segments=[segment(104)])
+        self.assertEqual(len(state['_game']['strokes']), 5)
+        self.error(409, lambda: self.act(state, pid(1), 'drawing-batch', now=1003, drawingEpoch=0, segments=[segment(104)]))
+
+    def test_sketch_batch_validation_is_atomic_and_drawing_authority_is_private(self):
+        state = self.begin('sketch-guess', count=3)
+        segment = {'id': pid(100), 'color': '#000000', 'width': 2, 'points': [[0, 0], [1, 1]]}
+        invalid = [({}, 400), ({'drawingEpoch': True, 'segments': [segment]}, 400),
+                   ({'drawingEpoch': 0, 'segments': []}, 400),
+                   ({'drawingEpoch': 0, 'segments': [segment] * 7}, 400),
+                   ({'drawingEpoch': 0, 'segments': [segment, segment]}, 409),
+                   ({'drawingEpoch': 0, 'segments': [{**segment, 'id': 'bad'}]}, 400),
+                   ({'drawingEpoch': 0, 'segments': [{**segment, 'role': 'artist'}]}, 400),
+                   ({'drawingEpoch': 0, 'segments': [segment, {**segment, 'id': pid(101), 'points': [[float('nan'), 0]]}]}, 400)]
+        before = deepcopy(state)
+        for fields, status in invalid:
+            self.error(status, lambda: self.act(state, pid(1), 'drawing-batch', **fields))
+            self.assertEqual(state, before)
+        self.error(403, lambda: self.act(state, pid(2), 'drawing-batch', drawingEpoch=0, segments=[segment]))
+        self.error(403, lambda: self.act(state, pid(2), 'clear-drawing', drawingEpoch=0))
+        state = self.act(state, pid(1), 'drawing-batch', drawingEpoch=0, segments=[segment])
+        view = engine.project(state, pid(2))
+        self.assertEqual(view['game']['drawingAckIds'], [pid(100)])
+        self.assertNotIn('prompt', view['game'])
+        self.assertNotIn('prompt', view['self'])
+        self.assertNotIn('drawingRate', json.dumps(view))
+
+    def test_sketch_clear_epoch_blocks_queued_ink_and_legacy_rooms_keep_working(self):
+        state = self.begin('sketch-guess', settings={'rounds': 2})
+        for field in ('drawingEpoch', 'drawingAckIds', 'drawingRate'):
+            state['_game'].pop(field, None)
+        self.assertEqual(engine.project(state, pid(2))['game']['drawingEpoch'], 0)
+        state = self.act(state, pid(1), 'stroke', color='#000000', width=2, points=[[0, 0]])
+        segment = {'id': pid(100), 'color': '#000000', 'width': 2, 'points': [[0, 0], [1, 1]]}
+        state = self.act(state, pid(1), 'clear-drawing', drawingEpoch=0)
+        self.error(409, lambda: self.act(state, pid(1), 'drawing-batch', drawingEpoch=0, segments=[segment]))
+        self.error(409, lambda: self.act(state, pid(1), 'clear-drawing', drawingEpoch=0))
+        self.assertEqual(state['_game']['strokes'], [])
+        state = self.act(state, pid(1), 'drawing-batch', drawingEpoch=1, segments=[segment])
+        state = engine.reconcile(state, 1075)
+        state = self.act(state, pid(1), 'advance', now=1076)
+        self.assertEqual(state['_game']['drawingEpoch'], 0)
+        self.assertEqual(state['_game']['drawingAckIds'], [])
+        self.assertEqual(state['_game']['strokes'], [])
+        self.error(403, lambda: self.act(state, pid(1), 'drawing-batch', now=1077, drawingEpoch=0, segments=[segment]))
 
     def test_sketch_artist_leaving_reveals_without_changing_secret_prompt(self):
         state = self.begin('sketch-guess', count=4)

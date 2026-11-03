@@ -261,7 +261,7 @@ def renew_operations(api, state, now):
 
 def room_request(api, event, room_id, body=None):
     if body is not None:
-        fields(body, {'requestId', 'phaseId', 'sequence', 'type'}, {'targetId', 'text', 'force', 'settings', 'room', 'taskId', 'step', 'answer', 'choice', 'column', 'stroke', 'color', 'points', 'width'})
+        fields(body, {'requestId', 'phaseId', 'sequence', 'type'}, {'targetId', 'text', 'force', 'settings', 'room', 'taskId', 'step', 'answer', 'choice', 'column', 'stroke', 'color', 'points', 'width', 'drawingEpoch', 'segments'})
         identifier(body['requestId'])
         if type(body['phaseId']) is not int or body['phaseId'] < 0 or type(body['sequence']) is not int or not 1 <= body['sequence'] <= 100000:
             fail('Reload the room before sending another action.')
