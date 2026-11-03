@@ -1,0 +1,49 @@
+.party-instructions {
+  margin: 0 0 24px;
+  border: 1px solid #d8e0d1;
+  border-radius: 12px;
+  background: #fffef8;
+  color: #31584f;
+}
+.party-instructions > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 18px 22px;
+  cursor: pointer;
+  list-style: none;
+  border-radius: 12px;
+}
+.party-instructions > summary::-webkit-details-marker { display: none; }
+.party-instructions > summary::marker { content: ''; }
+.party-instructions > summary:hover { background: #f1f5e9; }
+.party-instructions > summary:focus-visible { outline: 3px solid #64896c; outline-offset: 3px; }
+.party-instructions > summary > span:first-child { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px 14px; }
+.party-instructions > summary strong { font-size: 16px; }
+.party-instructions > summary > span:first-child > span { font-size: 12px; color: #6b8069; }
+.party-guide-toggle { display: flex; align-items: center; gap: 10px; flex-shrink: 0; font-size: 11px; font-weight: 600; }
+.party-guide-toggle > span:last-child { font-size: 21px; line-height: 1; }
+.party-guide-close { display: none; }
+.party-instructions[open] .party-guide-open { display: none; }
+.party-instructions[open] .party-guide-close { display: inline; }
+.party-instructions[open] .party-guide-toggle > span:last-child { transform: rotate(180deg); }
+.party-instructions[open] > summary { border-bottom: 1px solid #e0e5d8; border-radius: 12px 12px 0 0; background: #f1f5e9; }
+.party-guide-content { padding: 22px; max-width: 950px; }
+.party-instructions .party-guide-premise { font-size: 16px; line-height: 1.65; margin: 0 0 12px; color: #31584f; }
+.party-instructions .party-guide-mode { font-size: 12px; color: #6b8069; margin: 0 0 20px; }
+.party-guide-content ol { padding-left: 23px; margin: 0; }
+.party-guide-content li { padding-left: 5px; margin-bottom: 18px; }
+.party-guide-content li::marker { color: #64896c; font-weight: 700; }
+.party-guide-content li > strong { font-size: 14px; }
+.party-instructions .party-guide-content li p { font-size: 14px; line-height: 1.7; margin: 5px 0 0; color: #5c7161; }
+.party-guide-content aside { padding: 16px 19px; background: #edf2e3; border-radius: 9px; margin-top: 22px; }
+.party-instructions .party-guide-content h3 { margin: 0 0 8px; font-size: 17px; }
+.party-instructions .party-guide-content aside p { margin: 6px 0 0; font-size: 14px; line-height: 1.65; color: #4d6855; }
+.party-instructions .party-guide-timer-note { font-size: 12px; margin: 18px 0 0; line-height: 1.6; color: #788366; }
+@media (max-width: 520px) {
+  .party-instructions > summary { padding: 16px; gap: 10px; }
+  .party-guide-content { padding: 18px 16px; }
+  .party-guide-toggle { font-size: 10px; gap: 7px; }
+  .party-instructions .party-guide-premise { font-size: 15px; }
+}
