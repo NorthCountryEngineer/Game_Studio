@@ -1,9 +1,11 @@
 """Synthetic versus-room authority and schema checks; no network or providers."""
 from copy import deepcopy
+from decimal import Decimal
 import json
 import unittest
 
 import test_multiplayer as existing
+from test_nce_api import DynamoResourceTable
 
 relay, support = existing.relay, existing.support
 MATCH = {'mode': 'versus', 'lives': 3, 'timeLimit': 120}
@@ -196,6 +198,63 @@ class VersusRoomTests(unittest.TestCase):
         projected = next(message for message in self.messages('guest') if message['type'] == 'state')
         self.assertEqual(projected['state'], terminal)
         self.assertEqual(self.room(created)['match'], MATCH)
+
+    def test_real_resource_decimal_reads_preserve_versus_create_join_ready_state_and_listing(self):
+        self.database.table_class = DynamoResourceTable
+        created = self.create(visibility='public')
+        stored = self.database.Table('rooms').get_item(Key={'id': relay.key('room', created['roomId'])})['Item']
+        self.assertIs(type(stored['match']['lives']), Decimal)
+        self.assertIs(type(stored['match']['timeLimit']), Decimal)
+        loaded = relay.load(self.api, 'room', created['roomId'])
+        self.assertEqual(loaded['match'], MATCH)
+        self.assertIs(type(loaded['match']['lives']), int)
+        self.assertIs(type(loaded['match']['timeLimit']), int)
+        self.assertIs(type(loaded['version']), Decimal, 'normalization is limited to the validated match map')
+        self.socket_join('decimal-host', created, created['hostToken'])
+        listing = relay.dispatch(self.api, self.event(), 'GET', '/multiplayer/lobby', {})
+        self.assertEqual(listing['rooms'][0]['match'], MATCH)
+        guest = self.join(created)
+        self.assertEqual(guest['match'], MATCH)
+        self.socket_join('decimal-guest', created, guest['guestToken'])
+        for connection in ('decimal-host', 'decimal-guest'):
+            ready = next(message for message in self.messages(connection) if message['type'] == 'ready')
+            self.assertEqual(ready['match'], MATCH)
+            self.assertIs(type(ready['match']['lives']), int)
+            self.assertIs(type(ready['match']['timeLimit']), int)
+        self.send('decimal-host', {'type': 'state', 'seq': 1, 'state': self.versus_state()})
+        terminal = self.versus_state((1, 0), 10, 0, 'elimination')
+        self.send('decimal-host', {'type': 'state', 'seq': 2, 'state': terminal})
+        delivered = [message['state'] for message in self.messages('decimal-guest') if message['type'] == 'state']
+        self.assertEqual(delivered, [self.versus_state(), terminal])
+        self.assertEqual(relay.dispatch(self.api, self.event(), 'GET', '/multiplayer/lobby', {})['rooms'], [])
+        self.assertEqual(relay.load(self.api, 'room', created['roomId'])['match'], MATCH)
+        # Every external projection is ordinary JSON, never leaked Decimal data.
+        json.dumps([created, guest, listing, *self.messages('decimal-host'), *self.messages('decimal-guest')])
+
+    def test_only_finite_integral_bounded_stored_decimals_are_normalized(self):
+        self.database.table_class = DynamoResourceTable
+        created = self.create()
+        for match in [
+                {'mode': 'versus', 'lives': Decimal('1'), 'timeLimit': Decimal('30')},
+                {'mode': 'versus', 'lives': Decimal('5.000'), 'timeLimit': Decimal('180.000')}]:
+            self.room(created)['match'] = match
+            loaded = relay.load(self.api, 'room', created['roomId'])['match']
+            self.assertIs(type(loaded['lives']), int); self.assertIs(type(loaded['timeLimit']), int)
+            self.assertEqual(loaded, {**match, 'lives': int(match['lives']), 'timeLimit': int(match['timeLimit'])})
+        invalid = [None, [], {}, {**MATCH, 'mode': 'cooperative'}, {**MATCH, 'extra': True}]
+        for field in ('lives', 'timeLimit'):
+            for value in [True, False, 3.0, '3', None, [], {}, Decimal('NaN'), Decimal('sNaN'),
+                    Decimal('Infinity'), Decimal('-Infinity'), Decimal('1E999999999'), Decimal('3.5'), Decimal('0')]:
+                invalid.append({**MATCH, field: value})
+        invalid.extend([{**MATCH, 'lives': Decimal('6')}, {**MATCH, 'timeLimit': Decimal('29')}, {**MATCH, 'timeLimit': Decimal('181')}])
+        for match in invalid:
+            self.room(created)['match'] = match
+            with self.subTest(match=match): self.error(400, lambda: relay.load(self.api, 'room', created['roomId']))
+        # HTTP input remains strict even when the resource boundary accepts a
+        # mathematically integral stored Decimal; no general numeric coercion.
+        for match in [{**MATCH, 'lives': 3.0}, {**MATCH, 'timeLimit': 120.0},
+                {**MATCH, 'lives': Decimal('3')}, {**MATCH, 'timeLimit': Decimal('120')}]:
+            with self.subTest(http=match): self.error(400, lambda: self.create(match))
 
 
 if __name__ == '__main__': unittest.main()

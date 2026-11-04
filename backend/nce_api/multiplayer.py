@@ -10,6 +10,7 @@ import json
 import math
 import os
 from collections import OrderedDict
+from decimal import Decimal
 from pathlib import Path
 import re
 import secrets
@@ -107,6 +108,19 @@ def load(api, kind, value):
     item = database(api).Table(os.environ['MULTIPLAYER_TABLE']).get_item(Key={'id': key(kind, value)}, ConsistentRead=True).get('Item')
     if item and (item.get('organization_id') != os.environ['CORE_ORGANIZATION_ID'] or item.get('service_id') != os.environ['CORE_SERVICE_ID']):
         fail('Multiplayer room not found.', 404)
+    if item and kind == 'room' and 'match' in item:
+        # DynamoDB resources deserialize native number attributes as Decimal.
+        # Convert only this known stored map, never external request data or
+        # arbitrary row fields. Check finite bounded integers before int().
+        match = item['match']
+        fields(match, ('mode', 'lives', 'timeLimit'))
+        match = dict(match)
+        for field, low, high in [('lives', 1, 5), ('timeLimit', 30, 180)]:
+            number = match[field]
+            if (isinstance(number, Decimal) and number.is_finite()
+                    and low <= number <= high and number == number.to_integral_value()):
+                match[field] = int(number)
+        item = {**item, 'match': validate_match(match)}
     return item
 
 
