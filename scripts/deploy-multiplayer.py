@@ -100,7 +100,9 @@ def main(argv=None):
         raise RuntimeError('Execution requires --authorize-aws-charges after reviewing the source and plan.')
     operation = deployment.Deployment(args)
     archive = operation.directory / 'multiplayer-api.zip'
-    digest = package.package_api(archive)
+    # This relay has no party-recognition route; keep its architecture-neutral
+    # package small and free of the main API's ARM64 vision dependencies.
+    digest = package.package_api(archive, include_sketch_runtime=False)
     commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
     template = ROOT / 'infra/aws/multiplayer.template.json'
     deployment.save(operation.directory / 'multiplayer-plan.json', {'status': 'PREPARED',

@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "model": "DoodleNet",
+  "modelVersion": "doodlenet-0612a3e7-visible-v1",
+  "architecture": "6 same 3x3 ReLU convolutions (16,16,32,32,64,64), 3 valid 2x2 max pools, flatten 576, tanh dense 512, softmax dense 345",
+  "parameters": 544201,
+  "input": "28x28 single-channel, uint8 white ink on black normalized to float32 [0,1]",
+  "output": "345 global class probabilities",
+  "repository": "https://github.com/ml5js/ml5-data-and-models",
+  "commit": "0612a3e7c51cbffdc5db701dff49d16d1ac26fa8",
+  "license": "MIT (bundled LICENSE)",
+  "files": [
+    {
+      "path": "weights.bin",
+      "bytes": 2176804,
+      "sha256": "91111f7bb89a7c41983e75d53f33c26b997d77d08a5c2801cbf51f07c443df83",
+      "source": "https://raw.githubusercontent.com/ml5js/ml5-data-and-models/0612a3e7c51cbffdc5db701dff49d16d1ac26fa8/models/doodlenet/group1-shard1of1.bin"
+    },
+    {
+      "path": "classes.txt",
+      "bytes": 2791,
+      "sha256": "1bd82a29940199b411bf0ea54f3a1ee894c9f97bcffc674a369f037a770cbf5c",
+      "source": "https://raw.githubusercontent.com/ml5js/ml5-data-and-models/0612a3e7c51cbffdc5db701dff49d16d1ac26fa8/models/doodlenet/class_names.txt"
+    },
+    {
+      "path": "LICENSE",
+      "bytes": 1059,
+      "sha256": "c0085440de5c9c8159cff4d047e6f83cc073d42ba1717ddae0a5759730a2cdf1",
+      "source": "https://raw.githubusercontent.com/ml5js/ml5-data-and-models/0612a3e7c51cbffdc5db701dff49d16d1ac26fa8/LICENSE"
+    }
+  ],
+  "trainingData": {
+    "name": "Google Quick, Draw!",
+    "url": "https://github.com/googlecreativelab/quickdraw-dataset",
+    "license": "Creative Commons Attribution 4.0",
+    "attribution": "Quick, Draw! dataset by Google Creative Lab and contributors",
+    "changes": "Inference preprocess composites public in-game strokes, including white erasers, then centers and normalizes pen width. No training or fine-tuning."
+  },
+  "evaluationCaveat": "Rows >=50000 excluded by author documented training recipe; exact pretrained lineage and duplicate-image disjointness are not independently established.",
+  "topologySource": {
+    "url": "https://raw.githubusercontent.com/ml5js/ml5-data-and-models/0612a3e7c51cbffdc5db701dff49d16d1ac26fa8/models/doodlenet/model.json",
+    "sha256": "b652eae4c567f2fff69c37b2f365f8622ad2712d88d32c7ac9187700266c0e46"
+  }
+}

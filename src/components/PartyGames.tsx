@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { MAFIA_AVATARS, avatarFor, validateMafiaName, type MafiaAvatar } from '../lib/mafia';
-import { PARTY_GAMES, PartyAPIError, clearPartyAdmission, createPartySecret, forgetPartySession, isPartyKind, parsePartyEnvelope, parsePartyInvitation, partyGame, partyInvitation, partyRequest, readPartyAdmission, readPartySession, savePartyAdmission, savePartySession, type PartyAction, type PartyAdmission, type PartyCatalogEntry, type PartyEnvelope, type PartyKind, type PartyPendingAction, type PartyRoom, type PartySession } from '../lib/party';
+import { PARTY_GAMES, PartyAPIError, clearPartyAdmission, createPartySecret, forgetPartySession, isPartyKind, parsePartyEnvelope, parsePartyInvitation, parsePartyRecognitionAck, partyGame, partyInvitation, partyRequest, readPartyAdmission, readPartySession, savePartyAdmission, savePartySession, type PartyAction, type PartyAdmission, type PartyCatalogEntry, type PartyEnvelope, type PartyKind, type PartyPendingAction, type PartyRoom, type PartySession } from '../lib/party';
 import '../party.css';
 import { PartyInstructions } from './PartyInstructions';
 import { PartyPlayerName, partyPlayerLabel } from './PartyPlayerName';
 import { SketchDrawingBoard } from './SketchDrawingBoard';
 import type { DrawingAction, DrawingSender, DrawingSendResult } from '../lib/drawing-stream';
 import { normalizeRoomPassphrase, roomPassphraseRetryExpired, ROOM_PASSPHRASE_HELP } from '../lib/room-passphrases';
+import { createSketchRecognitionScheduler, type SketchRecognitionScheduler } from '../lib/sketch-recognition-scheduler';
 
 type Navigate = (path: string) => unknown;
 const problem = (value: unknown) => value instanceof PartyAPIError ? value.message : value instanceof Error && value.name !== 'TypeError' ? value.message : 'The room could not be reached. Your seat is saved; try again shortly.';
@@ -35,7 +36,22 @@ function PartyOnlineRoom({ kind, roomId, navigate }: { kind?: PartyKind; roomId?
   const [entryMode, setEntryMode] = useState<'create' | 'passphrase'>('create'), [passphrase, setPassphrase] = useState('');
   const [joinToken, setJoinToken] = useState(''), [invitation, setInvitation] = useState(''), [inviteInput, setInviteInput] = useState(''), [busy, setBusy] = useState(false), [loading, setLoading] = useState(Boolean(roomId)), [error, setError] = useState(''), [notice, setNotice] = useState(''), [now, setNow] = useState(Date.now()), [confirmClose, setConfirmClose] = useState(false);
   const active = useRef(true), generation = useRef(0), locked = useRef(false), tail = useRef<Promise<void>>(Promise.resolve()), controller = useRef<AbortController>(), roomRef = useRef(room), sessionRef = useRef(session), retry = useRef<PartyPendingAction>();
+  const recognition = useRef<SketchRecognitionScheduler>();
   roomRef.current = room; sessionRef.current = session;
+  useEffect(() => {
+    const scheduler = createSketchRecognitionScheduler({
+      request: async (target, signal) => {
+        const body = { phaseId: target.phaseId, drawingEpoch: target.drawingEpoch, inkSha256: target.inkSha256 };
+        return parsePartyRecognitionAck(await partyRequest(`/party/rooms/${target.roomId}/recognition`, 'POST', body, target.token, signal), target);
+      },
+      setTimeout: (callback, milliseconds) => window.setTimeout(callback, milliseconds),
+      clearTimeout: timer => window.clearTimeout(timer),
+      now: () => Date.now(),
+    });
+    recognition.current = scheduler;
+    return () => { scheduler.close(); if (recognition.current === scheduler) recognition.current = undefined; };
+  }, [kind, roomId]);
+  useEffect(() => { recognition.current?.update(roomId && room?.roomId !== roomId ? undefined : room, session); }, [room, session, roomId]);
   useEffect(() => {
     active.current = true; generation.current++; locked.current = false; retry.current = undefined;
     setRoom(undefined); setSession(roomId ? readPartySession(roomId) : undefined); setError(''); setNotice(''); setUncertain(undefined); setBusy(false); setLoading(Boolean(roomId));

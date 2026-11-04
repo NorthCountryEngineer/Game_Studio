@@ -7,6 +7,7 @@ are integer Unix seconds. project() is an explicit allowlist, never raw state.
 """
 from collections import Counter
 from copy import deepcopy
+import hashlib
 import json
 import importlib.util
 from pathlib import Path
@@ -218,6 +219,9 @@ def _emit(state, text, now):
 
 
 def _phase(state, phase, now, seconds=None):
+    if state.get('kind') == 'sketch-guess':
+        for key in ('_recognition', '_recognitionJob', '_recognitionBudget', '_inkSha256'):
+            state.get('_game', {}).pop(key, None)
     state.update(phase=phase, phaseId=state['phaseId'] + 1, phaseStartedAt=now,
                  deadlineAt=now + seconds if seconds else None)
 
@@ -312,7 +316,7 @@ def _start(state, now):
     elif kind == 'sketch-guess':
         indexes = list(range(len(PROMPTS)))
         if state.get('_ai'):
-            supported = set(ai_rules().supported_prompts())
+            supported = set(ai_rules().supported_prompts()) & set(ai_rules().supported_guess_prompts())
             indexes = [index for index, (prompt, _) in enumerate(PROMPTS) if prompt in supported]
             if not indexes:
                 fail('The computer drawing library is unavailable.', 503)
@@ -327,6 +331,50 @@ def _start(state, now):
 
 def _artist(state):
     return state['_game'].get('artistId')
+
+
+def recognition_eligible(state):
+    """Only a live drawing with a computer guesser needs recognition work."""
+    if state.get('kind') != 'sketch-guess' or state.get('status') != 'playing' or state.get('phase') != 'draw':
+        return False
+    game, runtime = state['_game'], state.get('_ai', {})
+    return any(player.get('isAI') is True and not player.get('left')
+        and player['id'] != game.get('artistId') and player['id'] not in game.get('guessedIds', [])
+        and len(runtime.get(player['id'], {}).get('memory', {}).get('guesses', [])) < 3
+        for player in state['players'])
+
+
+def recognition_strokes(state):
+    """The model's complete allowlist: public ink, without identities or context."""
+    return [{key: deepcopy(stroke[key]) for key in ('color', 'width', 'points')}
+        for stroke in state['_game'].get('strokes', [])]
+
+
+def recognition_binding(state):
+    if not recognition_eligible(state) or not state['_game'].get('strokes'):
+        return None
+    game = state['_game']
+    ink_hash = game.get('_inkSha256')
+    if not isinstance(ink_hash, str) or not re.fullmatch('[a-f0-9]{64}', ink_hash):
+        ink_hash = hashlib.sha256(json.dumps(recognition_strokes(state), sort_keys=True,
+            separators=(',', ':'), ensure_ascii=True, allow_nan=False).encode()).hexdigest()
+    return {'phaseId': state['phaseId'], 'drawingEpoch': game.get('drawingEpoch', 0), 'inkSha256': ink_hash}
+
+
+def _refresh_recognition_ink(state):
+    game = state['_game']
+    game.pop('_recognition', None)
+    game.pop('_inkSha256', None)
+    binding = recognition_binding(state)
+    if binding: game['_inkSha256'] = binding['inkSha256']
+
+
+def recognition_observation(state):
+    binding = recognition_binding(state)
+    observation = state.get('_game', {}).get('_recognition')
+    if not binding or not isinstance(observation, dict) or any(observation.get(key) != value for key, value in binding.items()):
+        return None
+    return {'modelVersion': observation.get('modelVersion'), 'candidates': deepcopy(observation.get('candidates', []))}
 
 
 def _trivia_reveal(state, now):
@@ -557,7 +605,11 @@ def tick(state, now=None):
     for player in seats[:AI_ACTIONS_PER_TICK]:
         agent = runtime[player['id']]
         phase = state['phaseId']
-        action, memory = ai_rules().decide(deepcopy(project(state, player['id'], now)), deepcopy(agent.get('memory', {})), now)
+        view = deepcopy(project(state, player['id'], now))
+        if state['kind'] == 'sketch-guess' and player['id'] != _artist(state):
+            observation = recognition_observation(state)
+            if observation: view['game']['recognition'] = observation
+        action, memory = ai_rules().decide(view, deepcopy(agent.get('memory', {})), now)
         if not isinstance(memory, dict) or len(json.dumps(memory, ensure_ascii=True, allow_nan=False, separators=(',', ':'))) > AI_MEMORY_BYTES:
             memory = {}
         agent.update(memory=memory, nextAt=now + 2 + secrets.randbelow(3))
@@ -841,6 +893,8 @@ def _sketch_action(state, actor, kind, action, now):
             game['drawingRate'] = {'second': now, 'count': count + 1}
             game['clearCount'] += 1
             game.update(strokes=[], drawingEpoch=epoch + 1, drawingAckIds=[])
+            game.pop('_recognitionJob', None)
+            _refresh_recognition_ink(state)
             return
         if kind == 'drawing-batch':
             segments = action.get('segments')
@@ -865,6 +919,7 @@ def _sketch_action(state, actor, kind, action, now):
         game['strokes'].extend(clean)
         game['drawingAckIds'] = [*game.get('drawingAckIds', []), *identifiers][-DRAWING_ACK_IDS:]
         _compact_drawing(game)
+        _refresh_recognition_ink(state)
     elif kind == 'guess':
         if actor['id'] == artist_id:
             fail('The artist cannot guess their own prompt.', 403)
@@ -1037,6 +1092,8 @@ def project(state, viewer_id, now=None):
         prompt = PROMPTS[game['order'][state['round'] - 1]][0]
         public.update(artistId=_artist(state), strokes=deepcopy(game['strokes']), guessedIds=list(game['guessedIds']),
                       drawingEpoch=game.get('drawingEpoch', 0), drawingAckIds=list(game.get('drawingAckIds', [])))
+        binding = recognition_binding(state)
+        if binding: public['inkSha256'] = binding['inkSha256']
         if reveal:
             public['prompt'] = prompt
         if viewer_id == _artist(state):

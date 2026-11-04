@@ -154,7 +154,7 @@ export default function App() {
         {visibleSession.canManageAccounts&&<button className="text-button" onClick={()=>setDialog('accounts')}>Accounts</button>}
         {isCore&&<button className="text-button" disabled={checking||waitingForHostLogin||!configReady} onClick={()=>void(visiblePlayerSigned?signOut():login())}>{checking||waitingForHostLogin?'Checking access…':visiblePlayerSigned?'Sign out':'Sign in'}</button>}
       </header>
-      {!isCore&&<div className="local-banner"><span>LOCAL PREVIEW</span> {pathname.startsWith('/mafia')||pathname.startsWith('/party') ? 'Games in this local rehearsal are temporary. No AWS or model calls.' : 'Games and settings stay in this browser. No AWS or model calls.'}</div>}
+      {!isCore&&<div className="local-banner"><span>LOCAL PREVIEW</span> {pathname.startsWith('/mafia')||pathname.startsWith('/party') ? 'Games in this local rehearsal are temporary. No AWS or external AI requests.' : 'Games and settings stay in this browser. No AWS or model calls.'}</div>}
       {savedHost&&<div className="service-host-strip"><span>Connected to {savedHost.name}</span><a href={new URL(savedHost.returnPath,savedHost.origin).href} onClick={event=>{if(dirty){event.preventDefault();void confirm('Leave these game changes without saving?').then(leave=>{if(leave)location.assign(new URL(savedHost.returnPath,savedHost.origin).href);});}}}>Return to {savedHost.name} ↗</a></div>}
       {error&&<p className="error service-message" role="alert">{error}</p>}
       {adminMode&&visibleSession.canManageGames&&<div className="admin-mode-strip" role="status">Admin actions are on. Use a game’s … menu to update, duplicate or delete it.</div>}

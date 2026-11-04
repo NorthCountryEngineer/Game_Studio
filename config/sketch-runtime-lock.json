@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "python": "3.12",
+  "platform": "linux-aarch64",
+  "source": "https://pypi.org",
+  "wheels": [
+    {
+      "name": "numpy",
+      "version": "2.5.4",
+      "filename": "numpy-2.5.4-cp312-cp312-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl",
+      "sha256": "fe4d21ab149f15e4e6043dfb0de87e6e5f34ac176cde83060e9802981fca2ac2",
+      "size": 15695312,
+      "url": "https://files.pythonhosted.org/packages/dc/96/8319e2457ae4333c62c815c7006b869a4f60985c1e01024c2f8c6c040fe5/numpy-2.5.4-cp312-cp312-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl"
+    },
+    {
+      "name": "pillow",
+      "version": "13.0.0",
+      "filename": "pillow-13.0.0-cp312-cp312-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl",
+      "sha256": "8bf295fe459343bc6093c8e5e0df60bfa189e0fcb775a22e2c2488fdeccc6c0d",
+      "size": 6519309,
+      "url": "https://files.pythonhosted.org/packages/3b/bb/9e30e8ed18c20800ee327a12107d5249ad8dc444867b3adfcc21654e3c71/pillow-13.0.0-cp312-cp312-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl"
+    }
+  ]
+}
