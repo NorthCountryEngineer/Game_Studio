@@ -1,6 +1,7 @@
 import catalog from '../../config/party-games.json';
 import { coreConfig, isCore } from './core';
 import { MAFIA_AVATARS, type MafiaAvatar, validateMafiaName } from './mafia';
+import { normalizeRoomPassphrase } from './room-passphrases';
 
 export type PartyKind = 'starship-suspects' | 'sketch-guess' | 'trivia' | 'hand-duel' | 'drop-four';
 export type PartyCatalogEntry = { id: string; title: string; category: string; minPlayers: number; maxPlayers: number; symbol: string; description: string };
@@ -10,6 +11,7 @@ export const isPartyKind = (kind: unknown): kind is PartyKind => typeof kind ===
 export type PartyPlayer = { id: string; name: string; avatar: MafiaAvatar; score: number; alive?: boolean; left?: boolean; room?: string; role?: string; isAI?: boolean };
 export type PartyMessage = { id: string; playerId?: string; text: string; at: number };
 export type PartyRoom = {
+  passphraseEnabled?: boolean;
   version: 1; roomId: string; kind: PartyKind; hostId: string; status: string; phase: string; phaseId: number; round: number; createdAt: number; deadlineAt: number | null;
   settings: Record<string, number>; players: PartyPlayer[]; winner: string | null; events: PartyMessage[]; chat: PartyMessage[];
   self: { id: string; isHost: boolean; actionSequence: number; left?: boolean; [key: string]: any };
@@ -18,7 +20,7 @@ export type PartyRoom = {
 export type PartySession = { roomId: string; playerId: string; token: string; inviteToken?: string };
 export type PartyEnvelope = { room: PartyRoom; session?: PartySession };
 export type PartyAction = { type: string; [key: string]: unknown };
-export type PartyAdmission = { path: string; body: { requestId: string; name: string; avatar: MafiaAvatar; playerToken: string; inviteToken: string; kind?: PartyKind; settings?: Record<string, number> } };
+export type PartyAdmission = { path: string; startedAt?: number; body: { requestId: string; name: string; avatar: MafiaAvatar; playerToken: string; inviteToken?: string; passphrase?: string; kind?: PartyKind; settings?: Record<string, number> } };
 export type PartyPendingAction = PartyAction & { requestId: string; phaseId: number; sequence: number };
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const CAPABILITY = /^[A-Za-z0-9_-]{43}$/;
@@ -74,6 +76,7 @@ function gameData(value: unknown, kind: PartyKind): Record<string, any> {
 }
 export function parsePartyRoom(value: unknown): PartyRoom {
   const r = object(value), self = object(r.self);
+  if (!(r.passphraseEnabled === undefined || typeof r.passphraseEnabled === 'boolean')) invalid();
   if (r.version !== 1 || !uuid(r.roomId) || !isPartyKind(r.kind) || !uuid(r.hostId) || !['lobby', 'playing', 'finished', 'closed'].includes(r.status) || !text(r.phase, 40) || !r.phase || !integer(r.phaseId) || !integer(r.round) || !timestamp(r.createdAt) || !(r.deadlineAt === null || timestamp(r.deadlineAt)) || !(r.winner === null || text(r.winner, 100))) invalid();
   if (!Array.isArray(r.players) || r.players.length < 1 || r.players.length > 24) invalid();
   const players: PartyPlayer[] = r.players.map((value: unknown) => { const p = object(value); if (!uuid(p.id) || !text(p.name, 64) || validateMafiaName(p.name) !== p.name || !avatars.has(p.avatar) || !integer(p.score, -1000000, 1000000) || !(p.alive === undefined || typeof p.alive === 'boolean') || !(p.room === undefined || text(p.room, 40)) || !(p.role === undefined || text(p.role, 40)) || !(p.isAI === undefined || typeof p.isAI === 'boolean')) invalid(); return { id: p.id, name: p.name, avatar: p.avatar, score: p.score, ...(p.alive === undefined ? {} : { alive: p.alive }), ...(p.left === true ? { left: true } : {}), ...(p.room === undefined ? {} : { room: p.room }), ...(p.role === undefined ? {} : { role: p.role }), ...(p.isAI === undefined ? {} : { isAI: p.isAI }) }; });
@@ -81,7 +84,7 @@ export function parsePartyRoom(value: unknown): PartyRoom {
   if (ids.size !== players.length || !ids.has(r.hostId) || !uuid(self.id) || !ids.has(self.id) || typeof self.isHost !== 'boolean' || !integer(self.actionSequence)) invalid();
   if (players.some(player => player.isAI && (player.id === r.hostId || player.id === self.id))) invalid();
   const settings = object(r.settings); if (Object.entries(settings).some(([key, value]) => !text(key, 40) || !integer(value, 0, 1000))) invalid();
-  return { version: 1, roomId: r.roomId, kind: r.kind, hostId: r.hostId, status: r.status, phase: r.phase, phaseId: r.phaseId, round: r.round, createdAt: r.createdAt, deadlineAt: r.deadlineAt, settings: { ...settings }, players, winner: r.winner, events: messages(r.events), chat: messages(r.chat), self: data(self), game: gameData(r.game, r.kind) };
+  return { version: 1, roomId: r.roomId, kind: r.kind, hostId: r.hostId, status: r.status, phase: r.phase, phaseId: r.phaseId, round: r.round, createdAt: r.createdAt, deadlineAt: r.deadlineAt, settings: { ...settings }, players, winner: r.winner, events: messages(r.events), chat: messages(r.chat), self: data(self), game: gameData(r.game, r.kind), ...(r.passphraseEnabled === undefined ? {} : { passphraseEnabled: r.passphraseEnabled }) };
 }
 export function parsePartySession(value: unknown): PartySession {
   const s = object(value); if (!uuid(s.roomId) || !uuid(s.playerId) || typeof s.token !== 'string' || !CAPABILITY.test(s.token) || !(s.inviteToken === undefined || typeof s.inviteToken === 'string' && CAPABILITY.test(s.inviteToken))) invalid();
@@ -99,19 +102,21 @@ export function forgetPartySession(roomId: string, storage: Pick<Storage, 'remov
 export function partyInvitation(origin: string, session: PartySession): string { const s = parsePartySession(session), url = new URL(origin); if (!s.inviteToken || url.origin !== origin || !['http:', 'https:'].includes(url.protocol)) throw new Error('This seat cannot create an invitation.'); return `${origin}/party/rooms/${s.roomId}#join=${s.inviteToken}`; }
 export function parsePartyInvitation(value: string, origin: string): { roomId: string; inviteToken: string } | undefined { try { const url = new URL(value, origin), path = /^\/party\/rooms\/([0-9a-f-]{36})$/.exec(url.pathname), entries = [...new URLSearchParams(url.hash.slice(1))]; if (url.origin !== origin || url.search || !path || !UUID.test(path[1]) || entries.length !== 1 || entries[0][0] !== 'join' || !CAPABILITY.test(entries[0][1])) return; return { roomId: path[1], inviteToken: entries[0][1] }; } catch { return; } }
 export function parsePartyAdmission(value: unknown): PartyAdmission {
-  const a = object(value), b = object(a.body); if (typeof a.path !== 'string' || !/^\/party\/rooms(?:\/[0-9a-f-]{36}\/join)?$/.test(a.path) || !uuid(b.requestId) || typeof b.name !== 'string' || validateMafiaName(b.name) !== b.name || !avatars.has(b.avatar) || typeof b.playerToken !== 'string' || !CAPABILITY.test(b.playerToken) || typeof b.inviteToken !== 'string' || !CAPABILITY.test(b.inviteToken)) invalid();
-  const create = a.path === '/party/rooms'; if (create && !isPartyKind(b.kind)) invalid();
+  const a = object(value), b = object(a.body); if (typeof a.path !== 'string' || !/^\/party(?:\/join-by-passphrase|\/rooms(?:\/[0-9a-f-]{36}\/join)?)$/.test(a.path) || !uuid(b.requestId) || typeof b.name !== 'string' || validateMafiaName(b.name) !== b.name || !avatars.has(b.avatar) || typeof b.playerToken !== 'string' || !CAPABILITY.test(b.playerToken)) invalid();
+  const create = a.path === '/party/rooms', phraseJoin = a.path === '/party/join-by-passphrase'; if ((create || phraseJoin) && !isPartyKind(b.kind)) invalid();
+  if (phraseJoin ? b.inviteToken !== undefined || typeof b.passphrase !== 'string' : typeof b.inviteToken !== 'string' || !CAPABILITY.test(b.inviteToken)) invalid();
+  if (b.passphrase !== undefined && (!create && !phraseJoin || typeof b.passphrase !== 'string' || normalizeRoomPassphrase(b.passphrase) !== b.passphrase)) invalid();
   let settings: Record<string, number> | undefined; if (create && b.settings !== undefined) { settings = object(b.settings); if (Object.entries(settings).some(([key, value]) => !text(key, 40) || !integer(value, 0, 1000))) invalid(); }
-  return { path: a.path, body: { requestId: b.requestId, name: b.name, avatar: b.avatar, playerToken: b.playerToken, inviteToken: b.inviteToken, ...(create ? { kind: b.kind, ...(settings ? { settings: { ...settings } } : {}) } : {}) } };
+  return { path: a.path, body: { requestId: b.requestId, name: b.name, avatar: b.avatar, playerToken: b.playerToken, ...(!phraseJoin ? { inviteToken: b.inviteToken } : {}), ...(b.passphrase === undefined ? {} : { passphrase: b.passphrase }), ...(create || phraseJoin ? { kind: b.kind } : {}), ...(settings ? { settings: { ...settings } } : {}) } };
 }
 const admissionKey = (key: string) => isPartyKind(key) || UUID.test(key) ? `game-studio-party-admission-v1:${key}` : invalid();
-export function readPartyAdmission(key: string, storage: Pick<Storage, 'getItem'> = localStorage): PartyAdmission | undefined { try { const raw = storage.getItem(admissionKey(key)); if (!raw || raw.length > 3000) return; const a = parsePartyAdmission(JSON.parse(raw)); if (a.path === (isPartyKind(key) ? '/party/rooms' : `/party/rooms/${key}/join`) && (!isPartyKind(key) || a.body.kind === key)) return a; } catch { return; } }
-export function savePartyAdmission(key: string, value: PartyAdmission, storage: Pick<Storage, 'setItem'> = localStorage) { const a = parsePartyAdmission(value); if (a.path !== (isPartyKind(key) ? '/party/rooms' : `/party/rooms/${key}/join`) || isPartyKind(key) && a.body.kind !== key) invalid(); storage.setItem(admissionKey(key), JSON.stringify(a)); }
+export function readPartyAdmission(key: string, storage: Pick<Storage, 'getItem'> = localStorage): PartyAdmission | undefined { try { const raw = storage.getItem(admissionKey(key)); if (!raw || raw.length > 3000) return; const a = parsePartyAdmission(JSON.parse(raw)); if (a.body.passphrase === undefined && a.path === (isPartyKind(key) ? '/party/rooms' : `/party/rooms/${key}/join`) && (!isPartyKind(key) || a.body.kind === key)) return a; } catch { return; } }
+export function savePartyAdmission(key: string, value: PartyAdmission, storage: Pick<Storage, 'setItem'> = localStorage) { const a = parsePartyAdmission(value); if (a.body.passphrase !== undefined) throw new Error('Passphrase requests stay in this tab until your seat is confirmed.'); if (a.path !== (isPartyKind(key) ? '/party/rooms' : `/party/rooms/${key}/join`) || isPartyKind(key) && a.body.kind !== key) invalid(); storage.setItem(admissionKey(key), JSON.stringify(a)); }
 export function clearPartyAdmission(key: string, storage: Pick<Storage, 'removeItem'> = localStorage) { storage.removeItem(admissionKey(key)); }
 export function partyAPIBase(): string { if (!isCore) return '/party-api'; if (!coreConfig) throw new Error('The live game service is not configured.'); const url = new URL(coreConfig.api_url); if (url.protocol !== 'https:' || url.origin !== coreConfig.api_url) throw new Error('The live game service is not configured.'); return url.origin; }
 export class PartyAPIError extends Error { constructor(message: string, readonly status: number) { super(message); } }
 export async function partyRequest(path: string, method: 'GET' | 'POST' = 'GET', body?: unknown, token?: string, signal?: AbortSignal): Promise<unknown> {
-  if (!/^\/party(?:\/config|\/rooms(?:\/[0-9a-f-]{36}(?:\/join|\/actions)?)?)$/.test(path)) throw new Error('Choose a valid party-game request.'); if (token !== undefined && !CAPABILITY.test(token)) throw new Error('This room seat is invalid. Open its invitation again.');
+  if (!/^\/party(?:\/config|\/join-by-passphrase|\/rooms(?:\/[0-9a-f-]{36}(?:\/join|\/actions)?)?)$/.test(path)) throw new Error('Choose a valid party-game request.'); if (token !== undefined && !CAPABILITY.test(token)) throw new Error('This room seat is invalid. Open its invitation again.');
   const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 12000), abort = () => controller.abort(); signal?.addEventListener('abort', abort, { once: true }); if (signal?.aborted) controller.abort();
   try { const response = await fetch(partyAPIBase() + path, { method, credentials: 'omit', redirect: 'error', headers: { ...(body === undefined ? {} : { 'Content-Type': 'application/json' }), ...(token ? { Authorization: `Bearer ${token}` } : {}) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: controller.signal }); let value: unknown; try { value = await response.json(); } catch { throw new PartyAPIError('The game service could not be reached. Try again shortly.', response.status); } if (!response.ok) { const error = value && typeof value === 'object' && 'error' in value ? (value as { error: unknown }).error : undefined; throw new PartyAPIError(typeof error === 'string' && error.length < 500 ? error : 'The room request could not be completed. Try again shortly.', response.status); } return value; }
   catch (error) { if (controller.signal.aborted && !signal?.aborted) throw new PartyAPIError('The room is taking longer than usual. Your seat is saved; try again.', 408); throw error; }

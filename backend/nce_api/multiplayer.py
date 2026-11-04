@@ -3,6 +3,7 @@
 The parent page relays bounded fixed-engine data; the sandbox never gains network
 access. A browser host is the simulation authority, not an assessment authority.
 """
+import base64
 import hashlib
 import hmac
 import importlib.util
@@ -20,6 +21,9 @@ import uuid
 
 ROOM_SECONDS = 1800
 LOBBY_LIMIT = 20
+PASSPHRASE_LIMIT = 32
+PASSPHRASE_RECEIPTS = 128
+PASSPHRASE_RETRY_SECONDS = 7200
 PENDING_SECONDS = 45
 HEARTBEAT_SECONDS = 45
 DISCONNECT_GRACE = 60
@@ -31,6 +35,7 @@ UUID = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 TOKEN = re.compile(r'^[A-Za-z0-9_-]{43}$')
 CONNECTION = re.compile(r'^[A-Za-z0-9_=+\-]{1,128}$')
 _games = None
+_passphrases = None
 _callback = None
 _database = None
 _publication_validations = OrderedDict()
@@ -92,6 +97,22 @@ def games():
         _games = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(_games)
     return _games
+
+
+def passphrases():
+    global _passphrases
+    if _passphrases is None:
+        spec = importlib.util.spec_from_file_location('game_studio_multiplayer_passphrases', Path(__file__).with_name('room_passphrases.py'))
+        _passphrases = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(_passphrases)
+    return _passphrases
+
+
+def phrase_digest(game_id, phrase):
+    try:
+        return passphrases().digest('multiplayer:' + game_id, phrase)
+    except passphrases().PassphraseError as error:
+        fail(error.message, error.status)
 
 
 def key(kind, value):
@@ -500,27 +521,135 @@ def lobby_remove(api, room):
     return [lobby_write(registry, [value for value in registry['roomIds'] if value != room['roomId']], int(registry['expiresAt']))]
 
 
+def passphrase_registry(api, game_id):
+    value = load(api, 'passphrases', game_id)
+    if value:
+        entries = value.get('entries')
+        if (not isinstance(entries, list) or len(entries) > PASSPHRASE_LIMIT
+                or any(not isinstance(entry, dict) or set(entry) != {'digest', 'roomId'}
+                    or not isinstance(entry['digest'], str) or not re.fullmatch(r'[a-f0-9]{64}', entry['digest'])
+                    or not isinstance(entry['roomId'], str) or not UUID.fullmatch(entry['roomId']) for entry in entries)
+                or len({entry['digest'] for entry in entries}) != len(entries)
+                or len({entry['roomId'] for entry in entries}) != len(entries)):
+            fail('Passphrase joining is temporarily unavailable. Retry shortly.', 503)
+        receipts = value.get('receipts', {})
+        if (not isinstance(receipts, dict) or len(receipts) > PASSPHRASE_RECEIPTS
+                or any(not isinstance(request, str) or not re.fullmatch(r'[a-f0-9]{64}', request)
+                    or not isinstance(receipt, dict) or set(receipt) != {'roomId', 'fingerprint', 'expiresAt'}
+                    or not isinstance(receipt['roomId'], str) or not UUID.fullmatch(receipt['roomId'])
+                    or not isinstance(receipt['fingerprint'], str) or not re.fullmatch(r'[a-f0-9]{64}', receipt['fingerprint'])
+                    or isinstance(receipt['expiresAt'], bool) or not isinstance(receipt['expiresAt'], (int, Decimal))
+                    or not math.isfinite(receipt['expiresAt']) or receipt['expiresAt'] != int(receipt['expiresAt'])
+                    or not 0 <= receipt['expiresAt'] <= 100000000000
+                    for request, receipt in receipts.items())):
+            fail('Passphrase joining is temporarily unavailable. Retry shortly.', 503)
+    return value
+
+
+def passphrase_live(api, room, now):
+    """Match the room's existing idle/disconnection lifecycle without renewing it."""
+    if not room or room.get('closed') or int(room['expiresAt']) <= now:
+        return False
+    if room.get('hostConnected'):
+        absent = int(room.get('disconnectedAt0', 0))
+        if not absent and not connected(api, room, 0, now):
+            host = connection_record(api, room.get('connection0'))
+            absent = int(host.get('lastSeen', room['createdAt'])) + HEARTBEAT_SECONDS if host else int(room['createdAt'])
+        if absent and absent + DISCONNECT_GRACE <= now:
+            return False
+    return True
+
+
+def passphrase_write(previous, game_id, entries, expires_at, receipts=None):
+    changes = {'entries': entries, 'expiresAt': expires_at}
+    if receipts is not None: changes['receipts'] = receipts
+    value = revision(previous, **changes) if previous else row('passphrases', game_id, **changes)
+    return put(value, previous)
+
+
+def passphrase_reserve(api, room, now):
+    """Reserve a bounded, private per-game lookup in the room creation transaction."""
+    registry = passphrase_registry(api, room['gameId'])
+    live, fences, expiries = [], [], [int(room['expiresAt'])]
+    if registry:
+        # Admission receipts outlive a closed room. A new room using its phrase
+        # cannot shorten the lookup TTL and erase reply recovery evidence.
+        expiries.append(int(registry['expiresAt']))
+    for entry in registry['entries'] if registry else []:
+        candidate = load(api, 'room', entry['roomId'])
+        if candidate:
+            # Fence discarded room versions too: a concurrent lease renewal
+            # must not let a stale observer give its phrase to another room.
+            fences.append(room_check(candidate))
+        if not passphrase_live(api, candidate, now):
+            continue
+        if candidate.get('gameId') != room['gameId'] or candidate.get('passphraseHash') != entry['digest']:
+            fail('Passphrase joining is temporarily unavailable. Retry shortly.', 503)
+        if hmac.compare_digest(entry['digest'], room['passphraseHash']):
+            fail('That passphrase is already in use for this game. Choose another.', 409)
+        live.append(entry)
+        expiries.append(int(candidate['expiresAt']))
+    if len(live) >= PASSPHRASE_LIMIT:
+        fail('Passphrase rooms are full for this game. Use an invitation or retry later.', 409)
+    return [*fences, passphrase_write(registry, room['gameId'],
+        [*live, {'digest': room['passphraseHash'], 'roomId': room['roomId']}], max(expiries))]
+
+
+def passphrase_renew(api, room, expires_at):
+    """Keep the lookup's TTL fenced to every active room lease extension."""
+    if not room.get('passphraseHash'):
+        return []
+    registry = passphrase_registry(api, room['gameId'])
+    if not registry or not any(entry == {'digest': room['passphraseHash'], 'roomId': room['roomId']} for entry in registry['entries']):
+        fail('This room’s passphrase registration changed. Start a new room.', 409)
+    return [passphrase_write(registry, room['gameId'], registry['entries'], max(expires_at, int(registry['expiresAt'])))]
+
+
 def create_room(api, event, body):
-    fields(body, ('gameId', 'publishedRevision'), ('visibility', 'match'))
+    fields(body, ('gameId', 'publishedRevision'), ('visibility', 'match', 'passphrase', 'requestId', 'hostToken'))
     match = validate_match(body['match']) if 'match' in body else None
     visibility = body.get('visibility', 'private')
     if not isinstance(visibility, str) or visibility not in {'private', 'public'}:
         fail('Choose a private invitation or public partner lobby.')
+    if 'passphrase' in body and visibility != 'private':
+        fail('A passphrase requires a private room.')
+    identifier(body['gameId'])
+    passphrase_hash = phrase_digest(body['gameId'], body['passphrase']) if 'passphrase' in body else None
+    recoverable = 'requestId' in body or 'hostToken' in body
+    if recoverable and (not passphrase_hash or 'requestId' not in body or 'hostToken' not in body):
+        fail('Passphrase recovery requires a request identifier and host capability together.')
+    if recoverable:
+        identifier(body['requestId']); digest(body['hostToken'])
+        body = {**body, 'passphrase': passphrases().normalize(body['passphrase'])}
+        fingerprint = hashlib.sha256(canonical(body).encode('utf-8')).hexdigest()
     rate(api, event, 'create', 6)
     # Separate installation-wide bound also limits distributed room allocation.
     rate(api, {'requestContext': {}}, 'all-create', 120)
     endpoint = socket_url()
     spec, spec_hash, check = publication(api, body['gameId'], body['publishedRevision'], match=match)
     now = int(time.time())
-    room_id = str(uuid.uuid4())
-    host, invite = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
+    room_id = str(uuid.uuid5(uuid.NAMESPACE_URL, key('passphrase-create', body['requestId']))) if recoverable else str(uuid.uuid4())
+    host = body['hostToken'] if recoverable else secrets.token_urlsafe(32)
+    invite = base64.urlsafe_b64encode(hmac.new(host.encode('ascii'), ('multiplayer-invite-v1:' + room_id).encode('ascii'), hashlib.sha256).digest()).decode('ascii').rstrip('=') if recoverable else secrets.token_urlsafe(32)
     room = row('room', room_id, roomId=room_id, gameId=body['gameId'], publishedRevision=body['publishedRevision'],
         specSha256=spec_hash, hostHash=digest(host), inviteHash=digest(invite), guestHash='',
         createdAt=now, expiresAt=now + ROOM_SECONDS, legacyExpiresAt0=now + ROOM_SECONDS,
         legacyExpiresAt1=now + ROOM_SECONDS, closed=False, hostConnected=False, visibility=visibility,
         connection0='', connection1='', generation0='', generation1='', disconnectedAt0=0, disconnectedAt1=0,
-        **({'match': match} if match is not None else {}))
+        **({'match': match} if match is not None else {}),
+        **({'passphraseHash': passphrase_hash} if passphrase_hash else {}),
+        **({'createFingerprint': fingerprint} if recoverable else {}))
     for _ in range(5):
+        if recoverable:
+            previous = load(api, 'room', room_id)
+            if previous:
+                if not hmac.compare_digest(previous.get('createFingerprint', ''), fingerprint):
+                    fail('This room request was already used with different settings.', 409)
+                previous, _, _ = active_room(api, room_id)
+                return {'roomId': room_id, 'hostToken': host, 'inviteToken': invite,
+                    'expiresAt': int(previous['expiresAt']), 'socketUrl': endpoint,
+                    'gameId': previous['gameId'], 'publishedRevision': int(previous['publishedRevision']),
+                    'specSha256': previous['specSha256'], **match_fields(previous)}
         registry_operations = []
         if visibility == 'public':
             registry = lobby_registry(api)
@@ -538,14 +667,15 @@ def create_room(api, event, body):
                 live.append(candidate)
             registry_operations = [lobby_write(registry, [value['roomId'] for value in live] + [room['roomId']],
                 max([room['expiresAt']] + [int(value['expiresAt']) for value in live]))]
-        if transaction(api, [check, put(room), *registry_operations]):
+        phrase_operations = passphrase_reserve(api, room, now) if passphrase_hash else []
+        if transaction(api, [check, put(room), *registry_operations, *phrase_operations]):
             break
-        if visibility == 'private':
+        if visibility == 'private' and not passphrase_hash:
             fail('The game changed while the room was created. Retry.', 409)
         # A registry race is retriable; a changed publication remains refused by
         # the same exact condition check in every attempted transaction.
     else:
-        fail('The public lobby changed. Retry shortly.', 409)
+        fail('The room list changed. Retry shortly.', 409)
     return {'roomId': room['roomId'], 'hostToken': host, 'inviteToken': invite, 'expiresAt': room['expiresAt'], 'socketUrl': endpoint,
         'gameId': room['gameId'], 'publishedRevision': int(room['publishedRevision']), 'specSha256': room['specSha256'], **match_fields(room)}
 
@@ -583,6 +713,70 @@ def join_room(api, event, room_id, body, public=False):
     fail('This room changed. Retry shortly.', 409)
 
 
+def join_by_passphrase(api, event, body):
+    fields(body, ('requestId', 'guestToken', 'passphrase', 'gameId', 'publishedRevision', 'specSha256'))
+    identifier(body['requestId'])
+    guest_hash = digest(body['guestToken'])
+    identifier(body['gameId']); integer(body['publishedRevision'], 1, 1000000000)
+    if not isinstance(body['specSha256'], str) or not re.fullmatch(r'[a-f0-9]{64}', body['specSha256']):
+        fail('An exact published game binding is required.')
+    passphrase_hash = phrase_digest(body['gameId'], body['passphrase'])
+    body = {**body, 'passphrase': passphrases().normalize(body['passphrase'])}
+    fingerprint = hashlib.sha256(canonical(body).encode('utf-8')).hexdigest()
+    request_hash = hashlib.sha256(canonical(['multiplayer-phrase-request-v1', body['gameId'], body['requestId']]).encode('utf-8')).hexdigest()
+    rate(api, event, 'passphrase-join', 20)
+    rate(api, {'requestContext': {}}, 'all-passphrase-join', 120)
+    endpoint = socket_url()
+    for _ in range(5):
+        now = int(time.time())
+        registry = passphrase_registry(api, body['gameId'])
+        receipts = {request: receipt for request, receipt in registry.get('receipts', {}).items()
+            if int(receipt['expiresAt']) > now} if registry else {}
+        receipt = receipts.get(request_hash)
+        if receipt:
+            if not hmac.compare_digest(receipt['fingerprint'], fingerprint):
+                fail('This join request was already used with different settings.', 409)
+            # Resolve a replay through its original receipt before consulting
+            # the phrase alias. A host may have reused that phrase meanwhile.
+            room, _, _ = active_room(api, receipt['roomId'])
+            if (room.get('guestRequestHash') != request_hash or room.get('guestRequestFingerprint') != fingerprint
+                    or not hmac.compare_digest(room.get('guestHash', ''), guest_hash)):
+                fail('This join request is no longer available. Ask for a new room.', 410)
+        else:
+            if len(receipts) >= PASSPHRASE_RECEIPTS:
+                fail('Passphrase joining is busy for this game. Retry later or use an invitation.', 429)
+            room_id = next((entry['roomId'] for entry in registry['entries']
+                if hmac.compare_digest(entry['digest'], passphrase_hash)), None) if registry else None
+            if not room_id:
+                fail('No open room matches that passphrase for this game.', 403)
+            room, _, check = active_room(api, room_id)
+        if (body['gameId'] != room['gameId'] or body['publishedRevision'] != int(room['publishedRevision'])
+                or not hmac.compare_digest(body['specSha256'], room['specSha256'])):
+            fail('This passphrase belongs to a different game edition. Reload the game.', 409)
+        if receipt:
+            return {'roomId': room['roomId'], 'guestToken': body['guestToken'], 'expiresAt': int(room['expiresAt']),
+                'socketUrl': endpoint, 'gameId': room['gameId'], 'publishedRevision': int(room['publishedRevision']),
+                'specSha256': room['specSha256'], **match_fields(room)}
+        if (room.get('visibility', 'private') != 'private' or room['guestHash']
+                or not hmac.compare_digest(room.get('passphraseHash', ''), passphrase_hash)):
+            fail('No open room matches that passphrase for this game.', 403)
+        if (hmac.compare_digest(guest_hash, room['hostHash'])
+                or room.get('inviteHash') and hmac.compare_digest(guest_hash, room['inviteHash'])):
+            fail('Use a separate guest capability for this room.')
+        changed = revision(room, guestHash=guest_hash, inviteHash='', guestAdmitted=False, guestClaimedAt=now,
+            guestReservationExpiresAt=0, guestRequestHash=request_hash, guestRequestFingerprint=fingerprint,
+            legacyExpiresAt0=int(room.get('legacyExpiresAt0', room['expiresAt'])), legacyExpiresAt1=int(room['expiresAt']))
+        receipts[request_hash] = {'roomId': room['roomId'], 'fingerprint': fingerprint,
+            'expiresAt': now + PASSPHRASE_RETRY_SECONDS}
+        phrase_operation = passphrase_write(registry, room['gameId'], registry['entries'],
+            max(int(registry['expiresAt']), now + PASSPHRASE_RETRY_SECONDS), receipts)
+        if transaction(api, [check, put(changed, room), phrase_operation]):
+            return {'roomId': room['roomId'], 'guestToken': body['guestToken'], 'expiresAt': int(room['expiresAt']),
+                'socketUrl': endpoint, 'gameId': room['gameId'], 'publishedRevision': int(room['publishedRevision']),
+                'specSha256': room['specSha256'], **match_fields(room)}
+    fail('This room changed. Retry the same join request shortly.', 409)
+
+
 def close_room(api, room_id, body):
     fields(body, ('hostToken',))
     supplied = digest(body['hostToken'])
@@ -598,6 +792,8 @@ def dispatch(api, event, method, path, body):
         return public_rooms(api, event, body)
     if method == 'POST' and path == '/multiplayer/rooms':
         return create_room(api, event, body)
+    if method == 'POST' and path == '/multiplayer/join-by-passphrase':
+        return join_by_passphrase(api, event, body)
     match = re.fullmatch(r'/multiplayer/rooms/([^/]+)(/join|/lobby-join)?', path)
     if match and method == 'POST' and match[2] == '/join':
         return join_room(api, event, match[1], body)
@@ -809,7 +1005,8 @@ def admit(api, connection, body):
             lastSeen=now, expiresAt=connection_expiry, seq=-1, **({'leaseVersion': 1} if renewable else {}),
             **({'flowVersion': body['flowVersion']} if 'flowVersion' in body else {}))
         lobby_operations = lobby_advertise(api, changed_room, expires_at) if seat == 0 else lobby_remove(api, changed_room)
-        if transaction(api, [check, put(changed_room, room), put(changed_connection, connection), *lobby_operations]):
+        phrase_operations = passphrase_renew(api, changed_room, expires_at) if renewable else []
+        if transaction(api, [check, put(changed_room, room), put(changed_connection, connection), *lobby_operations, *phrase_operations]):
             if old_id and old_id != connection['connectionId']:
                 disconnect_socket(api, old_id)
             post(api, connection['connectionId'], {'type': 'ready', 'roomId': room['roomId'], 'seat': seat, 'expiresAt': connection_expiry,
@@ -931,7 +1128,7 @@ def message(api, event):
         lease_operations = [put(revision(room, expiresAt=expires_at,
             legacyExpiresAt0=int(room.get('legacyExpiresAt0', room['expiresAt'])),
             legacyExpiresAt1=int(room.get('legacyExpiresAt1', room['expiresAt']))), room),
-            *lobby_advertise(api, room, expires_at)] if renew else [room_check(room)]
+            *lobby_advertise(api, room, expires_at), *passphrase_renew(api, room, expires_at)] if renew else [room_check(room)]
         if transaction(api, [check, *lease_operations, put(changed, connection)]):
             if duplicate:
                 acknowledge(api, connection, kind, requested_seq)

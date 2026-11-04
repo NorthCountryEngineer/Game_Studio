@@ -20,7 +20,7 @@ ROOM_SECONDS = 7200
 MAX_ROOMS = 32
 CREATE_LIMIT = 30
 SOURCE_CREATE_LIMIT = 6
-_engine = _narration = None
+_engine = _narration = _passphrases = None
 
 
 class MafiaError(Exception):
@@ -54,6 +54,21 @@ def narration():
 def cached_bank(api):
     try: return narration().load_bank(api)
     except narration().NarrationError as error: raise MafiaError(error.status, error.message)
+
+
+def passphrases():
+    global _passphrases
+    if _passphrases is None: _passphrases = load_module('room_passphrases')
+    return _passphrases
+
+
+def phrase_call(operation, *args):
+    try: return getattr(passphrases(), operation)(*args)
+    except passphrases().PassphraseError as error: fail(error.message, error.status)
+
+
+def phrase_body(body):
+    return {**body, 'passphrase': phrase_call('normalize', body['passphrase'])} if 'passphrase' in body else body
 
 
 def canonical(value):
@@ -161,13 +176,16 @@ def output(state, previous, player_id, now):
     try: room = engine().project(state['game'], player_id, now=now)
     except engine().MafiaError as error: raise MafiaError(error.status, error.message)
     room.update(revision=int(previous['revision']), expiresAt=state['expiresAt'])
+    if state.get('passphraseHash'): room['passphraseEnabled'] = True
     room['self']['actionSequence'] = state['members'][player_id].get('sequence', 0)
     return {'room': room}
 
 
 def create(api, event, body):
     fields(body, {'requestId', 'name', 'avatar', 'playerToken', 'inviteToken'},
-        {'narratorMode', 'maxPlayers', 'nightSeconds', 'discussionSeconds', 'votingSeconds'})
+        {'narratorMode', 'maxPlayers', 'nightSeconds', 'discussionSeconds', 'votingSeconds', 'passphrase'})
+    body = phrase_body(body)
+    phrase_hash = phrase_call('digest', 'mafia', body['passphrase']) if 'passphrase' in body else None
     room_id = identifier(body['requestId'])
     player_token, invite = token(body['playerToken']), token(body['inviteToken'])
     if hmac.compare_digest(player_token, invite): fail('Use separate room and player capabilities.')
@@ -204,6 +222,8 @@ def create(api, event, body):
             if expired_id != room_id:
                 operations.append({'Delete': {'TableName': os.environ['GAME_PUBLIC_TABLE'], 'Key': {'id': key('game-mafia-room', expired_id)}}})
             del index['rooms'][expired_id]
+        phrase_call('prune', index)
+        if phrase_hash: phrase_call('claim', index, phrase_hash, room_id)
         if len(index['rooms']) >= MAX_ROOMS: fail('All live rooms are in use. Try again after another room ends.', 429)
         bucket = now // 600
         if index.get('bucket') != bucket: index.update(bucket=bucket, sources={}, count=0)
@@ -216,6 +236,7 @@ def create(api, event, body):
         index['rooms'][room_id] = expires
         state = {'roomId': room_id, 'game': game, 'members': {room_id: {'tokenHash': digest(player_token), 'sequence': 0}},
             'createFingerprint': fingerprint, 'inviteHash': digest(invite), 'expiresAt': expires}
+        if phrase_hash: state['passphraseHash'] = phrase_hash
         room_op = put('game-mafia-room', room_id, state, None)
         operations.extend([room_op, put('game-mafia-index', '', index, index_row)])
         if transact(api, operations):
@@ -226,21 +247,35 @@ def create(api, event, body):
     fail('The room service is busy. Retry the same request shortly.', 503)
 
 
-def join(api, room_id, body):
-    fields(body, {'requestId', 'name', 'avatar', 'inviteToken', 'playerToken'})
-    player_id, supplied = identifier(body['requestId']), token(body['inviteToken'])
+def join(api, room_id, body, *, phrase_hash=None, phrase_kind=None):
+    if phrase_hash:
+        fields(body, {'requestId', 'name', 'avatar', 'playerToken', 'passphrase'})
+        body = phrase_body(body)
+        player_id, supplied = identifier(body['requestId']), None
+    else:
+        fields(body, {'requestId', 'name', 'avatar', 'inviteToken', 'playerToken'})
+        player_id, supplied = identifier(body['requestId']), token(body['inviteToken'])
     player_token = token(body['playerToken'])
-    if hmac.compare_digest(player_token, supplied): fail('Use separate invitation and player capabilities.')
+    if supplied and hmac.compare_digest(player_token, supplied): fail('Use separate invitation and player capabilities.')
     fingerprint = digest(canonical(body))
     for attempt in range(5):
         now = int(time.time())
-        state, previous = open_room(api, room_id, now)
-        if not hmac.compare_digest(digest(supplied), state['inviteHash']): fail('This invitation is not valid for this room.', 403)
+        try: state, previous = open_room(api, room_id, now)
+        except MafiaError as error:
+            if phrase_hash and error.status in {404, 410}: fail(passphrases().UNAVAILABLE, 404)
+            raise
+        if phrase_hash:
+            if not hmac.compare_digest(phrase_hash, state.get('passphraseHash', '')):
+                fail(passphrases().UNAVAILABLE, 404)
+        elif not hmac.compare_digest(digest(supplied), state['inviteHash']): fail('This invitation is not valid for this room.', 403)
         if player_id in state['members']:
             if state['members'][player_id].get('joinFingerprint') != fingerprint: fail('This join request has already been used.', 409)
             result = output(state, previous, player_id, now)
             result['session'] = {'roomId': room_id, 'playerId': player_id, 'token': player_token}
             return result
+        if phrase_hash and (state['game']['phase'] != 'lobby' or len(state['members']) >= 25 or
+                len([player for player in state['game']['players'] if not player.get('left') and player['id'] != state['game']['narratorId']]) >= state['game']['settings']['maxPlayers']):
+            fail(passphrases().UNAVAILABLE, 404)
         if len(state['members']) >= 25: fail('This room has reached its participant limit.', 409)
         if any(hmac.compare_digest(digest(player_token), entry['tokenHash']) for entry in state['members'].values()):
             fail('Use a new player session to join.', 409)
@@ -248,7 +283,15 @@ def join(api, room_id, body):
         except engine().MafiaError as error: raise MafiaError(error.status, error.message)
         state['members'][player_id] = {'tokenHash': digest(player_token), 'joinFingerprint': fingerprint, 'sequence': 0}
         operation = put('game-mafia-room', room_id, state, previous)
-        if transact(api, [operation]):
+        operations = [operation]
+        if phrase_hash:
+            index_row = read(api, 'game-mafia-index')
+            if not index_row: fail(passphrases().UNAVAILABLE, 404)
+            index = state_of(index_row)
+            request = digest(canonical([phrase_kind, player_id]))
+            phrase_call('remember', index, request, fingerprint, room_id, now + ROOM_SECONDS, now)
+            operations.append(put('game-mafia-index', '', index, index_row))
+        if transact(api, operations):
             result = output(state, operation['Put']['Item'], player_id, now)
             result['session'] = {'roomId': room_id, 'playerId': player_id, 'token': player_token}
             return result
@@ -256,9 +299,37 @@ def join(api, room_id, body):
     fail('The room is busy. Retry joining shortly.', 503)
 
 
+def join_by_passphrase(api, event, body):
+    fields(body, {'requestId', 'name', 'avatar', 'playerToken', 'passphrase'})
+    body = phrase_body(body)
+    player_id = identifier(body['requestId'])
+    token(body['playerToken'])
+    try: engine().validate_player({'id': player_id, 'name': body['name'], 'avatar': body['avatar']})
+    except engine().MafiaError as error: raise MafiaError(error.status, error.message)
+    scope = 'mafia'
+    hashed = phrase_call('digest', scope, body['passphrase'])
+    source_ip = event.get('requestContext', {}).get('http', {}).get('sourceIp')
+    if not isinstance(source_ip, str) or not 1 <= len(source_ip) <= 64: fail('Room admission is unavailable.', 503)
+    for attempt in range(5):
+        now = int(time.time())
+        index_row = read(api, 'game-mafia-index')
+        index = state_of(index_row) if index_row else {'rooms': {}, 'bucket': now // 600, 'sources': {}, 'count': 0}
+        if not isinstance(index.get('rooms'), dict) or len(index['rooms']) > MAX_ROOMS: fail('Room admission needs administrator attention.', 503)
+        source = digest(canonical([os.environ['CORE_ORGANIZATION_ID'], os.environ['CORE_SERVICE_ID'], now // 60, source_ip]))
+        phrase_call('take_attempt', index, source, now)
+        receipt = phrase_call('admissions', index, now).get(digest(canonical([scope, player_id])))
+        room_id = receipt['roomId'] if receipt else phrase_call('registry', index).get(hashed)
+        if not transact(api, [put('game-mafia-index', '', index, index_row)]): pause(attempt); continue
+        if receipt and receipt['fingerprint'] != digest(canonical(body)):
+            fail('This join request has already been used. Start a new request to join another room.', 409)
+        if not room_id or index['rooms'].get(room_id, 0) <= now: fail(passphrases().UNAVAILABLE, 404)
+        return join(api, room_id, body, phrase_hash=hashed, phrase_kind=scope)
+    fail('The room service is busy. Retry the same request shortly.', 503)
+
+
 def renew_operations(api, state, now):
     terminal = state['game']['phase'] in {'closed', 'finished'}
-    if terminal and state.get('retiring'): return []
+    if terminal and state.get('retiring') and not (state['game']['phase'] == 'closed' and state.get('passphraseHash') and not state.get('passphraseReleased')): return []
     if not terminal and not state.get('retiring') and state['expiresAt'] - now > ROOM_SECONDS // 2: return []
     index_row = read(api, 'game-mafia-index')
     if not index_row: fail('The room lease could not be renewed.', 503)
@@ -268,6 +339,10 @@ def renew_operations(api, state, now):
     if terminal: state['retiring'] = True
     else: state.pop('retiring', None)
     index['rooms'][state['roomId']] = state['expiresAt']
+    phrase_call('admissions', index, now)
+    if state['game']['phase'] == 'closed' and state.get('passphraseHash'):
+        phrase_call('release', index, state['passphraseHash'], state['roomId'])
+        state['passphraseReleased'] = True
     return [put('game-mafia-index', '', index, index_row)]
 
 
@@ -316,7 +391,7 @@ def room_request(api, event, room_id, body=None):
             rate['count'] += 1
             session.update(sequence=body['sequence'], lastFingerprint=fingerprint, rate=rate)
             changed = True
-            if state['game']['phase'] in {'closed', 'finished'} and not state.get('retiring'):
+            if state['game']['phase'] in {'closed', 'finished'} and (not state.get('retiring') or state['game']['phase'] == 'closed' and state.get('passphraseHash') and not state.get('passphraseReleased')):
                 operations = renew_operations(api, state, now)
             elif state['game']['phase'] == 'lobby' and state.get('retiring'):
                 operations = renew_operations(api, state, now)
@@ -335,6 +410,7 @@ def dispatch(api, event, method, path, body):
         except narration().NarrationError as error: raise MafiaError(error.status, error.message)
         return {'minPlayers': 5, 'maxPlayers': 24, **config}
     if path == '/mafia/rooms' and method == 'POST': return create(api, event, body)
+    if path == '/mafia/join-by-passphrase' and method == 'POST': return join_by_passphrase(api, event, body)
     if path == '/mafia/narration' and method == 'POST':
         try: return narration().generate(api, event, body)
         except narration().NarrationError as error: raise MafiaError(error.status, error.message)

@@ -1,4 +1,5 @@
 import { validateVersusMatch, type VersusMatch } from './game-versus';
+import { normalizeRoomPassphrase } from './room-passphrases';
 
 /** Anonymous two-seat room capabilities live only in the current page's memory. */
 export type MultiplayerSeat = 0 | 1;
@@ -321,23 +322,40 @@ export function connectMultiplayer(room: MultiplayerRoom, options: {
     close() { end('ended', 'closed'); },
   };
 }
+export class MultiplayerAPIError extends Error { constructor(message: string, readonly status: number) { super(message); } }
+
+export function createMultiplayerSeatToken(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(32));
+  return btoa(String.fromCharCode(...bytes)).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
+}
+
 export async function multiplayerRequest(apiBase: string, path: string, method: 'GET' | 'POST' | 'DELETE', body?: unknown): Promise<unknown> {
   let url: URL; try { url = new URL(apiBase); } catch { throw new Error('Live multiplayer needs the connected Game Studio service.'); }
   if (url.username || url.password || url.search || url.hash || (url.protocol !== 'https:' && !(url.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)))) throw new Error('Live multiplayer needs a secure Game Studio service.');
   if (!['GET', 'POST', 'DELETE'].includes(method)) throw new Error('The game room request is invalid.');
   const roomPath = /^\/multiplayer\/rooms\/([0-9a-f-]{36})(?:\/(join|lobby-join))?$/.exec(path);
   const validRoomPath = !!roomPath && roomPattern.test(roomPath[1]);
-  if (method === 'GET' ? path !== '/multiplayer/lobby' || body !== undefined : body === undefined || (method === 'POST' ? path !== '/multiplayer/rooms' && !(validRoomPath && roomPath[2]) : !(validRoomPath && !roomPath[2]))) throw new Error('The game room request is invalid.');
+  const phraseJoin = path === '/multiplayer/join-by-passphrase';
+  const phraseCreate = path === '/multiplayer/rooms' && object(body) && Object.hasOwn(body, 'passphrase');
+  if (method === 'GET' ? path !== '/multiplayer/lobby' || body !== undefined : body === undefined || (method === 'POST' ? path !== '/multiplayer/rooms' && !phraseJoin && !(validRoomPath && roomPath[2]) : !(validRoomPath && !roomPath[2]))) throw new Error('The game room request is invalid.');
   try {
     const response = await fetch(`${apiBase.replace(/\/$/, '')}${path}`, { method, ...(method === 'GET' ? { cache: 'no-store' as const } : { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }), keepalive: method === 'DELETE', credentials: 'omit', redirect: 'error', referrerPolicy: 'no-referrer', signal: AbortSignal.timeout(12000) });
     if (!response.ok) {
-      if (response.status === 409) throw new Error('This room is full, or the published game has changed. Ask for a new invitation.');
-      if ([404, 410, 401, 403].includes(response.status)) throw new Error('This invitation is unavailable or expired. Ask for a new invitation.');
-      if (response.status === 429) throw new Error('Too many room requests. Wait a moment before trying again.');
-      throw new Error('The live game service could not complete this request.');
+      if (phraseJoin && [401, 403, 404, 409, 410].includes(response.status)) throw new MultiplayerAPIError('This passphrase cannot join an open room for this game. Check the phrase with the host.', response.status);
+      if (phraseCreate && response.status === 409) throw new MultiplayerAPIError('This passphrase may already be in use, or the game edition changed. Choose another phrase or reload the game.', response.status);
+      if (response.status === 409) throw new MultiplayerAPIError('This room is full, or the published game has changed. Ask for a new invitation.', response.status);
+      if ([404, 410, 401, 403].includes(response.status)) throw new MultiplayerAPIError('This invitation is unavailable or expired. Ask for a new invitation.', response.status);
+      if (response.status === 429) throw new MultiplayerAPIError('Too many room requests. Wait a moment before trying again.', response.status);
+      throw new MultiplayerAPIError('The live game service could not complete this request.', response.status);
     }
     return await response.json();
   } catch (error) { if (error instanceof Error && ['This ', 'Too many ', 'The live '].some(prefix => error.message.startsWith(prefix))) throw error; throw new Error('The live game service could not be reached. Please try again.'); }
+}
+
+/** Passphrases travel only in an anonymous request body, scoped to the exact publication. */
+export function joinMultiplayerByPassphrase(apiBase: string, binding: { game_id: string; published_revision: number; spec_sha256: string }, passphrase: string, identity: { requestId: string; guestToken: string }): Promise<unknown> {
+  if (!identity || !roomPattern.test(identity.requestId) || !tokenPattern.test(identity.guestToken)) throw new Error('The game room request is invalid.');
+  return multiplayerRequest(apiBase, '/multiplayer/join-by-passphrase', 'POST', { requestId: identity.requestId, guestToken: identity.guestToken, passphrase: normalizeRoomPassphrase(passphrase), gameId: binding.game_id, publishedRevision: binding.published_revision, specSha256: binding.spec_sha256 });
 }
 
 /** The relay is an explicit installation setting, separate from the Core API. */

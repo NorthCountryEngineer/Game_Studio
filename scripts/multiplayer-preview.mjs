@@ -47,7 +47,7 @@ try {
     if (request.method === 'GET' && request.url === '/health') { response.setHeader('Content-Type', 'application/json'); response.end('{"status":"ok","mode":"synthetic-preview"}'); return; }
     const clock = request.method === 'POST' && request.url === '/__multiplayer-preview/advance-clock';
     const lobby = request.method === 'GET' && request.url === '/multiplayer/lobby';
-    const room = request.method === 'POST' && /^\/multiplayer\/rooms(?:\/[0-9a-f-]{36}\/(?:join|lobby-join))?$/.test(request.url || '') || request.method === 'DELETE' && /^\/multiplayer\/rooms\/[0-9a-f-]{36}$/.test(request.url || '');
+    const room = request.method === 'POST' && (request.url === '/multiplayer/join-by-passphrase' || /^\/multiplayer\/rooms(?:\/[0-9a-f-]{36}\/(?:join|lobby-join))?$/.test(request.url || '')) || request.method === 'DELETE' && /^\/multiplayer\/rooms\/[0-9a-f-]{36}$/.test(request.url || '');
     if (!clock && !lobby && !room) { response.writeHead(404); response.end(); return; }
     if (clock && request.headers.origin !== origin) { response.writeHead(403); response.end(); return; }
     let raw = ''; for await (const chunk of request) { raw += chunk; if (Buffer.byteLength(raw) > 2048) { response.writeHead(413); response.end(); return; } }

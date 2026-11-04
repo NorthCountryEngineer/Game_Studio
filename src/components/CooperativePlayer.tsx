@@ -7,7 +7,8 @@ import { PlayerSurface } from './PlayerSurface';
 import { isCore } from '../lib/core';
 import { createPublicationBinding } from '../lib/game-scoring';
 import { watchMultiplayerLobbyEntry } from '../lib/game-lobby';
-import { connectMultiplayer, createMultiplayerInvitation, loadMultiplayerAPI, multiplayerRequest, parseMultiplayerInvitation, sameMultiplayerPublication, sameMultiplayerMatch, watchMultiplayerInvitations, validMultiplayerInput, validMultiplayerSequence, validateMultiplayerRoom, type MultiplayerConnection, type MultiplayerRoom, type MultiplayerStatus } from '../lib/game-multiplayer';
+import { normalizeRoomPassphrase, roomPassphraseRetryExpired, ROOM_PASSPHRASE_HELP, ROOM_PASSPHRASE_RETRY_MS } from '../lib/room-passphrases';
+import { connectMultiplayer, createMultiplayerInvitation, createMultiplayerSeatToken, joinMultiplayerByPassphrase, loadMultiplayerAPI, MultiplayerAPIError, multiplayerRequest, parseMultiplayerInvitation, sameMultiplayerPublication, sameMultiplayerMatch, watchMultiplayerInvitations, validMultiplayerInput, validMultiplayerSequence, validateMultiplayerRoom, type MultiplayerConnection, type MultiplayerRoom, type MultiplayerStatus } from '../lib/game-multiplayer';
 
 const apiBase = () => {
   const preview = import.meta.env.VITE_MULTIPLAYER_API_URL;
@@ -63,8 +64,17 @@ export function CooperativePlayer({ spec, room, onStatus, onComplete }: { spec: 
   </PlayerSurface>;
 }
 
+type PassphraseAdmission = {
+  kind: 'host' | 'join'; startedAt: number; base: string;
+  binding: { game_id: string; published_revision: number; spec_sha256: string };
+  body: { requestId: string; passphrase: string; gameId: string; publishedRevision: number; specSha256?: string; visibility?: 'private'; match?: VersusMatch; hostToken?: string; guestToken?: string };
+};
+
 export function CooperativeGame({ game, children, onComplete }: { game: Game & { spec: ArcadeGameSpec }; children: ReactNode; onComplete?: (result: GameResult) => void }) {
   const [room, setRoom] = useState<MultiplayerRoom>(), [invitation, setInvitation] = useState(''), [joinText, setJoinText] = useState(''), [showJoin, setShowJoin] = useState(false);
+  const [passphrase, setPassphrase] = useState(''), [joinPassphrase, setJoinPassphrase] = useState(''), [hostedPassphrase, setHostedPassphrase] = useState('');
+  const [pendingAdmission, setPendingAdmission] = useState<PassphraseAdmission>();
+  const [, refreshAdmissionClock] = useState(Date.now());
   const [visibility, setVisibility] = useState<'private' | 'public'>('private');
   const canCooperate = isCooperativeGameSpec(game.spec), canVersus = isVersusEligible(game.spec);
   const [mode, setMode] = useState<'cooperative' | 'versus'>(() => canCooperate ? 'cooperative' : 'versus');
@@ -72,25 +82,57 @@ export function CooperativeGame({ game, children, onComplete }: { game: Game & {
   const [status, setStatus] = useState<MultiplayerStatus>('connecting'), [reason, setReason] = useState(''), [busy, setBusy] = useState(false), [error, setError] = useState(''), [copied, setCopied] = useState(false);
   const lock = useRef(false), active = useRef(true), currentRoom = useRef<MultiplayerRoom>(), latestJoin = useRef<(fragment: string) => void>(() => {}), latestLobbyJoin = useRef<(roomId: string) => void>(() => {}), roomApi = useRef('');
   useEffect(() => { active.current = true; return () => { active.current = false; }; }, []);
+  useEffect(() => {
+    if (!pendingAdmission) return;
+    const timer = window.setTimeout(() => refreshAdmissionClock(Date.now()), Math.max(0, pendingAdmission.startedAt + ROOM_PASSPHRASE_RETRY_MS - Date.now()));
+    return () => window.clearTimeout(timer);
+  }, [pendingAdmission]);
   useEffect(() => { const base = roomApi.current; return () => { if (room?.seat === 0) void multiplayerRequest(base, `/multiplayer/rooms/${room.roomId}`, 'DELETE', { hostToken: room.token }).catch(() => {}); }; }, [room]);
   async function host(roomVisibility: 'private' | 'public') {
-    if (lock.current || currentRoom.current) return; lock.current = true; setBusy(true); setError(''); setCopied(false);
+    if (lock.current || currentRoom.current || pendingAdmission?.kind === 'join') return;
+    if (pendingAdmission && roomPassphraseRetryExpired(pendingAdmission.startedAt, Date.now())) { setError('This unconfirmed request is too old to retry safely. Check with the other player, then choose Start over.'); return; }
+    lock.current = true; setBusy(true); setError(''); setCopied(false);
     try {
+      const phrase = pendingAdmission?.body.passphrase ?? (passphrase.trim() ? normalizeRoomPassphrase(passphrase) : undefined);
+      if (phrase && roomVisibility !== 'private') throw new Error('Choose a private room to use a passphrase.');
       if (mode === 'versus' ? !canVersus : !canCooperate) throw new Error('This two-player mode is unavailable for this game.');
-      const match: VersusMatch | undefined = mode === 'versus' ? validateVersusMatch({ mode: 'versus', lives, timeLimit }) : undefined;
+      const match: VersusMatch | undefined = pendingAdmission ? pendingAdmission.body.match : mode === 'versus' ? validateVersusMatch({ mode: 'versus', lives, timeLimit }) : undefined;
       if (mode === 'versus' && !match) throw new Error('Choose 1–5 lives and a 30–180 second round.');
-      const [base, binding] = await Promise.all([apiBase(), createPublicationBinding(game)]);
+      const [base, binding] = pendingAdmission ? [pendingAdmission.base, pendingAdmission.binding] : await Promise.all([apiBase(), createPublicationBinding(game)]);
       if (!active.current) return;
-      const response = await multiplayerRequest(base, '/multiplayer/rooms', 'POST', { gameId: game.id, publishedRevision: game.publishedRevision ?? game.revision, visibility: roomVisibility, ...(match ? { match } : {}) });
+      let attempt = pendingAdmission;
+      if (phrase && !attempt) {
+        attempt = { kind: 'host', startedAt: Date.now(), base, binding, body: { requestId: crypto.randomUUID(), hostToken: createMultiplayerSeatToken(), gameId: binding.game_id, publishedRevision: binding.published_revision, visibility: 'private', ...(match ? { match } : {}), passphrase: phrase } };
+        setPendingAdmission(attempt);
+      }
+      const response = await multiplayerRequest(base, '/multiplayer/rooms', 'POST', attempt?.body ?? { gameId: game.id, publishedRevision: game.publishedRevision ?? game.revision, visibility: roomVisibility, ...(match ? { match } : {}) });
       const next = validateMultiplayerRoom(response, 0, !isCore); if (!next) throw new Error('The live service returned an invalid room. Please try again.');
+      if (attempt && next.token !== attempt.body.hostToken) throw new Error('The live room did not match your requested host seat. Retry the same request.');
       if (!sameMultiplayerPublication(next, binding) || !sameMultiplayerMatch(next.match, match)) { void multiplayerRequest(base, `/multiplayer/rooms/${next.roomId}`, 'DELETE', { hostToken: next.token }).catch(() => {}); throw new Error('The game edition or match settings changed. Reload before starting a new room.'); }
       if (!active.current) { void multiplayerRequest(base, `/multiplayer/rooms/${next.roomId}`, 'DELETE', { hostToken: next.token }).catch(() => {}); return; }
-      roomApi.current = base; setVisibility(roomVisibility); setInvitation(createMultiplayerInvitation(window.location.origin, game.id, { roomId: next.roomId, inviteToken: (response as { inviteToken: string }).inviteToken })); currentRoom.current = next; setRoom(next); setStatus('connecting'); setReason('');
-    } catch (value) { if (active.current) setError(value instanceof Error ? value.message : 'The live room could not be created.'); }
+      roomApi.current = base; setPendingAdmission(undefined); setVisibility(roomVisibility); setHostedPassphrase(phrase ?? ''); setPassphrase(''); setInvitation(createMultiplayerInvitation(window.location.origin, game.id, { roomId: next.roomId, inviteToken: (response as { inviteToken: string }).inviteToken })); currentRoom.current = next; setRoom(next); setStatus('connecting'); setReason('');
+    } catch (value) { if (active.current) { setError(value instanceof Error ? value.message : 'The live room could not be created.'); if (value instanceof MultiplayerAPIError && value.status >= 400 && value.status < 500 && ![408, 429].includes(value.status)) setPendingAdmission(undefined); } }
+    finally { lock.current = false; if (active.current) setBusy(false); }
+  }
+  async function joinByPassphrase() {
+    if (lock.current || currentRoom.current || pendingAdmission?.kind === 'host') return;
+    if (pendingAdmission && roomPassphraseRetryExpired(pendingAdmission.startedAt, Date.now())) { setError('This unconfirmed request is too old to retry safely. Check with the host, then choose Start over.'); return; }
+    lock.current = true; setBusy(true); setError('');
+    try {
+      const phrase = pendingAdmission?.body.passphrase ?? normalizeRoomPassphrase(joinPassphrase);
+      const [base, binding] = pendingAdmission ? [pendingAdmission.base, pendingAdmission.binding] : await Promise.all([apiBase(), createPublicationBinding(game)]);
+      if (!active.current) return;
+      const attempt = pendingAdmission ?? { kind: 'join', startedAt: Date.now(), base, binding, body: { requestId: crypto.randomUUID(), guestToken: createMultiplayerSeatToken(), passphrase: phrase, gameId: binding.game_id, publishedRevision: binding.published_revision, specSha256: binding.spec_sha256 } } as PassphraseAdmission;
+      if (!pendingAdmission) setPendingAdmission(attempt);
+      const response = await joinMultiplayerByPassphrase(base, binding, phrase, { requestId: attempt.body.requestId, guestToken: attempt.body.guestToken! });
+      const next = validateMultiplayerRoom(response, 1, !isCore);
+      if (!next || next.token !== attempt.body.guestToken || !sameMultiplayerPublication(next, binding) || (next.match ? !canVersus : !canCooperate)) throw new Error('The live room could not be verified. Check the game with the host, then retry the same request.');
+      if (active.current) { roomApi.current = base; setPendingAdmission(undefined); currentRoom.current = next; setRoom(next); setInvitation(''); setJoinPassphrase(''); setPassphrase(''); setShowJoin(false); setStatus('connecting'); setReason(''); }
+    } catch (value) { if (active.current) { setError(value instanceof Error ? value.message : 'The passphrase could not be used.'); if (value instanceof MultiplayerAPIError && value.status >= 400 && value.status < 500 && ![408, 429].includes(value.status)) setPendingAdmission(undefined); } }
     finally { lock.current = false; if (active.current) setBusy(false); }
   }
   async function join(value: string) {
-    if (lock.current || currentRoom.current) return;
+    if (lock.current || currentRoom.current || pendingAdmission) return;
     const parsed = parseMultiplayerInvitation(value, window.location.origin, game.id); if (!parsed) { setError('Paste the invitation link for this game from the other player.'); return; }
     lock.current = true; setBusy(true); setError(''); setJoinText('');
     try {
@@ -103,7 +145,7 @@ export function CooperativeGame({ game, children, onComplete }: { game: Game & {
     finally { lock.current = false; if (active.current) setBusy(false); }
   }
   async function joinLobby(roomId: string) {
-    if (lock.current || currentRoom.current) { setError('Leave your current room before joining another game.'); return; }
+    if (lock.current || currentRoom.current || pendingAdmission) { setError('Finish your current room request before joining another game.'); return; }
     lock.current = true; setBusy(true); setError('');
     try {
       const [base, binding] = await Promise.all([apiBase(), createPublicationBinding(game)]);
@@ -118,7 +160,7 @@ export function CooperativeGame({ game, children, onComplete }: { game: Game & {
   useEffect(() => {
     latestJoin.current = fragment => {
       if (currentRoom.current) { setError('Leave your current room before opening another invitation.'); return; }
-      if (lock.current) { setError('Finish the current room request before opening another invitation.'); return; }
+      if (lock.current || pendingAdmission) { setError('Finish the current room request before opening another invitation.'); return; }
       void join(fragment);
     };
     latestLobbyJoin.current = roomId => void joinLobby(roomId);
@@ -127,12 +169,13 @@ export function CooperativeGame({ game, children, onComplete }: { game: Game & {
   useEffect(() => watchMultiplayerInvitations(window, fragment => latestJoin.current(fragment)), []);
   async function copy() { try { await navigator.clipboard.writeText(invitation); setCopied(true); setError(''); } catch { setError('Copy the invitation from the field and send it privately to the other player.'); } }
   const ended = status === 'ended' || status === 'expired';
+  const roomBusy = busy || Boolean(pendingAdmission), admissionExpired = Boolean(pendingAdmission && roomPassphraseRetryExpired(pendingAdmission.startedAt, Date.now()));
   return <>
     <section className="game-cooperative-options" aria-labelledby="game-play-mode-heading">
       <div className="game-section-heading"><div><span className="eyebrow">PLAY YOUR WAY</span><h2 id="game-play-mode-heading">{canVersus ? canCooperate ? 'Solo, together or versus' : 'Solo or versus' : 'Solo or together'}</h2></div>{room && <span className="game-cooperative-seat">Player {room.seat + 1} of 2</span>}</div>
       {!room ? <>
-        <p>Play solo, invite a friend privately, or offer an open seat on the homepage. Both players use their own session. No account, name, chat or camera is needed.</p>
-        {canVersus && <fieldset disabled={busy} className="game-versus-settings"><legend>Choose your two-player game</legend>
+        <p>Play solo, create a private room with a passphrase or invitation, or offer an open seat on the homepage. No account is needed.</p>
+        {canVersus && <fieldset disabled={roomBusy} className="game-versus-settings"><legend>Choose your two-player game</legend>
           <label>Two-player mode<select value={mode} onChange={event => setMode(event.target.value as 'cooperative' | 'versus')}>
             {canCooperate && <option value="cooperative">Play together · no friendly fire</option>}
             <option value="versus">Versus · shoot each other</option>
@@ -142,15 +185,20 @@ export function CooperativeGame({ game, children, onComplete }: { game: Game & {
             <label>Round length<select value={timeLimit} onChange={event => setTimeLimit(Number(event.target.value))}>{[30, 60, 90, 120, 150, 180].map(value => <option key={value} value={value}>{value} seconds</option>)}</select></label>
           </div><p className="game-small-note">Face off in the first saved arena. The last ship standing wins. At the time limit, more remaining lives wins; equal lives are a draw. Brief respawn protection gives each ship a safe restart. Your solo game and saved levels stay the same.</p></>}
         </fieldset>}
-        <div className="game-cooperative-actions"><button className="button secondary" disabled={busy} aria-pressed={!showJoin} onClick={() => { setShowJoin(false); setError(''); }}>Play solo</button><button className="button primary" disabled={busy} onClick={() => void host('private')}>{busy && !showJoin ? 'Connecting…' : mode === 'versus' ? 'Invite an opponent' : 'Invite a friend'}</button><button className="button secondary" disabled={busy} onClick={() => void host('public')}>{mode === 'versus' ? 'Find an opponent' : 'Find a partner'}</button><button className="button secondary" disabled={busy} aria-expanded={showJoin} onClick={() => setShowJoin(value => !value)}>Join using invitation</button></div>
-        {showJoin && <form className="game-cooperative-invitation" onSubmit={event => { event.preventDefault(); void join(joinText); }}><label htmlFor="game-coop-join">Invitation link<input id="game-coop-join" type="text" value={joinText} onChange={event => setJoinText(event.target.value)} autoComplete="off" autoCapitalize="none" spellCheck={false} maxLength={2300} placeholder="Paste the private invitation link" disabled={busy} /></label><button className="button primary" disabled={busy || !joinText.trim()}>{busy ? 'Joining…' : 'Join game'}</button></form>}
+        <div className="game-room-passphrase"><label htmlFor="game-coop-host-passphrase">Set a passphrase for your private room <span>(optional)</span><input id="game-coop-host-passphrase" value={passphrase} onChange={event => setPassphrase(event.target.value)} autoComplete="off" autoCapitalize="none" spellCheck={false} maxLength={96} disabled={roomBusy} placeholder="e.g. purple comet" aria-describedby="game-coop-phrase-help" /></label><p id="game-coop-phrase-help" className="game-small-note">{ROOM_PASSPHRASE_HELP} Share it with your friend, who can enter it on this game’s page.</p></div>
+        <div className="game-cooperative-actions"><button className="button secondary" disabled={roomBusy} aria-pressed={!showJoin} onClick={() => { setShowJoin(false); setError(''); }}>Play solo</button><button className="button primary" disabled={roomBusy} onClick={() => void host('private')}>{busy && !showJoin ? 'Connecting…' : passphrase.trim() ? 'Create private room' : mode === 'versus' ? 'Invite an opponent' : 'Invite a friend'}</button><button className="button secondary" disabled={roomBusy || Boolean(passphrase.trim())} onClick={() => void host('public')}>{mode === 'versus' ? 'Find an opponent' : 'Find a partner'}</button><button className="button secondary" disabled={roomBusy} aria-expanded={showJoin} onClick={() => setShowJoin(value => !value)}>Join using invitation</button></div>
+        {passphrase.trim() && <p className="game-small-note">This creates a private room. Clear the passphrase to offer a public seat.</p>}
+        <form className="game-cooperative-invitation game-passphrase-join" onSubmit={event => { event.preventDefault(); void joinByPassphrase(); }}><label htmlFor="game-coop-join-passphrase">Join with a passphrase<input id="game-coop-join-passphrase" value={joinPassphrase} onChange={event => setJoinPassphrase(event.target.value)} autoComplete="off" autoCapitalize="none" spellCheck={false} maxLength={96} disabled={roomBusy} placeholder="Enter the host’s passphrase" /></label><button className="button primary" disabled={roomBusy || !joinPassphrase.trim()}>{busy ? 'Connecting…' : 'Join room'}</button></form>
+        {showJoin && <form className="game-cooperative-invitation" onSubmit={event => { event.preventDefault(); void join(joinText); }}><label htmlFor="game-coop-join">Invitation link<input id="game-coop-join" type="text" value={joinText} onChange={event => setJoinText(event.target.value)} autoComplete="off" autoCapitalize="none" spellCheck={false} maxLength={2300} placeholder="Paste the private invitation link" disabled={roomBusy} /></label><button className="button primary" disabled={roomBusy || !joinText.trim()}>{busy ? 'Joining…' : 'Join game'}</button></form>}
       </> : <>
         {room.match && <p className="game-versus-rules"><strong>Versus · {room.match.lives} {room.match.lives === 1 ? 'life' : 'lives'} each · {room.match.timeLimit}-second round.</strong> Shoot the other ship. Last ship standing wins; at the time limit, remaining lives decide. Equal lives are a draw.</p>}
         <p className={`game-cooperative-status ${status}`} role="status">{statusText[status]}{reasonText[reason] && <> {reasonText[reason]}</>}</p>
+        {room.seat === 0 && hostedPassphrase && !ended && <div className="game-room-passphrase"><label htmlFor="game-coop-room-passphrase">Room passphrase<input id="game-coop-room-passphrase" value={hostedPassphrase} readOnly autoComplete="off" spellCheck={false} onFocus={event => event.target.select()} /></label><p className="game-small-note">Your friend can open this game’s page and enter this passphrase to join. Anyone with the phrase or private invitation can take the guest seat.</p></div>}
         {room.seat === 0 && visibility === 'public' && !ended && <p className="game-partner-host-note">{status === 'connected' ? 'Your partner has joined. The room is no longer listed.' : 'You chose an open room. Other players can claim its one open seat from the homepage or invitation. End the room to stop hosting.'}</p>}
         {room.seat === 0 && invitation && !ended && <div className="game-cooperative-invitation"><label htmlFor="game-coop-invitation">{visibility === 'private' ? 'Private invitation for Player 2' : 'Invitation for Player 2'}<input id="game-coop-invitation" value={invitation} readOnly autoComplete="off" spellCheck={false} onFocus={event => event.target.select()} /></label><button className="button secondary" onClick={() => void copy()}>{copied ? 'Invitation copied' : 'Copy invitation'}</button><p className="game-small-note">{visibility === 'private' ? 'Send this link privately to one player. It admits one guest. Share it only with the intended player.' : 'You can also invite a friend with this link. The first player to join takes the open seat.'} Rooms stay open while players remain connected, with no fixed session limit. Leaving the host page ends the room.</p></div>}
-        <button className="text-button" onClick={() => { currentRoom.current = undefined; setRoom(undefined); setInvitation(''); setReason(''); setError(''); setShowJoin(false); }}>{ended ? 'Return to solo / create another room' : room.seat === 0 ? 'End room and return to solo' : 'Leave room and return to solo'}</button>
+        <button className="text-button" onClick={() => { currentRoom.current = undefined; setRoom(undefined); setInvitation(''); setHostedPassphrase(''); setPassphrase(''); setJoinPassphrase(''); setReason(''); setError(''); setShowJoin(false); }}>{ended ? 'Return to solo / create another room' : room.seat === 0 ? 'End room and return to solo' : 'Leave room and return to solo'}</button>
       </>}
+      {pendingAdmission && !room && <div className="game-room-passphrase" role="status"><p>{admissionExpired ? 'This unconfirmed room request has expired. Check with the other player before starting over.' : 'Your room request is unconfirmed. Keep this tab open and retry the same request within five minutes.'}</p><button type="button" className="button secondary" disabled={busy || admissionExpired} onClick={() => { if (pendingAdmission.kind === 'host') void host('private'); else void joinByPassphrase(); }}>{busy ? 'Confirming…' : 'Retry the same room request'}</button>{admissionExpired && <button type="button" className="button secondary" disabled={busy} onClick={() => { setPendingAdmission(undefined); setPassphrase(''); setJoinPassphrase(''); setError(''); }}>Start over</button>}</div>}
       {error && <p className="error" role="alert">{error}</p>}
       <p className="game-small-note">{room?.match || !room && mode === 'versus' ? 'Versus matches have their own winner and do not submit solo scores or completion results.' : "Each player's completed round can be entered on this edition's leaderboard. These are casual, player-reported results."} Player 1 runs the shared simulation.</p>
     </section>

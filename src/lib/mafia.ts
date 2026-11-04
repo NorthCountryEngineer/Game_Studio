@@ -1,4 +1,5 @@
 import { coreConfig, isCore } from './core';
+import { normalizeRoomPassphrase } from './room-passphrases';
 
 export const MAFIA_AVATARS = [
   ['fox', '🦊', 'Fox'], ['bear', '🐻', 'Bear'], ['cat', '🐱', 'Cat'], ['dog', '🐶', 'Dog'],
@@ -15,6 +16,7 @@ export type MafiaPlayer = { id: string; name: string; avatar: MafiaAvatar; alive
 export type MafiaEvent = { id: string; kind: string; text: string; at: number; day: number };
 export type MafiaChat = { id: string; playerId: string; text: string; at: number; day: number };
 export type MafiaRoom = {
+  passphraseEnabled?: boolean;
   version: 1; roomId: string; phase: MafiaPhase; phaseId: number; day: number; ownerId: string; narratorId: string | null; narratorMode: 'human' | 'automatic' | 'ai';
   settings: MafiaSettings; createdAt: number; deadlineAt: number | null; winner: 'town' | 'mafia' | null; players: MafiaPlayer[];
   self: { id: string; actionSequence: number; role: MafiaRole | null; alive: boolean; left?: boolean; isOwner: boolean; isNarrator: boolean; nightTargetId: string | null; voteTargetId: string | null; hasVoted: boolean; ready: boolean; checks: { day: number; targetId: string; isMafia: boolean }[]; allies: string[] };
@@ -52,6 +54,7 @@ export function parseMafiaSettings(value: unknown): MafiaSettings {
 }
 export function parseMafiaRoom(value: unknown): MafiaRoom {
   const r = object(value), self = object(r.self);
+  if (!(r.passphraseEnabled === undefined || typeof r.passphraseEnabled === 'boolean')) invalid();
   if (r.version !== 1 || !uuid(r.roomId) || !phases.includes(r.phase) || !integer(r.phaseId) || !integer(r.day, 0, 2147483647) || !uuid(r.ownerId) || !target(r.narratorId) || !['human', 'automatic', 'ai'].includes(r.narratorMode) || !timestamp(r.createdAt) || !(r.deadlineAt === null || timestamp(r.deadlineAt)) || ![null, 'town', 'mafia'].includes(r.winner)) invalid();
   if (!Array.isArray(r.players) || r.players.length > 25 || r.players.length < 1) invalid();
   const players: MafiaPlayer[] = r.players.map((value: unknown) => {
@@ -81,7 +84,7 @@ export function parseMafiaRoom(value: unknown): MafiaRoom {
     if (!self.isNarrator || !Array.isArray(n.roles) || n.roles.length > 24 || typeof n.readyToAdvance !== 'boolean' || !integer(n.submitted, 0, 24) || !integer(n.required, 0, 24) || Object.entries(actions).some(([id, targetId]) => !ids.has(id) || !uuid(targetId) || !ids.has(targetId))) invalid();
     narratorInfo = { roles: n.roles.map((value: unknown) => { const item = object(value); if (!uuid(item.playerId) || !ids.has(item.playerId) || !role(item.role)) invalid(); return { playerId: item.playerId, role: item.role }; }), nightActions: { ...actions }, readyToAdvance: n.readyToAdvance, submitted: n.submitted, required: n.required };
   }
-  return { version: 1, roomId: r.roomId, phase: r.phase, phaseId: r.phaseId, day: r.day, ownerId: r.ownerId, narratorId: r.narratorId, narratorMode: r.narratorMode, settings: parseMafiaSettings(r.settings), createdAt: r.createdAt, deadlineAt: r.deadlineAt, winner: r.winner, players,
+  return { version: 1, roomId: r.roomId, phase: r.phase, phaseId: r.phaseId, day: r.day, ownerId: r.ownerId, narratorId: r.narratorId, narratorMode: r.narratorMode, settings: parseMafiaSettings(r.settings), createdAt: r.createdAt, deadlineAt: r.deadlineAt, winner: r.winner, players, ...(r.passphraseEnabled === undefined ? {} : { passphraseEnabled: r.passphraseEnabled }),
     self: { id: self.id, actionSequence: self.actionSequence, role: self.role, alive: self.alive, ...(self.left === true ? { left: true } : {}), isOwner: self.isOwner, isNarrator: self.isNarrator, nightTargetId: self.nightTargetId, voteTargetId: self.voteTargetId, hasVoted: self.hasVoted, ready: self.ready, checks, allies: [...self.allies] },
     events: messages(r.events, true) as MafiaEvent[], chat: messages(r.chat, false) as MafiaChat[], mafiaChat: messages(r.mafiaChat, false) as MafiaChat[], ...(narratorInfo ? { narratorInfo } : {}) };
 }
@@ -128,7 +131,7 @@ export function mafiaAPIBase(): string {
 }
 export class MafiaAPIError extends Error { constructor(message: string, readonly status: number) { super(message); } }
 export async function mafiaRequest(path: string, method: 'GET' | 'POST' = 'GET', body?: unknown, token?: string, signal?: AbortSignal): Promise<unknown> {
-  if (!/^\/mafia(?:\/config|\/rooms(?:\/[0-9a-f-]{36}(?:\/join|\/actions)?)?)$/.test(path)) throw new Error('Choose a valid live Mafia request.');
+  if (!/^\/mafia(?:\/config|\/join-by-passphrase|\/rooms(?:\/[0-9a-f-]{36}(?:\/join|\/actions)?)?)$/.test(path)) throw new Error('Choose a valid live Mafia request.');
   if (token !== undefined && !CAPABILITY.test(token)) throw new Error('This room seat is invalid. Open its invitation again.');
   const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 12000), abort = () => controller.abort();
   signal?.addEventListener('abort', abort, { once: true }); if (signal?.aborted) controller.abort();
@@ -144,22 +147,24 @@ export async function mafiaRequest(path: string, method: 'GET' | 'POST' = 'GET',
   } finally { clearTimeout(timer); signal?.removeEventListener('abort', abort); }
 }
 
-export type MafiaAdmission = { path: string; body: { requestId: string; name: string; avatar: MafiaAvatar; playerToken: string; inviteToken: string; maxPlayers?: number; narratorMode?: 'human' | 'automatic' | 'ai'; nightSeconds?: number; discussionSeconds?: number; votingSeconds?: number } };
+export type MafiaAdmission = { path: string; startedAt?: number; body: { requestId: string; name: string; avatar: MafiaAvatar; playerToken: string; inviteToken?: string; passphrase?: string; maxPlayers?: number; narratorMode?: 'human' | 'automatic' | 'ai'; nightSeconds?: number; discussionSeconds?: number; votingSeconds?: number } };
 export function createMafiaSecret(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(32));
   return btoa(String.fromCharCode(...bytes)).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
 }
 export function parseMafiaAdmission(value: unknown): MafiaAdmission {
   const a = object(value), body = object(a.body);
-  if (typeof a.path !== 'string' || !/^\/mafia\/rooms(?:\/[0-9a-f-]{36}\/join)?$/.test(a.path) || !uuid(body.requestId) || typeof body.name !== 'string' || validateMafiaName(body.name) !== body.name || !avatars.has(body.avatar) || typeof body.playerToken !== 'string' || !CAPABILITY.test(body.playerToken) || typeof body.inviteToken !== 'string' || !CAPABILITY.test(body.inviteToken)) invalid();
-  const create = a.path === '/mafia/rooms';
+  if (typeof a.path !== 'string' || !/^\/mafia(?:\/join-by-passphrase|\/rooms(?:\/[0-9a-f-]{36}\/join)?)$/.test(a.path) || !uuid(body.requestId) || typeof body.name !== 'string' || validateMafiaName(body.name) !== body.name || !avatars.has(body.avatar) || typeof body.playerToken !== 'string' || !CAPABILITY.test(body.playerToken)) invalid();
+  const create = a.path === '/mafia/rooms', phraseJoin = a.path === '/mafia/join-by-passphrase';
+  if (phraseJoin ? body.inviteToken !== undefined || typeof body.passphrase !== 'string' : typeof body.inviteToken !== 'string' || !CAPABILITY.test(body.inviteToken)) invalid();
+  if (body.passphrase !== undefined && (!create && !phraseJoin || typeof body.passphrase !== 'string' || normalizeRoomPassphrase(body.passphrase) !== body.passphrase)) invalid();
   if (create && !['human', 'automatic', 'ai'].includes(body.narratorMode)) invalid();
   const settings = create ? parseMafiaSettings(body) : undefined;
-  return { path: a.path, body: { requestId: body.requestId, name: body.name, avatar: body.avatar, playerToken: body.playerToken, inviteToken: body.inviteToken, ...(create ? { ...settings, narratorMode: body.narratorMode } : {}) } };
+  return { path: a.path, body: { requestId: body.requestId, name: body.name, avatar: body.avatar, playerToken: body.playerToken, ...(!phraseJoin ? { inviteToken: body.inviteToken } : {}), ...(body.passphrase === undefined ? {} : { passphrase: body.passphrase }), ...(create ? { ...settings, narratorMode: body.narratorMode } : {}) } };
 }
 export function readMafiaAdmission(key: string, storage: Pick<Storage, 'getItem'> = localStorage): MafiaAdmission | undefined {
   if (key !== 'create' && !UUID.test(key)) return;
-  try { const raw = storage.getItem(`game-studio-mafia-admission-v1:${key}`); if (!raw || raw.length >= 3000) return; const admission = parseMafiaAdmission(JSON.parse(raw)); return admission.path === (key === 'create' ? '/mafia/rooms' : `/mafia/rooms/${key}/join`) ? admission : undefined; } catch { return undefined; }
+  try { const raw = storage.getItem(`game-studio-mafia-admission-v1:${key}`); if (!raw || raw.length >= 3000) return; const admission = parseMafiaAdmission(JSON.parse(raw)); return admission.body.passphrase === undefined && admission.path === (key === 'create' ? '/mafia/rooms' : `/mafia/rooms/${key}/join`) ? admission : undefined; } catch { return undefined; }
 }
-export function saveMafiaAdmission(key: string, admission: MafiaAdmission, storage: Pick<Storage, 'setItem'> = localStorage): void { if (key !== 'create' && !UUID.test(key) || admission.path !== (key === 'create' ? '/mafia/rooms' : `/mafia/rooms/${key}/join`)) invalid(); storage.setItem(`game-studio-mafia-admission-v1:${key}`, JSON.stringify(parseMafiaAdmission(admission))); }
+export function saveMafiaAdmission(key: string, admission: MafiaAdmission, storage: Pick<Storage, 'setItem'> = localStorage): void { if (admission.body.passphrase !== undefined) throw new Error('Passphrase requests stay in this tab until your seat is confirmed.'); if (key !== 'create' && !UUID.test(key) || admission.path !== (key === 'create' ? '/mafia/rooms' : `/mafia/rooms/${key}/join`)) invalid(); storage.setItem(`game-studio-mafia-admission-v1:${key}`, JSON.stringify(parseMafiaAdmission(admission))); }
 export function clearMafiaAdmission(key: string, storage: Pick<Storage, 'removeItem'> = localStorage): void { if (key === 'create' || UUID.test(key)) storage.removeItem(`game-studio-mafia-admission-v1:${key}`); }
