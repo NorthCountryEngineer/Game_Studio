@@ -1,3 +1,4 @@
+import * as roomPassphrases from '../src/lib/room-passphrases';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
@@ -9,7 +10,7 @@ function parser() {
   const exports: Record<string, any> = {};
   const source = ts.transpileModule(readFileSync(new URL('../src/lib/party.ts', import.meta.url), 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true } }).outputText;
   vm.runInNewContext(source, { exports, URL, URLSearchParams, AbortController, setTimeout, clearTimeout, require(name: string) {
-    if (name === './core') return { isCore: false };
+    if (name === './room-passphrases') return roomPassphrases; if (name === './core') return { isCore: false };
     if (name === './mafia') return { MAFIA_AVATARS: [['fox', 'Fox']], validateMafiaName: (value: string) => value };
     if (name.endsWith('party-games.json')) return JSON.parse(readFileSync(new URL('../config/party-games.json', import.meta.url), 'utf8'));
     throw new Error(name);

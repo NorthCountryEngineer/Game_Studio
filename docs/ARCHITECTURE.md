@@ -40,6 +40,14 @@ Optional AI opponents are server-owned seats in these existing private room engi
 
 Each of the six games also has a local `/party/{kind}/host` controller for in-person play. It stores a bounded private session and a separate allowlisted public snapshot. A standalone `/party/present/{id}` entry mounts the public presentation without mounting App, Core sign-in effects or room requests. The projector consumes only the public storage key/broadcast channel named by a distinct view capability. It rejects private or unknown fields. Hidden roles, prompts, answers and choices enter that snapshot only at the host's explicit applicable reveal. The controller supports manual phase changes, score adjustments, outcomes, undo and local reset; browser-profile access is outside this presentation separation.
 
+## Room passphrases
+
+All six online party games and supported arcade multiplayer accept optional host-selected passphrases at room creation. Guests submit a phrase from the exact game's landing page, without a room URL or account. The shared data-only helper canonicalizes a bounded ASCII phrase and hashes it with a game-specific scope. Only the digest enters private room/index records; plaintext never enters public catalog/lobby projections, saved GameSpecs, provider input or browser storage. Existing invitation capabilities remain valid alternatives.
+
+Party adapters reserve phrases within their existing bounded admission index. The arcade relay uses a bounded per-game registry in its existing table. Creation reserves the phrase conditionally with the room/publication checks; guest admission competes for the same phase/capacity-bound seat as an invitation. Closed and expired rooms release phrases without allowing an old request to enter a replacement room. Bounded hashed admission receipts preserve exact retries, with a shorter client retry window. Arcade phrase hosts additionally use a stable random request identity and capability to recover a lost creation reply. Requests renew ordinary active leases; passphrases do not create autonomous sessions.
+
+Per-source and installation attempt limits constrain lookup traffic. Phrases confer only anonymous room admission, never host/narrator, creator or Core authority. No new infrastructure, IAM grant, schema migration, provider call or assignment SDK change is introduced. See [passphrase joining](ROOM_PASSPHRASES.md).
+
 ## Host embedding
 
 `/embed/games/{id}` is the public player surface. Host IDs resolve only against operator-configured exact origins; the parent referrer must match. The hosting policy allows framing only by those origins. Private creation, account, settings and OAuth pages reject framing. The common SDK verifies sender origin, source window, channel, game ID, protocol version and message shape. Messages never carry identity, access tokens, roles or private drafts.

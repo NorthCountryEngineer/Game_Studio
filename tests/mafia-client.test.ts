@@ -1,3 +1,4 @@
+import * as roomPassphrases from '../src/lib/room-passphrases';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { readFileSync } from 'node:fs';
@@ -18,7 +19,7 @@ function storage() { const data = new Map<string, string>(); return { getItem: (
 const transpile = (path: string) => ts.transpileModule(readFileSync(new URL(path, import.meta.url), 'utf8'), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText;
 function library(options: { connected?: boolean; api?: string; fetch?: typeof fetch; store?: ReturnType<typeof storage> } = {}) {
   const exported: Record<string, any> = {}, store = options.store ?? storage();
-  vm.runInNewContext(transpile('../src/lib/mafia.ts'), { exports: exported, require(name: string) { assert.equal(name, './core'); return { isCore: options.connected ?? false, coreConfig: { api_url: options.api ?? 'https://games-api.example' } }; }, localStorage: store, URL, URLSearchParams, Set, Error, JSON, AbortController, AbortSignal, setTimeout, clearTimeout, crypto: webcrypto, Uint8Array, btoa, fetch: options.fetch ?? fetch });
+  vm.runInNewContext(transpile('../src/lib/mafia.ts'), { exports: exported, require(name: string) { if (name === './room-passphrases') return roomPassphrases; assert.equal(name, './core'); return { isCore: options.connected ?? false, coreConfig: { api_url: options.api ?? 'https://games-api.example' } }; }, localStorage: store, URL, URLSearchParams, Set, Error, JSON, AbortController, AbortSignal, setTimeout, clearTimeout, crypto: webcrypto, Uint8Array, btoa, fetch: options.fetch ?? fetch });
   return { api: exported, store };
 }
 function deferred<T>() { let resolve!: (value: T) => void, reject!: (error: Error) => void; const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; }
@@ -34,8 +35,8 @@ test('Mafia names preserve Unicode and punctuation with bounded visible characte
 
 test('Mafia room parsing returns the bounded seat view and ignores unknown private-looking fields', () => {
   const { api } = library(), room = fixture();
-  const parsed = api.parseMafiaRoom({ ...room, secretRoles: { [OTHER]: 'mafia' }, revision: 2, expiresAt: 1800007200 });
-  assert.equal(parsed.roomId, ROOM); assert.equal(parsed.self.actionSequence, 0); assert.equal('secretRoles' in parsed, false);
+  const parsed = api.parseMafiaRoom({ ...room, secretRoles: { [OTHER]: 'mafia' }, revision: 2, expiresAt: 1800007200, passphraseEnabled: true, passphraseHash: 'private-hash', passphrase: 'purple comet' });
+  assert.equal(parsed.roomId, ROOM); assert.equal(parsed.self.actionSequence, 0); assert.equal('secretRoles' in parsed, false); assert.equal(parsed.passphraseEnabled, true); assert.equal('passphrase' in parsed, false); assert.equal('passphraseHash' in parsed, false); assert.throws(() => api.parseMafiaRoom({ ...room, passphraseEnabled: 'true' }), /unsupported response/);
   for (const patch of [{ self: { ...room.self, actionSequence: -1 } }, { players: [...room.players, room.players[0]] }, { settings: { ...room.settings, maxPlayers: 25 } }, { narratorInfo: { roles: [], nightActions: {}, readyToAdvance: false, submitted: 0, required: 0 } }, { phase: 'made-up' }]) assert.throws(() => api.parseMafiaRoom({ ...room, ...patch }), /unsupported response/);
   const dead = { ...room, players: room.players.map(player => player.id === OTHER ? { ...player, left: true, alive: false } : player) };
   assert.equal(api.parseMafiaRoom(dead).players[1].left, true);
@@ -92,19 +93,20 @@ type Hook = { value?: any; deps?: unknown[]; cleanup?: () => void; setup?: () =>
 const jsx = (type: unknown, props: Record<string, any>): Element => ({ type, props });
 const elements = (value: any): Element[] => Array.isArray(value) ? value.flatMap(elements) : value && typeof value === 'object' && 'type' in value ? [value, ...elements(value.props.children)] : [];
 const content = (value: any): string => Array.isArray(value) ? value.map(content).join('') : value && typeof value === 'object' && 'type' in value ? content(value.props.children) : typeof value === 'string' || typeof value === 'number' ? String(value) : '';
-function mount(options: { roomId?: string; href?: string; fetch?: typeof fetch; session?: Record<string, string>; admission?: Record<string, any> } = {}) {
+function mount(options: { clock?: () => number; roomId?: string; href?: string; fetch?: typeof fetch; session?: Record<string, string>; admission?: Record<string, any> } = {}) {
   const store = storage(), { api } = library({ store, fetch: options.fetch ?? (async () => new Response('{}', { status: 503 })) });
   if (options.session) api.saveMafiaSession(options.session);
   if (options.admission) api.saveMafiaAdmission(options.roomId ?? 'create', options.admission);
   let hooks: Hook[] = [], cursor = 0, dirty = true, tree: Element, effects: Hook[] = [], unmounted = false, lateSetters = 0;
-  let timerId = 0; const timers = new Map<number, () => void>(), navigated: string[] = [];
+  let timerId = 0; const intervals = new Map<number, () => void>(), timers = new Map<number, () => void>(), navigated: string[] = [];
   const react = {
     useState(initial: any) { const i = cursor++; hooks[i] ??= { value: typeof initial === 'function' ? initial() : initial }; return [hooks[i].value, (next: any) => { if (unmounted) { lateSetters++; return; } const value = typeof next === 'function' ? next(hooks[i].value) : next; if (!Object.is(value, hooks[i].value)) { hooks[i].value = value; dirty = true; } }]; },
     useRef(initial: any) { const i = cursor++; hooks[i] ??= { value: { current: initial } }; return hooks[i].value; },
     useEffect(setup: () => unknown, deps: unknown[]) { const i = cursor++, previous = hooks[i]; if (!previous || !deps || !previous.deps || deps.some((v, index) => !Object.is(v, previous.deps![index]))) { const hook = { setup, deps, cleanup: previous?.cleanup }; hooks[i] = hook; effects.push(hook); } },
   };
-  const exported: Record<string, any> = {}, browser = { location: { origin: 'http://127.0.0.1:5193', href: options.href ?? `http://127.0.0.1:5193/mafia${options.roomId ? '/' + options.roomId : ''}` }, setInterval: () => ++timerId, clearInterval: () => {}, setTimeout: (fn: () => void) => { const id = ++timerId; timers.set(id, fn); return id; }, clearTimeout: (id: number) => timers.delete(id) };
-  vm.runInNewContext(transpile('../src/components/Mafia.tsx'), { exports: exported, require(name: string) { if (name === 'react') return react; if (name === 'react/jsx-runtime') return { jsx, jsxs: jsx, Fragment: 'FRAGMENT' }; if (name === '../lib/mafia') return api; if (name === './PartyInstructions') return { PartyInstructions: () => null }; if (name === './PartyPlayerName') return { PartyPlayerName, partyPlayerLabel }; if (name === '../mafia.css') return {}; throw new Error(name); }, window: browser, document: { visibilityState: 'visible' }, navigator: { clipboard: { writeText: async () => {} } }, crypto: webcrypto, AbortController, DOMException, Date, Promise, JSON, Error, Number, Object, String, Boolean });
+  const runtimeDate = options.clock ? class extends Date { static now() { return options.clock!(); } } : Date;
+  const exported: Record<string, any> = {}, browser = { location: { origin: 'http://127.0.0.1:5193', href: options.href ?? `http://127.0.0.1:5193/mafia${options.roomId ? '/' + options.roomId : ''}` }, setInterval: (fn: () => void) => { const id = ++timerId; intervals.set(id, fn); return id; }, clearInterval: (id: number) => intervals.delete(id), setTimeout: (fn: () => void) => { const id = ++timerId; timers.set(id, fn); return id; }, clearTimeout: (id: number) => timers.delete(id) };
+  vm.runInNewContext(transpile('../src/components/Mafia.tsx'), { exports: exported, require(name: string) { if (name === 'react') return react; if (name === 'react/jsx-runtime') return { jsx, jsxs: jsx, Fragment: 'FRAGMENT' }; if (name === '../lib/room-passphrases') return roomPassphrases; if (name === '../lib/mafia') return api; if (name === './PartyInstructions') return { PartyInstructions: () => null }; if (name === './PartyPlayerName') return { PartyPlayerName, partyPlayerLabel }; if (name === '../mafia.css') return {}; throw new Error(name); }, window: browser, document: { visibilityState: 'visible' }, navigator: { clipboard: { writeText: async () => {} } }, crypto: webcrypto, AbortController, DOMException, Date: runtimeDate, Promise, JSON, Error, Number, Object, String, Boolean });
   function flush() { let turns = 0; while (dirty && !unmounted) { assert.ok(++turns < 40); dirty = false; cursor = 0; effects = []; tree = exported.MafiaPage({ roomId: options.roomId, navigate: (path: string) => { navigated.push(path); } }); for (const hook of effects) { hook.cleanup?.(); const cleanup = hook.setup!(); hook.cleanup = typeof cleanup === 'function' ? cleanup as () => void : undefined; } } }
   async function settle() { for (let count = 0; count < 40; count++) { await Promise.resolve(); flush(); } }
   function field(id: string) { return elements(tree).find(e => e.props.id === id); }
@@ -115,12 +117,59 @@ function mount(options: { roomId?: string; href?: string; fetch?: typeof fetch; 
   function markup() { function render(value: any, key = 'r'): any { if (Array.isArray(value)) return value.map((v, index) => render(v, key + index)); if (!value || typeof value !== 'object' || !('type' in value)) return value; if (typeof value.type === 'function') return render(value.type(value.props), key + 'f'); const { children, ...props } = value.props; return createElement(value.type === 'FRAGMENT' ? 'div' : value.type, { ...props, key }, render(children, key + 'c')); } return renderToStaticMarkup(render(tree)); }
   function unmount() { for (const hook of hooks) hook.cleanup?.(); unmounted = true; }
   flush();
-  return { api, exported, store, flush, settle, field, button, change, submit, click, navigated, markup, content: () => content(tree), tree: () => tree, unmount, lateSetters: () => lateSetters, poll: () => { const queued = [...timers]; timers.clear(); for (const [, fn] of queued) fn(); } };
+  return { api, exported, store, flush, settle, field, button, change, submit, click, navigated, markup, content: () => content(tree), tree: () => tree, unmount, lateSetters: () => lateSetters, tick: () => { for (const fn of intervals.values()) fn(); flush(); }, poll: () => { const queued = [...timers]; timers.clear(); for (const [, fn] of queued) fn(); } };
 }
 
 test('Mafia landing offers public avatar selection and no sign-in gate', async () => {
   const view = mount({ fetch: async () => new Response(JSON.stringify({ aiAvailable: true }), { status: 200 }) }); await view.settle();
   assert.match(view.content(), /No sign-in to play/); assert.match(view.content(), /Create a private room/); assert.ok(view.field('mafia-player-name')); assert.match(view.content(), /AI narrator/); assert.equal(view.button('Create a private room')!.props.disabled, true); view.unmount();
+});
+
+test('Mafia hosts choose a passphrase without saving it and unknown creation retries keep one identity', async () => {
+  const calls: any[] = [];
+  const view = mount({ fetch: async (url, init) => {
+    if (String(url).endsWith('/config')) return new Response(JSON.stringify({ aiAvailable: false }));
+    const body = JSON.parse(String(init?.body)); calls.push(body);
+    if (calls.length === 1) return new Response(JSON.stringify({ error: 'Temporary failure' }), { status: 503 });
+    const room = fixture({ roomId: body.requestId, ownerId: body.requestId, narratorId: body.requestId, narratorMode: 'human', passphraseEnabled: true, players: [{ id: body.requestId, name: body.name, avatar: body.avatar, alive: false, isNarrator: true }], self: { ...fixture().self, id: body.requestId, alive: false, isNarrator: true } });
+    return new Response(JSON.stringify({ room, session: { roomId: body.requestId, playerId: body.requestId, token: body.playerToken, inviteToken: body.inviteToken } }));
+  } });
+  await view.settle(); view.change('mafia-player-name', 'Nova'); view.change('mafia-room-passphrase', '  Purple   Comet  '); view.submit(); await view.settle();
+  assert.equal(calls[0].passphrase, 'purple comet'); assert.equal(view.api.readMafiaAdmission('create'), undefined); assert.equal(view.store.data.size, 0);
+  assert.equal(view.field('mafia-room-passphrase')!.props.disabled, true); assert.equal(view.button('Join with passphrase')!.props.disabled, true); assert.match(view.content(), /Keep this tab open/);
+  view.submit(); await view.settle(); assert.equal(JSON.stringify(calls[0]), JSON.stringify(calls[1])); assert.match(view.content(), /Passphrase joining is enabled/); assert.doesNotMatch(view.content(), /purple comet|Purple/);
+  assert.ok([...view.store.data.values()].every(value => !value.includes('comet'))); assert.equal(view.navigated[0], `/mafia/${calls[0].requestId}`); view.unmount();
+});
+
+test('Mafia guests enter a phrase on the landing page without a room URL and keep the same unknown join retry', async () => {
+  const calls: any[] = [];
+  const view = mount({ fetch: async (url, init) => {
+    if (String(url).endsWith('/config')) return new Response(JSON.stringify({ aiAvailable: false }));
+    const body = JSON.parse(String(init?.body)); calls.push({ url, body });
+    if (calls.length === 1) return new Response(JSON.stringify({ error: 'Temporary failure' }), { status: 503 });
+    const room = fixture({ passphraseEnabled: true, players: [...fixture().players, { id: body.requestId, name: body.name, avatar: body.avatar, alive: true, isNarrator: false }], self: { ...fixture().self, id: body.requestId, isOwner: false } });
+    return new Response(JSON.stringify({ room, session: { roomId: ROOM, playerId: body.requestId, token: body.playerToken } }));
+  } });
+  await view.settle(); view.click('Join with passphrase'); assert.equal(view.field('mafia-capacity'), undefined); assert.doesNotMatch(view.content(), /Who tells the story/);
+  view.change('mafia-room-passphrase', 'PURPLE comet'); view.change('mafia-player-name', 'Orbit'); view.submit(); await view.settle();
+  assert.equal(calls[0].url, '/mafia-api/mafia/join-by-passphrase'); assert.equal(calls[0].body.passphrase, 'purple comet'); assert.equal(calls[0].body.inviteToken, undefined); assert.equal(calls[0].body.narratorMode, undefined); assert.equal(view.store.data.size, 0);
+  view.submit(); await view.settle(); assert.equal(JSON.stringify(calls[0]), JSON.stringify(calls[1])); assert.equal(view.navigated[0], `/mafia/${ROOM}`); assert.equal(view.api.readMafiaSession(ROOM).inviteToken, undefined); view.unmount();
+});
+
+test('a rejected Mafia passphrase unlocks the form and never persists the secret', async () => {
+  let posts = 0; const view = mount({ fetch: async (url, init) => { if (String(url).endsWith('/config')) return new Response('{}'); if (init?.method === 'POST') posts++; return new Response(JSON.stringify({ error: 'No open room matches that passphrase.' }), { status: 404 }); } });
+  await view.settle(); view.click('Join with passphrase'); view.change('mafia-player-name', 'Orbit'); view.change('mafia-room-passphrase', 'bad\nphrase'); view.submit(); await view.settle(); assert.equal(posts, 0); assert.match(view.content(), /6–48 characters/);
+  view.change('mafia-room-passphrase', 'purple comet'); view.submit(); await view.settle(); assert.equal(posts, 1); assert.equal(view.field('mafia-room-passphrase')!.props.disabled, false); assert.equal(view.button('Create a room')!.props.disabled, false); assert.equal(view.store.data.size, 0); view.unmount();
+});
+
+test('unknown Mafia phrase creation and joins stop retrying after five minutes until explicit start over', async () => {
+  for (const joining of [false, true]) {
+    let clock = Date.now(); const calls: any[] = [], view = mount({ clock: () => clock, fetch: async (url, init) => { if (String(url).endsWith('/config')) return new Response('{}'); calls.push(JSON.parse(String(init?.body))); return new Response('{"error":"Lost response"}', { status: 503 }); } });
+    await view.settle(); if (joining) view.click('Join with passphrase'); view.change('mafia-player-name', 'Orbit'); view.change('mafia-room-passphrase', 'purple comet'); view.submit(); await view.settle();
+    clock += 299999; view.tick(); view.submit(); await view.settle(); assert.equal(calls.length, 2); assert.equal(JSON.stringify(calls[0]), JSON.stringify(calls[1]));
+    clock += 1; view.tick(); assert.equal(view.button('Retry the same request')!.props.disabled, true); view.submit(); await view.settle(); assert.equal(calls.length, 2); assert.match(view.content(), /too old to retry safely/);
+    view.click('Start over'); assert.equal(calls.length, 2); assert.equal(view.field('mafia-room-passphrase')!.props.value, ''); assert.equal(view.field('mafia-room-passphrase')!.props.disabled, false); view.change('mafia-room-passphrase', 'purple comet'); view.submit(); await view.settle(); assert.equal(calls.length, 3); assert.notEqual(calls[0].requestId, calls[2].requestId); assert.equal(view.store.data.size, 0); view.unmount();
+  }
 });
 
 test('an uncertain room creation retries the same secrets and request, then saves its seat', async () => {

@@ -14,6 +14,8 @@ The **Multi-game** category composes complete puzzles and leveled games with gen
 
 The public **Party games** library offers **Mafia**, **Starship Suspects**, **Sketch & Guess**, **Trivia Rally**, **Rock–Paper–Scissors Duel**, and **Drop Four**. Play in private online rooms, or use the shared-screen host controls to add names and run any of the six games in person. Two-player duels sit alongside drawing, trivia and larger-group deduction games. See [party games and in-person hosting](docs/PARTY_GAMES.md).
 
+Online hosts can set a custom **passphrase** when creating a private room. Guests enter it on that game's landing page to join without copying an invitation link. This works for all six party games and supported arcade multiplayer, including Asteroids versus. See [passphrase sharing](docs/ROOM_PASSPHRASES.md).
+
 All six online party games support **AI players**. Create a room, add an AI opponent or fill the seats needed to start, then start when ready. Friends and AI can play together, and every AI seat is labeled. Built-in agents make legal moves without model calls. Mafia can use an automatic narrator so a solo host gets to play. See [AI opponents](docs/PARTY_GAMES.md#ai-opponents).
 
 **Mafia** is a live private party game for 5–24 players. Players join by invitation, choose names and avatars, receive private roles and make synchronized night choices and day votes. The creator narrates by default, can hand narration to another participant before starting, or choose automatic AI narration so everyone can play. Discussion uses text, including a private Mafia channel. Rematches keep the group and clear the previous round's secrets. See [Mafia rules, privacy and workflow](docs/MAFIA.md) and [cached AI narration](docs/MAFIA_NARRATION.md).
