@@ -8,6 +8,7 @@ from pathlib import Path
 import socket
 import types
 import unittest
+import uuid as uuid_module
 from unittest.mock import Mock, patch
 
 import test_games as support
@@ -497,3 +498,135 @@ class PartyAPITests(unittest.TestCase):
         for value in (float('nan'), float('inf'), -float('inf'), object()):
             self.error(400,lambda:party.dispatch(self.api,self.request_event(),'POST','/party/rooms',{'bad':value}))
         self.assertFalse(self.database.rows['published-games'])
+
+    def test_ai_admission_is_host_owned_badged_and_has_no_authentication_capability(self):
+        self.create(kind='starship-suspects')
+        self.join(2)
+        self.error(403, lambda: self.action(uuid(2), 'fill-ai'))
+        room = self.action(self.room_id, 'fill-ai')
+        bots = [player for player in room['players'] if player.get('isAI')]
+        self.assertEqual(len(bots), 2)
+        self.assertEqual(set(self.state()['members']), {self.room_id, uuid(2)})
+        self.assertNotIn('_ai', room)
+        self.error(401, lambda: party.dispatch(self.api,
+            {'headers': {'authorization': 'Bearer ' + capability(bots[0]['id'])}},
+            'GET', '/party/rooms/' + self.room_id, {}))
+        self.error(400, lambda: self.action(self.room_id, 'add-ai', name='Forged'))
+        self.error(400, lambda: self.send(self.room_id, {**self.body(self.room_id, 'add-ai'), 'isAI': True}))
+        room = self.action(self.room_id, 'kick', targetId=bots[0]['id'])
+        self.assertEqual(len(room['players']), 3)
+        self.assertEqual(len(self.state()['members']), 2)
+        self.authorization.assert_not_called(); self.provider.converse.assert_not_called()
+
+    def test_ai_poll_ticks_share_cas_but_exact_human_replays_remain_read_only(self):
+        self.create(kind='hand-duel')
+        self.action(self.room_id, 'add-ai')
+        body = self.body(self.room_id, 'start')
+        self.send(self.room_id, body)
+        self.clock += 3
+        before = deepcopy(self.database.rows)
+        self.send(self.room_id, body)
+        self.assertEqual(before, self.database.rows)
+        self.assertEqual(self.state()['game']['_game']['choices'], {})
+        self.get()
+        saved = deepcopy(self.database.rows)
+        self.assertEqual(len(self.state()['game']['_game']['choices']), 1)
+        room = self.send(self.room_id, body)
+        self.assertEqual(saved, self.database.rows)
+        self.assertEqual(room['game']['choices'], {})
+        self.assertNotIn('_ai', json.dumps(room))
+
+    def test_ai_admission_retries_a_uuid_already_claimed_by_an_invited_human(self):
+        self.create(kind='trivia')
+        self.join(2)
+        with patch.object(party.engine().uuid, 'uuid4', side_effect=[uuid_module.UUID(uuid(2)), uuid_module.UUID(uuid(3))]):
+            room = self.action(self.room_id, 'add-ai')
+        self.assertEqual(len({player['id'] for player in room['players']}), 3)
+        self.assertEqual(room['players'][-1]['id'], uuid(3))
+        self.assertTrue(room['players'][-1]['isAI'])
+        self.assertEqual(set(self.state()['members']), {self.room_id, uuid(2)})
+
+    def test_ai_due_poll_and_human_choice_race_resolve_the_hand_once(self):
+        self.create(kind='hand-duel')
+        self.action(self.room_id, 'add-ai')
+        started = self.action(self.room_id, 'start')
+        self.clock += 3
+        body = {'requestId': uuid(8000), 'phaseId': started['phaseId'],
+                'sequence': started['self']['actionSequence'] + 1, 'type': 'choose', 'choice': 'paper'}
+        real = self.database.transact; raced = False
+        def race(TransactItems):
+            nonlocal raced
+            if not raced:
+                raced = True
+                self.database.meta.client.transact_write_items.side_effect = real
+                self.send(self.room_id, body)
+                self.database.meta.client.transact_write_items.side_effect = race
+            return real(TransactItems)
+        self.database.meta.client.transact_write_items.side_effect = race
+        with patch.object(party.engine().ai_rules().secrets, 'choice', lambda items: items[0]):
+            room = self.get()
+        self.assertEqual(room['phase'], 'reveal')
+        self.assertEqual(room['players'][0]['score'], 1)
+        self.assertEqual(len(room['game']['choices']), 2)
+        saved = deepcopy(self.database.rows)
+        self.send(self.room_id, body)
+        self.assertEqual(saved, self.database.rows)
+
+    def test_ai_admission_never_silently_replaces_a_human_join_winner(self):
+        self.create(kind='drop-four')
+        body = self.body(self.room_id, 'add-ai')
+        real = self.database.transact; raced = False
+        def race(TransactItems):
+            nonlocal raced
+            if not raced:
+                raced = True
+                self.database.meta.client.transact_write_items.side_effect = real
+                self.join(2)
+                self.database.meta.client.transact_write_items.side_effect = race
+            return real(TransactItems)
+        self.database.meta.client.transact_write_items.side_effect = race
+        self.error(409, lambda: self.send(self.room_id, body))
+        self.assertEqual(len(self.state()['members']), 2)
+        self.assertEqual([player['id'] for player in self.get()['players']], [self.room_id, uuid(2)])
+        self.assertFalse(any(player.get('isAI') for player in self.get()['players']))
+
+    def test_ai_rooms_renew_only_on_human_requests_and_close_without_bot_metadata(self):
+        self.create(kind='trivia')
+        self.action(self.room_id, 'fill-ai')
+        self.action(self.room_id, 'start')
+        expires = self.state()['expiresAt']
+        self.clock += 3
+        self.get()
+        self.assertEqual(self.state()['expiresAt'], expires)
+        self.assertEqual(len(self.state()['game']['_game']['answers']), 1)
+        self.action(self.room_id, 'close')
+        self.assertNotIn('_ai', self.state()['game'])
+        self.assertEqual(len(self.state()['members']), 1)
+
+    def test_ai_runtime_and_dense_sketch_fit_storage_with_maximum_historical_chat_and_members(self):
+        self.create(kind='sketch-guess')
+        for _ in range(11): self.action(self.room_id, 'add-ai')
+        self.action(self.room_id, 'start')
+        state = self.state()
+        for agent in state['game']['_ai'].values():
+            agent['memory'] = {'notes': 'x' * 1000}
+        points = [[round(.1111 + index / 10000, 4), round(.9999 - index / 10000, 4)] for index in range(120)]
+        state['game']['_game']['strokes'] = [{**self.segment(3000 + number, points), 'playerId': self.room_id} for number in range(384)]
+        state['game'] = party.engine().apply_action(state['game'], self.room_id,
+            {'type': 'stroke', 'color': '#abcdef', 'width': 12, 'points': points}, now=self.clock)
+        state['game']['chat'] = [{'id': 'c' + str(number), 'playerId': self.room_id, 'name': '\U0001f600' * 16,
+                                 'text': '\U0001f600' * 160, 'at': self.clock} for number in range(60)]
+        state['game']['events'] = [{'id': 'e' + str(number), 'text': '\U0001f600' * 32 + ' joined the room.',
+                                   'at': self.clock} for number in range(60)]
+        for number in range(23):
+            state['members'][uuid(5000 + number)] = {'tokenHash': party.digest(capability(5000 + number)),
+                'joinFingerprint': 'a' * 64, 'lastFingerprint': 'b' * 64, 'sequence': 100000,
+                'rate': {'minute': self.clock // 60, 'count': 180}}
+        previous = self.database.rows['published-games'][party.key('game-party-room', self.room_id)]
+        operation = party.put('game-party-room', self.room_id, state, previous)
+        self.assertLess(len(operation['Put']['Item']['payload'].encode()), 310000)
+        self.assertTrue(party.transact(self.api, [operation]))
+        room = self.get()
+        self.assertEqual(len([player for player in room['players'] if player.get('isAI')]), 11)
+        self.assertNotIn('_ai', json.dumps(room))
+        self.assertNotIn('notes', json.dumps(room))

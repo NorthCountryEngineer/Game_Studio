@@ -11,11 +11,11 @@ export type MafiaAvatar = typeof MAFIA_AVATARS[number][0];
 export type MafiaRole = 'mafia' | 'detective' | 'doctor' | 'civilian';
 export type MafiaPhase = 'lobby' | 'night' | 'discussion' | 'voting' | 'finished' | 'closed';
 export type MafiaSettings = { maxPlayers: number; nightSeconds: number; discussionSeconds: number; votingSeconds: number };
-export type MafiaPlayer = { id: string; name: string; avatar: MafiaAvatar; alive: boolean; left?: boolean; isNarrator: boolean; role?: MafiaRole };
+export type MafiaPlayer = { id: string; name: string; avatar: MafiaAvatar; alive: boolean; left?: boolean; isNarrator: boolean; role?: MafiaRole; isAI?: boolean };
 export type MafiaEvent = { id: string; kind: string; text: string; at: number; day: number };
 export type MafiaChat = { id: string; playerId: string; text: string; at: number; day: number };
 export type MafiaRoom = {
-  version: 1; roomId: string; phase: MafiaPhase; phaseId: number; day: number; ownerId: string; narratorId: string | null; narratorMode: 'human' | 'ai';
+  version: 1; roomId: string; phase: MafiaPhase; phaseId: number; day: number; ownerId: string; narratorId: string | null; narratorMode: 'human' | 'automatic' | 'ai';
   settings: MafiaSettings; createdAt: number; deadlineAt: number | null; winner: 'town' | 'mafia' | null; players: MafiaPlayer[];
   self: { id: string; actionSequence: number; role: MafiaRole | null; alive: boolean; left?: boolean; isOwner: boolean; isNarrator: boolean; nightTargetId: string | null; voteTargetId: string | null; hasVoted: boolean; ready: boolean; checks: { day: number; targetId: string; isMafia: boolean }[]; allies: string[] };
   events: MafiaEvent[]; chat: MafiaChat[]; mafiaChat: MafiaChat[];
@@ -24,7 +24,7 @@ export type MafiaRoom = {
 export type MafiaSession = { roomId: string; playerId: string; token: string; inviteToken?: string };
 export type MafiaEnvelope = { room: MafiaRoom; session?: MafiaSession };
 export type MafiaConfig = { aiAvailable: boolean; aiLabel?: string; minPlayers: number; maxPlayers: number };
-export type MafiaAction = { type: string; targetId?: string; text?: string; channel?: 'public' | 'mafia'; force?: boolean; settings?: Partial<MafiaSettings>; narratorMode?: 'human' | 'ai' };
+export type MafiaAction = { type: string; targetId?: string; text?: string; channel?: 'public' | 'mafia'; force?: boolean; settings?: Partial<MafiaSettings>; narratorMode?: 'human' | 'automatic' | 'ai' };
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const CAPABILITY = /^[A-Za-z0-9_-]{24,256}$/;
 const roles = ['mafia', 'detective', 'doctor', 'civilian'];
@@ -52,15 +52,16 @@ export function parseMafiaSettings(value: unknown): MafiaSettings {
 }
 export function parseMafiaRoom(value: unknown): MafiaRoom {
   const r = object(value), self = object(r.self);
-  if (r.version !== 1 || !uuid(r.roomId) || !phases.includes(r.phase) || !integer(r.phaseId) || !integer(r.day, 0, 2147483647) || !uuid(r.ownerId) || !target(r.narratorId) || !['human', 'ai'].includes(r.narratorMode) || !timestamp(r.createdAt) || !(r.deadlineAt === null || timestamp(r.deadlineAt)) || ![null, 'town', 'mafia'].includes(r.winner)) invalid();
+  if (r.version !== 1 || !uuid(r.roomId) || !phases.includes(r.phase) || !integer(r.phaseId) || !integer(r.day, 0, 2147483647) || !uuid(r.ownerId) || !target(r.narratorId) || !['human', 'automatic', 'ai'].includes(r.narratorMode) || !timestamp(r.createdAt) || !(r.deadlineAt === null || timestamp(r.deadlineAt)) || ![null, 'town', 'mafia'].includes(r.winner)) invalid();
   if (!Array.isArray(r.players) || r.players.length > 25 || r.players.length < 1) invalid();
   const players: MafiaPlayer[] = r.players.map((value: unknown) => {
     const p = object(value);
-    if (!uuid(p.id) || !text(p.name, 64) || [...p.name].length < 1 || [...p.name].length > 16 || !avatars.has(p.avatar) || typeof p.alive !== 'boolean' || typeof p.isNarrator !== 'boolean' || !(p.role === undefined || role(p.role))) invalid();
-    return { id: p.id, name: p.name, avatar: p.avatar, alive: p.alive, ...(p.left === true ? { left: true } : {}), isNarrator: p.isNarrator, ...(p.role === undefined ? {} : { role: p.role }) };
+    if (!uuid(p.id) || !text(p.name, 64) || [...p.name].length < 1 || [...p.name].length > 16 || !avatars.has(p.avatar) || typeof p.alive !== 'boolean' || typeof p.isNarrator !== 'boolean' || !(p.role === undefined || role(p.role)) || !(p.isAI === undefined || typeof p.isAI === 'boolean')) invalid();
+    return { id: p.id, name: p.name, avatar: p.avatar, alive: p.alive, ...(p.left === true ? { left: true } : {}), isNarrator: p.isNarrator, ...(p.role === undefined ? {} : { role: p.role }), ...(p.isAI === undefined ? {} : { isAI: p.isAI }) };
   });
   const ids = new Set(players.map(p => p.id));
   if (ids.size !== players.length || !ids.has(r.ownerId) || r.narratorId !== null && !ids.has(r.narratorId) || !uuid(self.id) || !ids.has(self.id) || !integer(self.actionSequence) || !(self.role === null || role(self.role)) || [self.alive, self.isOwner, self.isNarrator, self.hasVoted, self.ready].some(v => typeof v !== 'boolean') || !target(self.nightTargetId) || !target(self.voteTargetId, true)) invalid();
+  if (players.some(player => player.isAI && (player.id === r.ownerId || player.id === self.id || player.id === r.narratorId || player.isNarrator))) invalid();
   if (!Array.isArray(self.checks) || self.checks.length > 100 || !Array.isArray(self.allies) || self.allies.length > 24 || self.allies.some((id: unknown) => !uuid(id) || !ids.has(id))) invalid();
   const checks = self.checks.map((value: unknown) => { const c = object(value); if (!integer(c.day, 0, 2147483647) || !uuid(c.targetId) || !ids.has(c.targetId) || typeof c.isMafia !== 'boolean') invalid(); return { day: c.day, targetId: c.targetId, isMafia: c.isMafia }; });
   function messages(values: unknown, narration: boolean): (MafiaEvent | MafiaChat)[] {
@@ -143,7 +144,7 @@ export async function mafiaRequest(path: string, method: 'GET' | 'POST' = 'GET',
   } finally { clearTimeout(timer); signal?.removeEventListener('abort', abort); }
 }
 
-export type MafiaAdmission = { path: string; body: { requestId: string; name: string; avatar: MafiaAvatar; playerToken: string; inviteToken: string; maxPlayers?: number; narratorMode?: 'human' | 'ai'; nightSeconds?: number; discussionSeconds?: number; votingSeconds?: number } };
+export type MafiaAdmission = { path: string; body: { requestId: string; name: string; avatar: MafiaAvatar; playerToken: string; inviteToken: string; maxPlayers?: number; narratorMode?: 'human' | 'automatic' | 'ai'; nightSeconds?: number; discussionSeconds?: number; votingSeconds?: number } };
 export function createMafiaSecret(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(32));
   return btoa(String.fromCharCode(...bytes)).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
@@ -152,7 +153,7 @@ export function parseMafiaAdmission(value: unknown): MafiaAdmission {
   const a = object(value), body = object(a.body);
   if (typeof a.path !== 'string' || !/^\/mafia\/rooms(?:\/[0-9a-f-]{36}\/join)?$/.test(a.path) || !uuid(body.requestId) || typeof body.name !== 'string' || validateMafiaName(body.name) !== body.name || !avatars.has(body.avatar) || typeof body.playerToken !== 'string' || !CAPABILITY.test(body.playerToken) || typeof body.inviteToken !== 'string' || !CAPABILITY.test(body.inviteToken)) invalid();
   const create = a.path === '/mafia/rooms';
-  if (create && !['human', 'ai'].includes(body.narratorMode)) invalid();
+  if (create && !['human', 'automatic', 'ai'].includes(body.narratorMode)) invalid();
   const settings = create ? parseMafiaSettings(body) : undefined;
   return { path: a.path, body: { requestId: body.requestId, name: body.name, avatar: body.avatar, playerToken: body.playerToken, inviteToken: body.inviteToken, ...(create ? { ...settings, narratorMode: body.narratorMode } : {}) } };
 }

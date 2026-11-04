@@ -301,6 +301,15 @@ def room_request(api, event, room_id, body=None):
                 operations = renew_operations(api, state, now)
             elif state['game']['phase'] == 'lobby' and state.get('retiring'):
                 operations = renew_operations(api, state, now)
+        # Computer turns are driven only by an authenticated human request and
+        # share its CAS. Exact sequence retries return above without ticking.
+        try: advanced = engine().tick(state['game'], now=now)
+        except engine().PartyError as error: raise PartyError(error.status, error.message)
+        if advanced != state['game']:
+            state['game'] = advanced
+            changed = True
+            if state['game']['phase'] in {'closed', 'finished'} and not state.get('retiring'):
+                operations = renew_operations(api, state, now)
         if changed or operations:
             operation = put('game-party-room', room_id, state, previous)
             if not transact(api, [operation, *operations]): pause(attempt); continue

@@ -7,7 +7,7 @@ export type PartyCatalogEntry = { id: string; title: string; category: string; m
 export const PARTY_GAMES: readonly PartyCatalogEntry[] = catalog.games;
 export const partyGame = (kind: string) => PARTY_GAMES.find(game => game.id === kind);
 export const isPartyKind = (kind: unknown): kind is PartyKind => typeof kind === 'string' && kind !== 'mafia' && PARTY_GAMES.some(game => game.id === kind);
-export type PartyPlayer = { id: string; name: string; avatar: MafiaAvatar; score: number; alive?: boolean; left?: boolean; room?: string; role?: string };
+export type PartyPlayer = { id: string; name: string; avatar: MafiaAvatar; score: number; alive?: boolean; left?: boolean; room?: string; role?: string; isAI?: boolean };
 export type PartyMessage = { id: string; playerId?: string; text: string; at: number };
 export type PartyRoom = {
   version: 1; roomId: string; kind: PartyKind; hostId: string; status: string; phase: string; phaseId: number; round: number; createdAt: number; deadlineAt: number | null;
@@ -76,9 +76,10 @@ export function parsePartyRoom(value: unknown): PartyRoom {
   const r = object(value), self = object(r.self);
   if (r.version !== 1 || !uuid(r.roomId) || !isPartyKind(r.kind) || !uuid(r.hostId) || !['lobby', 'playing', 'finished', 'closed'].includes(r.status) || !text(r.phase, 40) || !r.phase || !integer(r.phaseId) || !integer(r.round) || !timestamp(r.createdAt) || !(r.deadlineAt === null || timestamp(r.deadlineAt)) || !(r.winner === null || text(r.winner, 100))) invalid();
   if (!Array.isArray(r.players) || r.players.length < 1 || r.players.length > 24) invalid();
-  const players: PartyPlayer[] = r.players.map((value: unknown) => { const p = object(value); if (!uuid(p.id) || !text(p.name, 64) || validateMafiaName(p.name) !== p.name || !avatars.has(p.avatar) || !integer(p.score, -1000000, 1000000) || !(p.alive === undefined || typeof p.alive === 'boolean') || !(p.room === undefined || text(p.room, 40)) || !(p.role === undefined || text(p.role, 40))) invalid(); return { id: p.id, name: p.name, avatar: p.avatar, score: p.score, ...(p.alive === undefined ? {} : { alive: p.alive }), ...(p.left === true ? { left: true } : {}), ...(p.room === undefined ? {} : { room: p.room }), ...(p.role === undefined ? {} : { role: p.role }) }; });
+  const players: PartyPlayer[] = r.players.map((value: unknown) => { const p = object(value); if (!uuid(p.id) || !text(p.name, 64) || validateMafiaName(p.name) !== p.name || !avatars.has(p.avatar) || !integer(p.score, -1000000, 1000000) || !(p.alive === undefined || typeof p.alive === 'boolean') || !(p.room === undefined || text(p.room, 40)) || !(p.role === undefined || text(p.role, 40)) || !(p.isAI === undefined || typeof p.isAI === 'boolean')) invalid(); return { id: p.id, name: p.name, avatar: p.avatar, score: p.score, ...(p.alive === undefined ? {} : { alive: p.alive }), ...(p.left === true ? { left: true } : {}), ...(p.room === undefined ? {} : { room: p.room }), ...(p.role === undefined ? {} : { role: p.role }), ...(p.isAI === undefined ? {} : { isAI: p.isAI }) }; });
   const ids = new Set(players.map(p => p.id));
   if (ids.size !== players.length || !ids.has(r.hostId) || !uuid(self.id) || !ids.has(self.id) || typeof self.isHost !== 'boolean' || !integer(self.actionSequence)) invalid();
+  if (players.some(player => player.isAI && (player.id === r.hostId || player.id === self.id))) invalid();
   const settings = object(r.settings); if (Object.entries(settings).some(([key, value]) => !text(key, 40) || !integer(value, 0, 1000))) invalid();
   return { version: 1, roomId: r.roomId, kind: r.kind, hostId: r.hostId, status: r.status, phase: r.phase, phaseId: r.phaseId, round: r.round, createdAt: r.createdAt, deadlineAt: r.deadlineAt, settings: { ...settings }, players, winner: r.winner, events: messages(r.events), chat: messages(r.chat), self: data(self), game: gameData(r.game, r.kind) };
 }
