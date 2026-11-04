@@ -133,3 +133,17 @@ test('pause and resume preserve an eligible run, while an explicit tracker reset
   assert.equal(tracker.observe(snapshot(spec, 1, 'won', 10))?.points, 200);
   tracker.reset(); assert.equal(tracker.observe(snapshot(spec, 1, 'won', 10)), undefined);
 });
+
+test('versus snapshots cannot enter a cooperative or solo campaign result tracker', () => {
+  const spec = game(1), engine = createCooperativeEngine(), tracker = createCooperativeLeaderboardTracker(spec, 0);
+  const match = { mode: 'versus' as const, lives: 1, timeLimit: 30 };
+  const state = engine.create(spec, 0, match); state.running = true; state.paused = false;
+  assert.ok(validateCooperativeState(engine.snapshot(state), spec, match));
+  assert.equal(tracker.observe(engine.snapshot(state)), undefined);
+  state.elapsed = 2; state.players[1].lives = 0; state.outcome = 'finished'; state.running = false;
+  state.versus = { winner: 0, reason: 'elimination' };
+  assert.ok(validateCooperativeState(engine.snapshot(state), spec, match));
+  assert.equal(tracker.observe(engine.snapshot(state)), undefined);
+  tracker.observe(snapshot(spec));
+  assert.deepEqual(tracker.observe(snapshot(spec, 0, 'lost', 3, [20, 30])), { outcome: 'lost', elapsed: 3, score: 0, points: 20, reviewedLevelIds: ['level-1'] });
+});

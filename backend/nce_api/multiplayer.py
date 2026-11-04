@@ -157,7 +157,26 @@ def room_check(room):
             ':org': os.environ['CORE_ORGANIZATION_ID'], ':service': os.environ['CORE_SERVICE_ID']}}}
 
 
-def publication(api, game_id, edition, expected_hash=None):
+def validate_match(value):
+    """Immutable room rules; never part of an authored game or guest input."""
+    fields(value, ('mode', 'lives', 'timeLimit'))
+    if value['mode'] != 'versus':
+        fail('Choose the supported Asteroids versus mode.')
+    integer(value['lives'], 1, 5)
+    integer(value['timeLimit'], 30, 180)
+    return {'mode': 'versus', 'lives': value['lives'], 'timeLimit': value['timeLimit']}
+
+
+def match_fields(room):
+    return {'match': validate_match(room['match'])} if 'match' in room else {}
+
+
+def versus_eligible(spec):
+    return (spec.get('version') in {1, 2, 4, 5, 6} and spec.get('genre') == 'dodge'
+        and bool(spec.get('arcade', {}).get('shooting')) and 'flow' not in spec)
+
+
+def publication(api, game_id, edition, expected_hash=None, match=None):
     identifier(game_id)
     integer(edition, 1, 1000000000)
     public = api.clients()[0].Table(os.environ['GAME_PUBLIC_TABLE']).get_item(
@@ -179,8 +198,6 @@ def publication(api, game_id, edition, expected_hash=None):
             spec = games().validate_spec(state['spec'])
         except (games().GameError, KeyError):
             fail('This edition does not support multiplayer.', 409)
-        if spec.get('version') not in {4, 5, 6} or spec.get('multiplayer') != {'mode': 'cooperative', 'maxPlayers': 2}:
-            fail('Two-player play is not enabled for this game.', 409)
         spec_hash = hashlib.sha256(canonical(spec).encode('utf-8')).hexdigest()
         _publication_validations[cache_key] = spec_hash
         if len(_publication_validations) > PUBLICATION_VALIDATION_LIMIT:
@@ -190,6 +207,14 @@ def publication(api, game_id, edition, expected_hash=None):
         # cached object or another request's validated definition.
         spec = state['spec']
         _publication_validations.move_to_end(cache_key)
+    # Eligibility depends on this immutable room's mode, not the cached game
+    # hash. A previous versus lookup must not authorize ordinary cooperation.
+    if match is not None:
+        validate_match(match)
+        if not versus_eligible(spec):
+            fail('Versus requires a standalone shooting Asteroids game.', 409)
+    elif spec.get('version') not in {4, 5, 6} or spec.get('multiplayer') != {'mode': 'cooperative', 'maxPlayers': 2}:
+        fail('Two-player play is not enabled for this game.', 409)
     if expected_hash is not None and not hmac.compare_digest(spec_hash, expected_hash):
         fail('The published game changed. Start a new room.', 409)
     check = {'ConditionCheck': {'TableName': os.environ['GAME_PUBLIC_TABLE'], 'Key': {'id': public['id']},
@@ -357,7 +382,7 @@ def active_room(api, room_id, *, loaded=None):
             terminate(api, room, 'host-disconnected')
             fail('The host disconnected. Start a new room.', 410)
     try:
-        spec, _, check = publication(api, room['gameId'], int(room['publishedRevision']), room['specSha256'])
+        spec, _, check = publication(api, room['gameId'], int(room['publishedRevision']), room['specSha256'], room.get('match'))
     except MultiplayerError as error:
         if error.status in {404, 409}:
             terminate(api, room, 'publication-changed')
@@ -423,14 +448,14 @@ def public_rooms(api, event, body):
         if not waiting_public_room(api, room, now):
             continue
         try:
-            spec, _, _ = publication(api, room['gameId'], int(room['publishedRevision']), room['specSha256'])
+            spec, _, _ = publication(api, room['gameId'], int(room['publishedRevision']), room['specSha256'], room.get('match'))
         except MultiplayerError as error:
             if error.status in {404, 409}:
                 continue
             raise
         result.append({'roomId': room['roomId'], 'gameId': room['gameId'],
             'publishedRevision': int(room['publishedRevision']), 'specSha256': room['specSha256'],
-            'title': spec['title'], 'expiresAt': int(room['expiresAt'])})
+            'title': spec['title'], 'expiresAt': int(room['expiresAt']), **match_fields(room)})
     return {'rooms': result}
 
 
@@ -462,7 +487,8 @@ def lobby_remove(api, room):
 
 
 def create_room(api, event, body):
-    fields(body, ('gameId', 'publishedRevision'), ('visibility',))
+    fields(body, ('gameId', 'publishedRevision'), ('visibility', 'match'))
+    match = validate_match(body['match']) if 'match' in body else None
     visibility = body.get('visibility', 'private')
     if not isinstance(visibility, str) or visibility not in {'private', 'public'}:
         fail('Choose a private invitation or public partner lobby.')
@@ -470,7 +496,7 @@ def create_room(api, event, body):
     # Separate installation-wide bound also limits distributed room allocation.
     rate(api, {'requestContext': {}}, 'all-create', 120)
     endpoint = socket_url()
-    spec, spec_hash, check = publication(api, body['gameId'], body['publishedRevision'])
+    spec, spec_hash, check = publication(api, body['gameId'], body['publishedRevision'], match=match)
     now = int(time.time())
     room_id = str(uuid.uuid4())
     host, invite = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
@@ -478,7 +504,8 @@ def create_room(api, event, body):
         specSha256=spec_hash, hostHash=digest(host), inviteHash=digest(invite), guestHash='',
         createdAt=now, expiresAt=now + ROOM_SECONDS, legacyExpiresAt0=now + ROOM_SECONDS,
         legacyExpiresAt1=now + ROOM_SECONDS, closed=False, hostConnected=False, visibility=visibility,
-        connection0='', connection1='', generation0='', generation1='', disconnectedAt0=0, disconnectedAt1=0)
+        connection0='', connection1='', generation0='', generation1='', disconnectedAt0=0, disconnectedAt1=0,
+        **({'match': match} if match is not None else {}))
     for _ in range(5):
         registry_operations = []
         if visibility == 'public':
@@ -489,7 +516,7 @@ def create_room(api, event, body):
                 if not waiting_public_room(api, candidate, now, host_required=False):
                     continue
                 try:
-                    publication(api, candidate['gameId'], int(candidate['publishedRevision']), candidate['specSha256'])
+                    publication(api, candidate['gameId'], int(candidate['publishedRevision']), candidate['specSha256'], candidate.get('match'))
                 except MultiplayerError as error:
                     if error.status in {404, 409}:
                         continue
@@ -506,7 +533,7 @@ def create_room(api, event, body):
     else:
         fail('The public lobby changed. Retry shortly.', 409)
     return {'roomId': room['roomId'], 'hostToken': host, 'inviteToken': invite, 'expiresAt': room['expiresAt'], 'socketUrl': endpoint,
-        'gameId': room['gameId'], 'publishedRevision': int(room['publishedRevision']), 'specSha256': room['specSha256']}
+        'gameId': room['gameId'], 'publishedRevision': int(room['publishedRevision']), 'specSha256': room['specSha256'], **match_fields(room)}
 
 
 def join_room(api, event, room_id, body, public=False):
@@ -538,7 +565,7 @@ def join_room(api, event, room_id, body, public=False):
         lobby_operations = [] if public else lobby_remove(api, room)
         if transaction(api, [check, put(changed, room), *lobby_operations]):
             return {'roomId': room_id, 'guestToken': token, 'expiresAt': int(room['expiresAt']), 'socketUrl': endpoint,
-                'gameId': room['gameId'], 'publishedRevision': int(room['publishedRevision']), 'specSha256': room['specSha256']}
+                'gameId': room['gameId'], 'publishedRevision': int(room['publishedRevision']), 'specSha256': room['specSha256'], **match_fields(room)}
     fail('This room changed. Retry shortly.', 409)
 
 
@@ -568,19 +595,24 @@ def dispatch(api, event, method, path, body):
     fail('Multiplayer route not found.', 404)
 
 
-def validate_state(value, spec):
+def validate_state(value, spec, match=None):
+    if match is not None:
+        match = validate_match(match)
+        if not versus_eligible(spec): fail('Versus requires a standalone shooting Asteroids game.')
     advanced = spec['version'] == 6
-    endless = advanced and spec['asteroids']['endless']
+    endless = advanced and spec['asteroids']['endless'] and match is None
     prizes = spec['version'] == 5 or advanced and 'powerUps' in spec
     maximum_id = 2147483646 if advanced else 10000000
-    fields(value, ('levelIndex', 'elapsed', 'outcome', 'running', 'paused', 'seed', 'nextId', 'nextSnack', 'nextHazard', 'players', 'entities', 'bullets', 'platforms') + (('powerUps',) if prizes else ()) + (('advanced',) if advanced else ()))
+    fields(value, ('levelIndex', 'elapsed', 'outcome', 'running', 'paused', 'seed', 'nextId', 'nextSnack', 'nextHazard', 'players', 'entities', 'bullets', 'platforms') + (('powerUps',) if prizes else ()) + (('advanced',) if advanced else ()) + (('versus',) if match is not None else ()))
     if len(canonical(value).encode('utf-8')) > (24000 if advanced or prizes else MAX_STATE_BYTES):
         fail('The multiplayer snapshot is too large.', 413)
-    level_index = integer(value['levelIndex'], 0, len(spec['levels']) - 1)
+    levels = games().get_levels(spec)
+    level_index = integer(value['levelIndex'], 0, len(levels) - 1)
+    if match is not None and level_index != 0: fail('Versus uses the first saved arena.')
     if endless and level_index != 0: fail('Endless cooperation uses the first saved level.')
-    rules = spec['levels'][level_index]['rules']
-    number(value['elapsed'], 0, 2147483647 if endless else rules['timeLimit'])
-    if not isinstance(value['outcome'], str) or value['outcome'] not in {'playing', 'won', 'lost'}:
+    rules = levels[level_index]['rules']
+    number(value['elapsed'], 0, match['timeLimit'] if match is not None else 2147483647 if endless else rules['timeLimit'])
+    if not isinstance(value['outcome'], str) or value['outcome'] not in ({'playing', 'finished'} if match is not None else {'playing', 'won', 'lost'}):
         fail('Invalid multiplayer outcome.')
     if endless and value['outcome'] == 'won': fail('An endless game has no winning outcome.')
     boolean(value['running']); boolean(value['paused'])
@@ -592,7 +624,8 @@ def validate_state(value, spec):
         fields(player, ('x', 'y', 'vy', 'grounded', 'score', 'lives', 'invulnerable', 'angle', 'previousJump', 'fireCooldown', 'points') + (('effects',) if prizes else ()))
         number(player['x'], 0, 918); number(player['y'], -100, 600); number(player['vy'], -1000, 1000)
         boolean(player['grounded']); boolean(player['previousJump'])
-        integer(player['score'], 0, min(2147483647, math.ceil(value['elapsed'] * 20) + 40) if endless else rules['goal']); integer(player['lives'], 0, rules['lives'])
+        integer(player['score'], 0, min(2147483647, math.ceil(value['elapsed'] * 20) + 40) if endless or match is not None else rules['goal'])
+        integer(player['lives'], 0, match['lives'] if match is not None else rules['lives'])
         number(player['invulnerable'], 0, 2); number(player['angle'], -7, 7); number(player['fireCooldown'], 0, 1)
         integer(player['points'], 0, min(2147483647, math.ceil(value['elapsed'] * 2000) + 2000) if advanced else 1000000)
         if prizes:
@@ -605,6 +638,24 @@ def validate_state(value, spec):
             if 'shield' not in spec['powerUps']['types'] and effects['shield'] != 0: fail('This prize effect is not enabled.')
     if value['outcome'] == 'won' and any(player['score'] != rules['goal'] for player in value['players']):
         fail('Both players must complete the level before a cooperative win.')
+    if match is not None:
+        terminal = value['versus']
+        fields(terminal, ('winner', 'reason'))
+        winner, reason = terminal['winner'], terminal['reason']
+        if winner is not None and winner != 'draw' and (type(winner) is not int or winner not in {0, 1}):
+            fail('Invalid versus winner.')
+        if reason is not None and (not isinstance(reason, str) or reason not in {'elimination', 'time'}):
+            fail('Invalid versus finish reason.')
+        lives = [player['lives'] for player in value['players']]
+        if value['outcome'] == 'playing':
+            if winner is not None or reason is not None or min(lives) == 0 or value['elapsed'] >= match['timeLimit']:
+                fail('A versus match must finish after elimination or its time limit.')
+        else:
+            expected_reason = 'elimination' if min(lives) == 0 else 'time'
+            expected_winner = 'draw' if lives[0] == lives[1] else 0 if lives[0] > lives[1] else 1
+            if (value['running'] or value['paused'] or reason != expected_reason or winner != expected_winner
+                    or reason == 'time' and value['elapsed'] != match['timeLimit']):
+                fail('The versus result must match remaining lives and the match clock.')
     ids = set()
     for collection, limit in [('entities', 64 if prizes or advanced else 96), ('bullets', 64 if prizes or advanced else 32), ('platforms', 6)]:
         if not isinstance(value[collection], list) or len(value[collection]) > limit:
@@ -748,7 +799,7 @@ def admit(api, connection, body):
             if old_id and old_id != connection['connectionId']:
                 disconnect_socket(api, old_id)
             post(api, connection['connectionId'], {'type': 'ready', 'roomId': room['roomId'], 'seat': seat, 'expiresAt': connection_expiry,
-                'gameId': room['gameId'], 'publishedRevision': int(room['publishedRevision']), 'specSha256': room['specSha256']})
+                'gameId': room['gameId'], 'publishedRevision': int(room['publishedRevision']), 'specSha256': room['specSha256'], **match_fields(room)})
             if renewable:
                 post(api, connection['connectionId'], {'type': 'lease', 'expiresAt': expires_at})
             post(api, connection['connectionId'], {'type': 'peer', 'connected': connected(api, changed_room, 1 - seat)})
@@ -845,7 +896,7 @@ def message(api, event):
             maximum = 30
         elif kind == 'state' and seat == 0:
             fields(body, ('type', 'seq', 'state'))
-            validate_state(body['state'], spec)
+            validate_state(body['state'], spec, room.get('match'))
             seq = integer(body['seq'], 1, 10000000) if connection.get('flowVersion') == 3 else integer(body['seq'], 0, 2147483647)
             maximum = 20
         else:

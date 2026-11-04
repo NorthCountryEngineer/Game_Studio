@@ -61,6 +61,64 @@ async function check() {
     const until = predicate => { const existing = messages.find(predicate); if (existing) return Promise.resolve(existing); return new Promise((resolve, reject) => { const wait = { predicate, resolve, timeout: setTimeout(() => reject(new Error('Timed out waiting for the local relay.')), 5000) }; waits.push(wait); }); };
     return { socket, until, observed: () => [...messages], clear: () => { messages.length = 0; }, send: value => socket.send(JSON.stringify(value)) };
   }
+  async function versusRehearsal() {
+    const match = { mode: 'versus', lives: 1, timeLimit: 60 };
+    const response = await request('/multiplayer/rooms', 'POST', { gameId: fixture.id, publishedRevision: fixture.publishedRevision, visibility: 'public', match });
+    assert.equal(response.status, 200); const rawHost = await response.json();
+    assert.deepEqual(rawHost.match, match);
+    const host = connect(rawHost.hostToken, rawHost, true, true);
+    try {
+      assert.deepEqual((await host.until(message => message.type === 'ready')).match, match);
+      const listing = (await lobby()).find(room => room.roomId === rawHost.roomId);
+      assert.deepEqual(listing?.match, match, 'public versus listing carries the immutable match rules');
+      for (const capability of [rawHost.hostToken, rawHost.inviteToken]) assert.equal(JSON.stringify(listing).includes(capability), false);
+      const joined = await request(`/multiplayer/rooms/${rawHost.roomId}/join`, 'POST', { ...joining, inviteToken: rawHost.inviteToken });
+      assert.equal(joined.status, 200); const rawGuest = await joined.json();
+      assert.deepEqual(rawGuest.match, match);
+      assert.ok(validateMultiplayerRoom(rawHost, 0, true) && validateMultiplayerRoom(rawGuest, 1, true));
+      const guest = connect(rawGuest.guestToken, rawHost, true, true);
+      assert.deepEqual((await guest.until(message => message.type === 'ready')).match, match);
+      await Promise.all([host.until(message => message.type === 'peer' && message.connected), guest.until(message => message.type === 'peer' && message.connected)]);
+      assert.equal((await lobby()).some(room => room.roomId === rawHost.roomId), false);
+      const engine = createCooperativeEngine();
+      let sequence = 0;
+      function arena() {
+        const state = engine.create(fixture.spec, 0, match); state.running = true; state.paused = false;
+        assert.deepEqual(state.players.map(player => player.lives), [1, 1]);
+        Object.assign(state.players[0], { x: 160, y: 250, angle: 0, invulnerable: 0 });
+        Object.assign(state.players[1], { x: 740, y: 250, angle: Math.PI, invulnerable: 0 });
+        quiet(state); return state;
+      }
+      function quiet(state) {
+        // Isolate player combat from random hazards in this disposable world.
+        state.entities = []; state.nextSnack = state.nextHazard = 1;
+        if (state.advanced) { state.advanced.enemies = []; state.advanced.enemyBullets = []; state.advanced.nextEnemy = 10; }
+        if (state.powerUps) { state.powerUps.pickups = []; state.powerUps.nextSpawn = 5; }
+      }
+      async function relay(state) {
+        const snapshot = engine.snapshot(state); assert.ok(validateCooperativeState(snapshot, fixture.spec, match));
+        host.send({ type: 'state', seq: ++sequence, state: snapshot });
+        assert.deepEqual((await guest.until(message => message.type === 'state' && message.seq === sequence)).state, snapshot);
+        await host.until(message => message.type === 'ack' && message.kind === 'state' && message.seq === sequence);
+      }
+      const trade = arena(); await relay(trade);
+      guest.send({ type: 'input', seq: 1, mask: 32 });
+      const input = await host.until(message => message.type === 'input' && message.seq === 1);
+      for (let tick = 0; tick < 300 && trade.outcome === 'playing'; tick++) { quiet(trade); engine.step(trade, fixture.spec, [32, input.mask], 1 / 60, match); }
+      assert.equal(trade.outcome, 'finished'); assert.deepEqual(trade.versus, { winner: 'draw', reason: 'elimination' });
+      assert.deepEqual(trade.players.map(player => player.lives), [0, 0]); await relay(trade);
+      const rematch = arena(); await relay(rematch);
+      assert.deepEqual(rematch.versus, { winner: null, reason: null });
+      guest.send({ type: 'input', seq: 2, mask: 0 }); await host.until(message => message.type === 'input' && message.seq === 2);
+      for (let tick = 0; tick < 300 && rematch.outcome === 'playing'; tick++) { quiet(rematch); engine.step(rematch, fixture.spec, [32, 0], 1 / 60, match); }
+      assert.equal(rematch.outcome, 'finished'); assert.deepEqual(rematch.versus, { winner: 0, reason: 'elimination' });
+      assert.deepEqual(rematch.players.map(player => player.lives), [1, 0]); await relay(rematch);
+      console.log('PASS: versus rules stayed identical in creation, public listing, guest admission and both ready frames; real relayed guest fire produced a simultaneous final-life draw, and a same-room rematch reset the result and produced a Player 1 victory. Both terminal snapshots passed the real Python relay and reached the guest exactly.');
+    } finally {
+      assert.equal((await request(`/multiplayer/rooms/${rawHost.roomId}`, 'DELETE', { hostToken: rawHost.hostToken })).status, 200);
+      await host.until(message => message.type === 'closed');
+    }
+  }
   async function delayedClientRehearsal() {
     const response = await request('/multiplayer/rooms', 'POST', { gameId: fixture.id, publishedRevision: fixture.publishedRevision });
     assert.equal(response.status, 200); const rawHost = await response.json();
@@ -283,6 +341,7 @@ async function check() {
 
     await delayedClientRehearsal();
     await busyClientRehearsal();
+    await versusRehearsal();
 
     const publicResponse = await request('/multiplayer/rooms', 'POST', { gameId: fixture.id, publishedRevision: fixture.publishedRevision, visibility: 'public' });
     assert.equal(publicResponse.status, 200); const publicRoom = await publicResponse.json();

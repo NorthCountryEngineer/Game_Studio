@@ -5,6 +5,7 @@ import { isCooperativeGameSpec, isEndlessAsteroids, type Game, type GameResult, 
 import { deleteGame, duplicateGame, getGame, getGameSettings, listGames } from '../lib/game-api';
 import { GamePlayer } from './GamePlayer';
 import { CooperativeGame } from './CooperativePlayer';
+import { isVersusEligible } from '../lib/game-versus';
 import { MultiplayerLobby } from './MultiplayerLobby';
 import { MafiaCategoryCard } from './MafiaCategoryCard';
 import { AsteroidPrizeGuide } from './AsteroidPrizeEditor';
@@ -27,7 +28,7 @@ export function gameCardPresentation(spec: GameSpec) {
   if (spec.version === 8) return { world: 'world-multi-game', symbol: '◇', category: 'Multi-game', detail: `${spec.steps.filter(step => step.type === 'game').length} games · ${spec.steps.length} steps${spec.steps.some(step => step.type === 'free-play') ? ' · free play ending' : ''}`, label: 'Games and client objects · one journey' };
   if (spec.version === 3) return { world: `word-${spec.genre}`, symbol: spec.genre === 'crossword' ? '▦' : spec.genre === 'word-search' ? '⌕' : '✎', category: wordGenreNames[spec.genre], detail: wordGameSummary(spec), label: 'Word game' };
   const count = getGameLevels(spec).length;
-  return { world: `world-${spec.theme}`, symbol: spec.theme === 'space' ? '✦' : spec.theme === 'garden' ? '✿' : '≈', category: spec.version === 7 ? '2D Platformer' : spec.arcade ? 'Asteroids' : genreName[spec.genre], detail: `${isEndlessAsteroids(spec) ? 'Continuous survival' : `${count} ${count === 1 ? 'level' : 'levels'}`}${isCooperativeGameSpec(spec) ? ' · 1–2 players' : ''}${spec.powerUps ? ' · prizes' : ''}${spec.version === 6 && spec.asteroids?.enemies.enabled ? ` · ${spec.asteroids.enemies.difficulty} enemies` : ''}`, label: spec.version === 7 ? 'Pixel worlds · choose your character' : themeName[spec.theme] };
+  return { world: `world-${spec.theme}`, symbol: spec.theme === 'space' ? '✦' : spec.theme === 'garden' ? '✿' : '≈', category: spec.version === 7 ? '2D Platformer' : spec.arcade ? 'Asteroids' : genreName[spec.genre], detail: `${isEndlessAsteroids(spec) ? 'Continuous survival' : `${count} ${count === 1 ? 'level' : 'levels'}`}${isCooperativeGameSpec(spec) || isVersusEligible(spec) ? ' · 1–2 players' : ''}${isVersusEligible(spec) ? ' · versus' : ''}${spec.powerUps ? ' · prizes' : ''}${spec.version === 6 && spec.asteroids?.enemies.enabled ? ` · ${spec.asteroids.enemies.difficulty} enemies` : ''}`, label: spec.version === 7 ? 'Pixel worlds · choose your character' : themeName[spec.theme] };
 }
 
 function useGameActions({ navigate, adminMode, signed }: Props, refresh: () => Promise<void>) {
@@ -93,7 +94,7 @@ export function PublishedGame({ game, onGameEvent, onMaterialRequest, onMultiMat
     recordResult(result);
   }
   const solo = <GamePlayer spec={game.spec} onComplete={record} onMultiComplete={recordResult} onMultiMaterialRequest={onMultiMaterialRequest ? (request, signal) => onMultiMaterialRequest({ ...request, gameId: game.id, publishedRevision: game.publishedRevision ?? game.revision }, signal) : undefined} onMultiProgress={progress => onGameEvent?.({ type: 'multi-progress', gameId: game.id, publishedRevision: game.publishedRevision ?? game.revision, progress })} onMaterialRequest={onMaterialRequest ? (request, signal) => onMaterialRequest({ ...request, gameId: game.id, publishedRevision: game.publishedRevision ?? game.revision }, signal) : undefined} onFlowProgress={(progress, result) => onGameEvent?.({ type: 'flow-progress', gameId: game.id, publishedRevision: game.publishedRevision ?? game.revision, progress, ...(result ? { result } : {}) })} />;
-  return <>{isCooperativeGameSpec(game.spec) ? <CooperativeGame game={{ ...game, spec: game.spec }} onComplete={recordResult}>{solo}</CooperativeGame> : solo}<GameHighScores game={game} run={run}/></>;
+  return <>{isCooperativeGameSpec(game.spec) || isVersusEligible(game.spec) ? <CooperativeGame game={{ ...game, spec: game.spec }} onComplete={recordResult}>{solo}</CooperativeGame> : solo}<GameHighScores game={game} run={run}/></>;
 }
 
 function scoreValue(game: Game, result: GameResult | MultiGameResult) {

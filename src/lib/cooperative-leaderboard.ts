@@ -15,7 +15,7 @@ export function createCooperativeLeaderboardTracker(spec: CooperativeGameSpec, s
 
   function observe(value: unknown): GameResult | undefined {
     const state = validateCooperativeState(value, spec);
-    if (!state) return;
+    if (!state || state.outcome === 'finished' || state.versus) return;
     const index = state.levelIndex;
     const rolledBack = previous && (index < previous.levelIndex || index === previous.levelIndex && (state.elapsed < previous.elapsed || state.nextId < previous.nextId));
     const restarted = previous && index === previous.levelIndex && state.outcome === 'playing' && previous.outcome !== 'playing';

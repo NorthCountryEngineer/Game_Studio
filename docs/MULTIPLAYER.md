@@ -1,10 +1,15 @@
 # Optional two-player cooperative games
 
+Published shooting Asteroids also has a separate room-level **Asteroids versus**
+option, with opponent hits, fixed lives and a round timer. See [versus rules and
+settings](ASTEROIDS_VERSUS.md). The cooperative rules below continue to apply
+when a room has no versus settings.
+
 A creator enables **Allow two players to play together online** on an arcade game, saves it, playtests its saved levels and publishes the reviewed edition. The game keeps its normal **Play solo** option. Word games remain single-player. Existing versions 1–3 are unchanged; opting in creates version 4, retaining the version 2 level plan and layout seeds.
 
 On the published game's page, choose **Invite a friend** and copy the private invitation to the other player. The second player opens that link in another browser session or device. Alternatively, choose **Find a partner** to explicitly offer the free seat in the public **Looking for a partner** section. Private rooms remain the default and never appear there. The host starts the shared round once both players are connected. Both players see the same obstacles and collectibles, with two friendly characters/ships and separate controls, lives, collection goals and arcade point totals. Projectiles cannot damage a teammate. In timed campaigns, both players must reach their own collection goal; the round ends if time expires or both players lose their lives. Endless survival has no timer or collection win. The host controls start, pause, restart and level progression. The second player controls their own character.
 
-Multiplayer supports the fixed collect, dodge/shooting and platformer engines. The public lobby offers a single open seat, without chat, spectators, player profiles, a skill-matching algorithm or competitive play. Browser-host simulation is an advisory play observation. Each player's completed round can qualify for that published edition's [public leaderboard](PUBLIC_LEADERBOARDS.md), without signing in. Cooperative play does not submit to the assignment points SDK; a future host integration must explicitly bind each player's observations to its own approved assessment workflow. NCAcademy's current pinned arcade importer continues to receive only supported versions 1–2.
+Cooperative multiplayer supports the fixed collect, dodge/shooting and platformer engines. The public lobby offers a single open seat, without chat, spectators, player profiles or a skill-matching algorithm. Versus listings label their match rules separately. Browser-host simulation is an advisory play observation. Each player's completed cooperative round can qualify for that published edition's [public leaderboard](PUBLIC_LEADERBOARDS.md), without signing in. Cooperative play does not submit to the assignment points SDK; a future host integration must explicitly bind each player's observations to its own approved assessment workflow. NCAcademy's current pinned arcade importer continues to receive only supported versions 1–2.
 
 ## Looking for a partner
 

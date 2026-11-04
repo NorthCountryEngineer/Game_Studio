@@ -282,10 +282,20 @@ export function createGameEngine() {
     active.enemies = active.enemies.filter(enemy => enemy.y < height + 50 && enemy.hp > 0);
   }
   /** One advanced world implementation serves solo and both cooperative ships. */
-  function stepAdvanced(world: AdvancedWorld, spec: ArcadeGameSpec, players: AdvancedPlayer[], inputs: GameInput[], elapsed: number) {
+  function stepAdvanced(world: AdvancedWorld, spec: ArcadeGameSpec, players: AdvancedPlayer[], inputs: GameInput[], elapsed: number, versus?: { timeLimit: number }) {
     if (world.outcome !== 'playing' || !Number.isFinite(elapsed) || elapsed <= 0) return;
-    const dt = Math.min(elapsed, 1 / 20), persistent = endless(spec);
-    world.elapsed = persistent ? world.elapsed + dt : Math.min(spec.rules.timeLimit, world.elapsed + dt);
+    const dt = Math.min(elapsed, 1 / 20), persistent = !versus && endless(spec), unrestricted = Boolean(versus) || persistent;
+    const before = players.map(player => ({ x: player.x, y: player.y }));
+    function impact(player: AdvancedPlayer) {
+      const lives = player.lives;
+      advancedImpact(player, persistent);
+      if (versus && player.lives > 0 && player.lives < lives) {
+        const seat = players.indexOf(player);
+        player.x = seat === 0 ? 90 : 828; player.y = 253; player.vy = 0; player.angle = seat === 0 ? 0 : Math.PI; player.fireCooldown = 0;
+        if (player.effects) Object.assign(player.effects, newEffects());
+      }
+    }
+    world.elapsed = persistent ? world.elapsed + dt : Math.min(versus?.timeLimit ?? spec.rules.timeLimit, world.elapsed + dt);
     const scale = persistent ? difficulty(spec, world.elapsed) : { level: spec.rules.difficulty, pressure: 1 }; world.advanced.difficulty = scale.level;
     for (let seat = 0; seat < players.length; seat++) {
       const player = players[seat], input = inputs[seat] || {};
@@ -294,7 +304,7 @@ export function createGameEngine() {
       if (player.effects && !persistent) tickEffects(player.effects, dt);
       const speed = (110 + spec.player.speed * 32) * (player.effects?.speedBoost ? 1.6 : 1);
       let dx = Number(Boolean(input.right)) - Number(Boolean(input.left)), dy = Number(Boolean(input.down)) - Number(Boolean(input.up));
-      if (spec.arcade?.rotation) {
+      if (versus || spec.arcade?.rotation) {
         player.angle = ((player.angle + dx * 2.8 * dt) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2);
         const thrust = Number(Boolean(input.up)) - Number(Boolean(input.down)); dx = Math.cos(player.angle) * thrust; dy = Math.sin(player.angle) * thrust;
       } else if (dx && dy) { dx /= Math.SQRT2; dy /= Math.SQRT2; }
@@ -303,20 +313,20 @@ export function createGameEngine() {
     if (spec.powerUps && world.powerUps) advancePrizes(world, world.powerUps, spec.powerUps, dt, players.map(player => ({ x: player.x, y: player.y, effects: player.effects!, lives: player.lives })), world.nextId < 2147483600);
     for (let seat = 0; seat < players.length; seat++) {
       const player = players[seat], offsets = player.effects?.tripleShot ? [-0.18, 0, 0.18] : [0];
-      if (!player.lives || !inputs[seat]?.fire || player.fireCooldown || world.bullets.filter(bullet => (bullet.owner || 0) === seat).length + offsets.length > 32 || world.bullets.length + offsets.length > 64 || world.nextId >= 2147483600) continue;
-      const forward = spec.arcade?.rotation ? player.angle : -Math.PI / 2;
+      if (!player.lives || versus && player.invulnerable > 0 || !inputs[seat]?.fire || player.fireCooldown || world.bullets.filter(bullet => (bullet.owner || 0) === seat).length + offsets.length > 32 || world.bullets.length + offsets.length > 64 || world.nextId >= 2147483600) continue;
+      const forward = versus || spec.arcade?.rotation ? player.angle : -Math.PI / 2;
       for (const offset of offsets) { const angle = forward + offset; world.bullets.push({ id: world.nextId++, owner: seat as 0 | 1, x: player.x + 21 + Math.cos(angle) * 25, y: player.y + 17 + Math.sin(angle) * 25, vx: Math.cos(angle) * 620, vy: Math.sin(angle) * 620, ttl: 1.6 }); }
       player.fireCooldown = player.effects?.rapidFire ? 0.08 : 0.22;
     }
     world.nextSnack -= dt; world.nextHazard -= dt;
-    if (world.nextSnack <= 0) { if (players.some(player => player.lives && (persistent || player.score < spec.rules.goal))) advancedSpawn(world, spec, 'snack', scale.pressure); world.nextSnack = Math.min(0.8, spec.rules.timeLimit / (spec.rules.goal * (players.length === 2 ? 3.4 : 1.7))); }
+    if (world.nextSnack <= 0) { if (players.some(player => player.lives && (unrestricted || player.score < spec.rules.goal))) advancedSpawn(world, spec, 'snack', scale.pressure); world.nextSnack = Math.min(0.8, spec.rules.timeLimit / (spec.rules.goal * (players.length === 2 ? 3.4 : 1.7))); }
     if (world.nextHazard <= 0) { advancedSpawn(world, spec, 'hazard', scale.pressure); world.nextHazard = Math.max(0.15, (1.15 - spec.rules.difficulty * 0.13) / scale.pressure); }
     advancedEnemyStep(world, spec, players, dt, scale.pressure);
     const removed = new Set<number>(), deadEnemies = new Set<number>(), children: GameEntity[] = [];
     world.bullets = world.bullets.filter(bullet => {
       const dx = bullet.vx * dt, dy = bullet.vy * dt;
-      let nearest: GameEntity | GameEnemy | undefined, first = Infinity, enemyHit = false;
-      for (const entity of world.entities) if (!removed.has(entity.id) && (entity.kind === 'hazard' || players[bullet.owner || 0].lives && (persistent || players[bullet.owner || 0].score < spec.rules.goal))) {
+      let nearest: GameEntity | GameEnemy | undefined, first = Infinity, enemyHit = false, ship: number | undefined;
+      for (const entity of world.entities) if (!removed.has(entity.id) && (entity.kind === 'hazard' || players[bullet.owner || 0].lives && (unrestricted || players[bullet.owner || 0].score < spec.rules.goal))) {
         const hit = sweptHit(bullet.x, bullet.y, dx - entity.vx * dt, dy - entity.vy * dt, entity);
         if (hit !== undefined && hit < first) { nearest = entity; first = hit; enemyHit = false; }
       }
@@ -324,11 +334,19 @@ export function createGameEngine() {
         const hit = sweptHit(bullet.x, bullet.y, dx, dy, { ...enemy, kind: 'hazard' });
         if (hit !== undefined && hit < first) { nearest = enemy; first = hit; enemyHit = true; }
       }
+      if (versus) {
+        const seat = 1 - (bullet.owner || 0), target = players[seat], origin = before[seat];
+        if (target?.lives && !target.invulnerable) {
+          const hit = sweptHit(bullet.x, bullet.y, dx - (target.x - origin.x), dy - (target.y - origin.y), { id: 0, kind: 'hazard', x: origin.x, y: origin.y, w: 42, h: 34, vx: 0, vy: 0 });
+          if (hit !== undefined && hit < first) { ship = seat; first = hit; }
+        }
+      }
       if (shotPrize(bullet, dt, world.powerUps, spec.powerUps, players[bullet.owner || 0], first)) return false;
+      if (ship !== undefined) { impact(players[ship]); return false; }
       if (nearest) {
         let earned = 0;
         if (enemyHit) { const enemy = nearest as GameEnemy; enemy.hp--; if (!enemy.hp) { deadEnemies.add(enemy.id); earned = spec.asteroids!.enemies.difficulty === 'hard' ? 300 : spec.asteroids!.enemies.difficulty === 'medium' ? 200 : 100; } }
-        else if ((nearest as GameEntity).kind === 'snack') { removed.add(nearest.id); const owner = players[bullet.owner || 0]; owner.score = Math.min(persistent ? 2147483647 : spec.rules.goal, owner.score + 1); earned = 10; }
+        else if ((nearest as GameEntity).kind === 'snack') { removed.add(nearest.id); const owner = players[bullet.owner || 0]; owner.score = Math.min(unrestricted ? 2147483647 : spec.rules.goal, owner.score + 1); earned = 10; }
         else { const asteroid = nearest as GameEntity; removed.add(asteroid.id); earned = asteroid.asteroid === 'small' ? 50 : asteroid.asteroid === 'medium' ? 30 : 20; children.push(...fragments(world, spec, asteroid, dt, first)); }
         const owner = players[bullet.owner || 0]; if (spec.arcade?.scoring) owner.points = Math.min(2147483647, owner.points + earned);
         return false;
@@ -342,19 +360,20 @@ export function createGameEngine() {
       entity.x += entity.vx * dt; entity.y += entity.vy * dt; if (entity.grace) entity.grace = Math.max(0, entity.grace - dt);
       for (const seat of players.length === 2 && entity.id % 2 ? [1, 0] : players.map((_player, index) => index)) {
         const player = players[seat]; if (!player.lives || !overlaps({ x: player.x, y: player.y, w: 42, h: 34 }, entity)) continue;
-        if (entity.kind === 'snack') { if (!persistent && player.score >= spec.rules.goal) continue; removed.add(entity.id); player.score = Math.min(2147483647,player.score + 1); if (spec.arcade?.scoring) player.points = Math.min(2147483647, player.points + 10); break; }
-        if (!entity.grace) advancedImpact(player, persistent);
+        if (entity.kind === 'snack') { if (!unrestricted && player.score >= spec.rules.goal) continue; removed.add(entity.id); player.score = Math.min(2147483647,player.score + 1); if (spec.arcade?.scoring) player.points = Math.min(2147483647, player.points + 10); break; }
+        if (!entity.grace) impact(player);
       }
     }
     world.entities = world.entities.filter(entity => !removed.has(entity.id) && entity.y > -128 && entity.y < height + 60 && entity.x > -64 && entity.x < width + 64).concat(children);
-    for (const enemy of world.advanced.enemies) for (const player of players) if (overlaps({ x: player.x, y: player.y, w: 42, h: 34 }, enemy)) advancedImpact(player, persistent);
+    for (const enemy of world.advanced.enemies) for (const player of players) if (overlaps({ x: player.x, y: player.y, w: 42, h: 34 }, enemy)) impact(player);
     world.advanced.enemyBullets = world.advanced.enemyBullets.filter(bullet => {
       const dx = bullet.vx * dt, dy = bullet.vy * dt;
       let hit = false;
-      for (const player of players) if (player.lives && sweptHit(bullet.x, bullet.y, dx, dy, { id: 0, kind: 'hazard', x: player.x, y: player.y, w: 42, h: 34, vx: 0, vy: 0 }) !== undefined) { advancedImpact(player, persistent); hit = true; break; }
+      for (const player of players) if (player.lives && sweptHit(bullet.x, bullet.y, dx, dy, { id: 0, kind: 'hazard', x: player.x, y: player.y, w: 42, h: 34, vx: 0, vy: 0 }) !== undefined) { impact(player); hit = true; break; }
       bullet.x += dx; bullet.y += dy; bullet.ttl -= dt;
       return !hit && bullet.ttl > 0 && bullet.x > -30 && bullet.x < width + 30 && bullet.y > -30 && bullet.y < height + 30;
     });
+    if (versus) return;
     if (players.every(player => !player.lives)) world.outcome = 'lost';
     else if (!persistent && players.every(player => player.score >= spec.rules.goal)) world.outcome = 'won';
     else if (!persistent && world.elapsed >= spec.rules.timeLimit) world.outcome = 'lost';
