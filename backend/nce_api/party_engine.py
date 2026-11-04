@@ -8,11 +8,13 @@ are integer Unix seconds. project() is an explicit allowlist, never raw state.
 from collections import Counter
 from copy import deepcopy
 import json
+import importlib.util
 from pathlib import Path
 import re
 import secrets
 import time
 import unicodedata
+import uuid
 
 AVATARS = ('fox', 'bear', 'cat', 'dog', 'rabbit', 'panda', 'tiger', 'lion', 'frog', 'owl',
            'koala', 'unicorn', 'dragon', 'robot', 'alien', 'ghost', 'octopus', 'penguin', 'monkey', 'butterfly')
@@ -31,6 +33,18 @@ DRAWING_STROKES = 384
 DRAWING_POINTS = 8000
 DRAWING_BYTES = 120000
 DRAWING_ACK_IDS = 128
+AI_ACTIONS_PER_TICK = 8
+AI_MEMORY_BYTES = 1024
+_ai_rules = None
+
+
+def ai_rules():
+    global _ai_rules
+    if _ai_rules is None:
+        spec = importlib.util.spec_from_file_location('game_studio_party_ai', Path(__file__).with_name('party_ai.py'))
+        _ai_rules = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(_ai_rules)
+    return _ai_rules
 DEFAULTS = {
     'starship-suspects': {'maxPlayers': 12, 'rounds': 1, 'roundSeconds': 45},
     'sketch-guess': {'maxPlayers': 12, 'rounds': 6, 'roundSeconds': 75},
@@ -279,6 +293,9 @@ def _start(state, now):
     for player in state['players']:
         player.update(alive=True, score=0)
     state.update(status='playing', winner=None, round=1, chat=[], _messageTimes={})
+    if any(player.get('isAI') is True for player in state['players']):
+        state['_ai'] = {player['id']: {'nextAt': now + 2, 'phaseId': -1, 'memory': {}}
+                        for player in state['players'] if player.get('isAI') is True}
     kind = state['kind']
     if kind == 'starship-suspects':
         _start_ship(state, now)
@@ -293,7 +310,15 @@ def _start(state, now):
         state['_game'] = {'order': _shuffle(list(range(len(TRIVIA))))[:state['settings']['rounds']], 'answers': {}, 'result': None}
         _phase(state, 'question', now, state['settings']['roundSeconds'])
     elif kind == 'sketch-guess':
-        state['_game'] = {'order': _shuffle(list(range(len(PROMPTS))))[:state['settings']['rounds']],
+        indexes = list(range(len(PROMPTS)))
+        if state.get('_ai'):
+            supported = set(ai_rules().supported_prompts())
+            indexes = [index for index, (prompt, _) in enumerate(PROMPTS) if prompt in supported]
+            if not indexes:
+                fail('The computer drawing library is unavailable.', 503)
+        order = _shuffle(indexes)
+        order = (order * (1 + state['settings']['rounds'] // len(order)))[:state['settings']['rounds']]
+        state['_game'] = {'order': order,
                           'strokes': [], 'guessedIds': [], 'lastStrokeAt': {}, 'clearCount': 0,
                           'drawingEpoch': 0, 'drawingAckIds': [], 'artistId': state['players'][0]['id']}
         _phase(state, 'draw', now, state['settings']['roundSeconds'])
@@ -502,6 +527,54 @@ def reconcile(state, now=None):
     return state
 
 
+def tick(state, now=None):
+    """Advance bounded computer turns, only when a real seat requests the room.
+
+    Policies receive the same allowlisted view as their own seat, never the
+    private room. Their actions pass through the normal engine validators.
+    The adapter persists this transition with its existing conditional write.
+    """
+    now = _now(now)
+    state = reconcile(state, now)
+    if state['status'] != 'playing' or not any(not player.get('isAI') for player in _active(state)):
+        return state
+    runtime = state.get('_ai', {})
+    if not runtime:
+        return state
+    seats = []
+    for player in _active(state):
+        if player.get('isAI') is not True or player['id'] not in runtime:
+            continue
+        agent = runtime[player['id']]
+        if agent.get('phaseId') != state['phaseId']:
+            agent.update(phaseId=state['phaseId'], nextAt=max(now + 2, agent.get('nextAt', 0)))
+        if now >= agent.get('nextAt', now + 2):
+            seats.append(player)
+    # Oldest overdue seat first prevents starvation when a throttled tab polls
+    # more slowly than the think interval. Initialize every seat's phase before
+    # applying the per-request work budget.
+    seats.sort(key=lambda player: (runtime[player['id']]['nextAt'], player['id']))
+    for player in seats[:AI_ACTIONS_PER_TICK]:
+        agent = runtime[player['id']]
+        phase = state['phaseId']
+        action, memory = ai_rules().decide(deepcopy(project(state, player['id'], now)), deepcopy(agent.get('memory', {})), now)
+        if not isinstance(memory, dict) or len(json.dumps(memory, ensure_ascii=True, allow_nan=False, separators=(',', ':'))) > AI_MEMORY_BYTES:
+            memory = {}
+        agent.update(memory=memory, nextAt=now + 2 + secrets.randbelow(3))
+        if action is not None:
+            try:
+                state = apply_action(state, player['id'], {'phaseId': state['phaseId'], **action}, now=now)
+            except PartyError:
+                # A policy suggestion can become stale after an earlier bot in
+                # this same tick. It never bypasses game authority or retries in
+                # a catch-up loop.
+                pass
+        state['_ai'] = runtime
+        if state['phaseId'] != phase or state['status'] != 'playing':
+            break
+    return state
+
+
 def _leave(state, actor, now):
     if actor['id'] == state['hostId']:
         fail('The creator should close the room instead of leaving.', 409)
@@ -535,6 +608,7 @@ def _leave(state, actor, now):
 
 FIELDS = {
     'start': set(), 'close': set(), 'restart': set(), 'leave': set(), 'advance': set(),
+    'add-ai': set(), 'fill-ai': set(),
     'kick': {'targetId'}, 'settings': {'settings'}, 'chat': {'text'},
     'choose': {'choice'}, 'drop': {'column'}, 'answer': {'answer'}, 'guess': {'text'},
     'stroke': {'color', 'width', 'points'},
@@ -564,6 +638,7 @@ def apply_action(state, actor_id, action, now=None):
         _host(state, actor_id)
         state['status'] = 'closed'
         state['_game'] = {}
+        state.pop('_ai', None)
         _phase(state, 'closed', now)
         _emit(state, 'The creator closed this room.', now)
         return state
@@ -576,17 +651,40 @@ def apply_action(state, actor_id, action, now=None):
         for player in state['players']:
             player.update(score=0, alive=True)
         state.update(round=0, winner=None, _game={}, chat=[], events=[], _messageTimes={})
+        state.pop('_ai', None)
         _phase(state, 'lobby', now)
         return state
     if kind == 'leave':
         _leave(state, actor, now)
         return state
-    if kind in {'start', 'settings', 'kick'}:
+    if kind in {'start', 'settings', 'kick', 'add-ai', 'fill-ai'}:
         _host(state, actor_id)
         if state['status'] != 'lobby':
             fail('This control is only available in the lobby.', 409)
         if kind == 'start':
             _start(state, now)
+        elif kind in {'add-ai', 'fill-ai'}:
+            needed = 1 if kind == 'add-ai' else max(0, GAMES[state['kind']]['minPlayers'] - len(_active(state)))
+            if not needed:
+                fail('There are already enough players to start.', 409)
+            if len(_active(state)) + needed > state['settings']['maxPlayers']:
+                fail('This room is full.', 409)
+            state['players'] = _active(state)
+            for _ in range(needed):
+                names = {player['name'].casefold() for player in state['players']}
+                number = next(number for number in range(1, 50) if ('AI Player ' + str(number)).casefold() not in names)
+                occupied = {player['id'] for player in state['players']}
+                player_id = None
+                for _ in range(8):
+                    candidate = str(uuid.uuid4())
+                    if candidate not in occupied:
+                        player_id = candidate
+                        break
+                if player_id is None:
+                    fail('A computer seat could not be reserved. Try again.', 503)
+                state['players'].append({'id': player_id, 'name': 'AI Player ' + str(number), 'avatar': 'robot',
+                                         'isAI': True, 'alive': True, 'left': False, 'score': 0})
+                _emit(state, 'AI Player ' + str(number) + ' joined as a computer opponent.', now)
         elif kind == 'settings':
             updated = validate_settings(state['kind'], action.get('settings'), state['settings'])
             if updated['maxPlayers'] < len(_active(state)):
@@ -598,6 +696,7 @@ def apply_action(state, actor_id, action, now=None):
                 fail('The creator cannot remove their own seat.')
             state['players'] = [player for player in state['players'] if player['id'] != target['id']]
             state['_messageTimes'].pop(target['id'], None)
+            state.get('_ai', {}).pop(target['id'], None)
             _emit(state, target['name'] + ' was removed from the lobby.', now)
         return state
     if kind == 'chat':
@@ -911,6 +1010,9 @@ def project(state, viewer_id, now=None):
     result['title'] = GAMES[state['kind']]['title']
     result['players'] = [{key: deepcopy(player[key]) for key in ('id', 'name', 'avatar', 'score', 'alive', 'left')}
                          for player in state['players']]
+    for source, player in zip(state['players'], result['players']):
+        if source.get('isAI') is True:
+            player['isAI'] = True
     result['self'] = {'id': viewer_id, 'isHost': viewer_id == state['hostId'],
                       'alive': viewer['alive'], 'left': viewer.get('left', False)}
     result['game'] = {}

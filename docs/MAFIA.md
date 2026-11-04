@@ -5,7 +5,7 @@ Mafia is a separate live-game category. Open **Mafia** from Games or the worksho
 ## Start a group
 
 1. Enter a display name and pick a built-in animal, fantasy or space avatar. Names allow one to sixteen Unicode characters and are displayed as literal text.
-2. Choose human or AI narration and the playing-seat limit. A human narrator is an additional, nonplaying seat. A round needs at least five playing seats and supports up to twenty-four; the physical room therefore supports at most twenty-five people.
+2. Choose human, automatic or AI story narration and the playing-seat limit. A human narrator is an additional, nonplaying seat. A round needs at least five playing seats and supports up to twenty-four; the physical room therefore supports at most twenty-five people.
 3. Share the private invitation with your group. Each person enters their own name and avatar. No Core account is needed to host or join a room.
 4. The person who opened the room is its creator and initially its human narrator. Before starting, the creator can reassign narration to another joined person. The previous narrator then becomes a playing seat. The creator retains lobby and room-closing controls.
 5. Start when everyone is present. The server shuffles the roles. Each player sees only their own role and allowed private information. The human narrator sees the roles and secret choices needed to run the game.
@@ -14,9 +14,11 @@ Invite links grant admission to that room, so share them only with the intended 
 
 The creator can remove seats in the lobby and close a room. A finished round offers a rematch in the same room. A rematch clears roles, investigation results, ballots, chat and prior-round narration before returning the present group to the lobby. Narration and room settings can then be reviewed again. Leaving marks a playing seat out; refreshing or a brief network interruption alone does not eliminate anyone. The creator and human narrator must close their room rather than leave it without controls.
 
+To play alone, choose **Fill with AI & use automatic narrator** in the lobby. This adds the AI seats needed for five players and lets the creator play a secret role. **Add AI player** adds one seat while preserving the current narrator. AI seats are labeled, can be removed before starting, and can play alongside friends. They use their own role, allowed private information and public discussion; they do not see everyone else's roles or secretly read ballots. Their short discussion messages are built-in statements, and their suspicions can be wrong. A human narrator can also guide a group containing AI players. The creator can watch after elimination and start another match once the game ends.
+
 ## MVP rules
 
-The server assigns one Mafia member per four playing seats, rounded down, with at least one. There is one detective and one doctor; everyone else is a civilian. A human narrator receives no playing role. In AI mode everyone, including the creator, receives a playing role.
+The server assigns one Mafia member per four playing seats, rounded down, with at least one. There is one detective and one doctor; everyone else is a civilian. A human narrator receives no playing role. With automatic or AI story narration everyone, including the creator, receives a playing role.
 
 | Phase | What happens |
 | --- | --- |
@@ -35,6 +37,8 @@ The town wins when no Mafia members remain. Mafia wins when its living members e
 A human narrator writes announcements and advances the phases. They may open voting after discussion. Night and voting resolve after all required choices arrive, or after the timer expires using the explicit timeout override. Missing choices count as no action or no ballot; the narrator cannot submit a secret choice on someone else's behalf.
 
 AI narration combines automatic phase management with a reviewed bank of short text written by Nova Micro. An authorized administrator generates and reviews that bank before enabling it. Anonymous room creation and gameplay never invoke a model. No player name, message, role, investigation or vote is sent to the model. The generated text supplies atmosphere; fixed server text supplies the actual results. It cannot choose roles, alter votes or change the winner.
+
+Automatic narration uses only the fixed server text and is available without a generated vocabulary. It uses the same phase timing and resolution rules. AI players and automatic narration never invoke models; the separately enabled AI story vocabulary keeps its existing administrator approval and generation controls.
 
 In AI mode, nights and votes resolve once all required choices arrive or their timers expire. Discussion moves to voting when all living players are ready or the timer expires. A request reconciles at most one elapsed phase, giving the group a fresh timer for the next phase instead of racing through phases after an absence. Defaults are 75 seconds at night, 90 seconds for discussion and 45 seconds for voting; each can be set between 30 and 300 seconds before play.
 

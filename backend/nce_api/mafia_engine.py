@@ -11,10 +11,13 @@ validate_settings, AVATARS, MafiaError. The API adds its UUID as state.roomId.
 """
 from collections import Counter
 from copy import deepcopy
+import importlib.util
+from pathlib import Path
 import re
 import secrets
 import time
 import unicodedata
+import uuid
 
 AVATARS = ('fox', 'bear', 'cat', 'dog', 'rabbit', 'panda', 'tiger', 'lion', 'frog', 'owl',
            'koala', 'unicorn', 'dragon', 'robot', 'alien', 'ghost', 'octopus', 'penguin', 'monkey', 'butterfly')
@@ -26,6 +29,17 @@ MAX_EVENTS = 100
 MAX_CHAT = 80
 MAX_MAFIA_CHAT = 40
 MAX_CHECKS = 100
+MAX_AI_ACTIONS = 8
+_ai_module = None
+
+
+def ai_policy():
+    global _ai_module
+    if _ai_module is None:
+        spec = importlib.util.spec_from_file_location('game_studio_mafia_ai', Path(__file__).with_name('mafia_ai.py'))
+        _ai_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(_ai_module)
+    return _ai_module
 
 
 class MafiaError(Exception):
@@ -239,8 +253,8 @@ def _advance(state, now):
 def new_room(owner, narrator_mode='human', now=None, settings=None):
     now = _now(now)
     owner = validate_player(owner)
-    if not isinstance(narrator_mode, str) or narrator_mode not in {'human', 'ai'}:
-        fail('Choose a human or AI narrator.')
+    if not isinstance(narrator_mode, str) or narrator_mode not in {'human', 'ai', 'automatic'}:
+        fail('Choose a human, automatic or AI narrator.')
     state = {
         'version': 1, 'roomId': None, 'phase': 'lobby', 'phaseId': 0, 'day': 0,
         'ownerId': owner['id'], 'narratorId': owner['id'] if narrator_mode == 'human' else None,
@@ -271,11 +285,15 @@ def add_player(state, player, now=None):
     return state
 
 
-def reconcile(state, now=None):
-    """Advance at most one AI phase on a poll. Human phase control stays human."""
+def reconcile(state, now=None, *, ai_budget=MAX_AI_ACTIONS):
+    """Run bounded due AI choices and at most one automatic phase transition."""
     now = _now(now)
     state = deepcopy(state)
-    if state['narratorMode'] == 'ai' and state['phase'] in {'night', 'discussion', 'voting'}:
+    if type(ai_budget) is not int or not 0 <= ai_budget <= MAX_AI_ACTIONS:
+        fail('Invalid computer-player action budget.')
+    if ai_budget and state['phase'] in {'night', 'discussion', 'voting'}:
+        _ai_step(state, now, ai_budget)
+    if state['narratorMode'] in {'ai', 'automatic'} and state['phase'] in {'night', 'discussion', 'voting'}:
         if _phase_ready(state) or now >= state['deadlineAt']:
             _advance(state, now)
     return state
@@ -293,11 +311,13 @@ def _message(state, actor, text, channel, now):
     state[field] = state[field][-maximum:]
 
 
-def apply_action(state, actor_id, action, now=None):
+def apply_action(state, actor_id, action, now=None, *, ai_budget=MAX_AI_ACTIONS):
     """Apply one authenticated, flat action; unknown fields/actions fail closed."""
     now = _now(now)
     state = deepcopy(state)
     actor = _player(state, _identifier(actor_id))
+    if actor.get('isAI'):
+        fail('Computer players do not have human room controls.', 403)
     if actor.get('left'):
         fail('This seat has left the room.', 403)
     if not isinstance(action, dict) or not isinstance(action.get('type'), str):
@@ -307,6 +327,7 @@ def apply_action(state, actor_id, action, now=None):
         'start': set(), 'restart': set(), 'reassign-narrator': {'targetId'}, 'configure': {'settings', 'narratorMode'},
         'kick': {'targetId'}, 'close': set(), 'leave': set(), 'night-action': {'targetId'},
         'vote': {'targetId'}, 'ready': set(), 'advance': {'force'}, 'chat': {'text', 'channel'}, 'announce': {'text'},
+        'add-ai': set(), 'fill-ai': set(),
     }
     if kind not in fields or set(action) - fields[kind] - {'type', 'phaseId', 'requestId'}:
         fail('Unsupported room action fields.')
@@ -320,6 +341,8 @@ def apply_action(state, actor_id, action, now=None):
             fail('Finish the current round before starting a rematch.', 409)
         for player in state['players']:
             player.update(role=None, alive=not player.get('left', False), checks=[])
+            if player.get('isAI'):
+                player['_ai'] = {'seed': secrets.token_hex(16)}
         state.update(day=0, winner=None, nightActions={}, votes={}, ready=[], events=[], chat=[], mafiaChat=[], _messageTimes={})
         _set_phase(state, 'lobby', now)
         _emit(state, 'created', 'A new round is ready. Review the lobby and start when everyone is here.', now)
@@ -339,21 +362,43 @@ def apply_action(state, actor_id, action, now=None):
         _emit(state, 'left', actor['name'] + ' left the room.', now)
         if state['phase'] not in {'lobby', 'finished'}:
             _check_winner(state, now)
-        return reconcile(state, now)
-    if kind in {'configure', 'kick', 'reassign-narrator', 'start'}:
+        return reconcile(state, now, ai_budget=ai_budget)
+    if kind in {'configure', 'kick', 'reassign-narrator', 'start', 'add-ai', 'fill-ai'}:
         _require_owner(state, actor_id)
         if state['phase'] != 'lobby':
             fail('This setting can only change before the round starts.', 409)
         if kind == 'configure':
             updated = validate_settings(action.get('settings'), state['settings'])
             mode = action.get('narratorMode', state['narratorMode'])
-            if not isinstance(mode, str) or mode not in {'human', 'ai'}:
-                fail('Choose a human or AI narrator.')
-            narrator_id = None if mode == 'ai' else state['narratorId'] or state['ownerId']
+            if not isinstance(mode, str) or mode not in {'human', 'ai', 'automatic'}:
+                fail('Choose a human, automatic or AI narrator.')
+            narrator_id = None if mode in {'ai', 'automatic'} else state['narratorId'] or state['ownerId']
             active_count = sum(player['id'] != narrator_id and not player.get('left') for player in state['players'])
             if active_count > updated['maxPlayers']:
                 fail('The selected limit cannot fit everyone already in the room.', 409)
             state['settings'] = updated; state['narratorMode'] = mode; state['narratorId'] = narrator_id
+            return state
+        if kind in {'add-ai', 'fill-ai'}:
+            if kind == 'fill-ai':
+                if sum(not player.get('left') for player in state['players']) > state['settings']['maxPlayers']:
+                    fail('Increase the room size before letting everyone play.', 409)
+                state['narratorMode'] = 'automatic'; state['narratorId'] = None
+            count = max(0, 5 - len(_active(state))) if kind == 'fill-ai' else 1
+            if len(_active(state)) + count > state['settings']['maxPlayers']:
+                fail('The room is full. Remove a seat before adding a computer player.', 409)
+            for _ in range(count):
+                profile = ai_policy().profile([player['name'] for player in state['players']], AVATARS)
+                existing = {player['id'] for player in state['players']}
+                identifier = None
+                for _ in range(8):
+                    candidate = str(uuid.uuid4())
+                    if candidate not in existing:
+                        identifier = candidate; break
+                if identifier is None:
+                    fail('A computer seat could not be created. Try again.', 503)
+                profile = validate_player({'id': identifier, **profile})
+                state['players'].append({**profile, 'role': None, 'alive': True, 'checks': [], 'isAI': True, '_ai': {'seed': secrets.token_hex(16)}})
+                _emit(state, 'joined', profile['name'] + ' joined as a computer player.', now)
             return state
         if kind == 'kick':
             target = _player(state, _identifier(action.get('targetId')))
@@ -366,6 +411,8 @@ def apply_action(state, actor_id, action, now=None):
             if state['narratorMode'] != 'human':
                 fail('Choose human narration before assigning a narrator.', 409)
             target = _player(state, _identifier(action.get('targetId')))
+            if target.get('isAI'):
+                fail('Choose a human to narrate, or use automatic narration.')
             if target.get('left'):
                 fail('Choose a player still in the lobby.')
             state['narratorId'] = target['id']
@@ -418,6 +465,12 @@ def apply_action(state, actor_id, action, now=None):
             fail('Public discussion opens during the day.', 409)
         _message(state, actor, action.get('text'), channel, now)
         return state
+    _choice(state, actor, kind, action)
+    return reconcile(state, now, ai_budget=ai_budget)
+
+
+def _choice(state, actor, kind, action):
+    actor_id = actor['id']
     if not actor['alive'] or actor.get('left') or _is_narrator(state, actor_id):
         fail('Only living players can make this choice.', 403)
     if kind == 'night-action':
@@ -445,7 +498,32 @@ def apply_action(state, actor_id, action, now=None):
             fail('Ready is only available during discussion.', 409)
         if actor_id not in state['ready']:
             state['ready'].append(actor_id)
-    return reconcile(state, now)
+
+
+def _ai_step(state, now, limit):
+    actions = 0
+    for actor in state['players']:
+        if not actor.get('isAI') or not actor['alive'] or actor.get('left'):
+            continue
+        memory = actor.get('_ai')
+        if not isinstance(memory, dict) or not isinstance(memory.get('seed'), str):
+            actor['_ai'] = memory = {'seed': secrets.token_hex(16)}
+        command = ai_policy().decide(project(state, actor['id'], now=now), memory, now)
+        if not command:
+            continue
+        if command['type'] == 'chat':
+            try:
+                _message(state, actor, command['text'], 'public', now)
+            except MafiaError as error:
+                if error.status != 429:
+                    raise
+            memory['chatPhase'] = state['phaseId']
+        else:
+            _choice(state, actor, command['type'], command)
+        memory['nextAt'] = now + 2
+        actions += 1
+        if actions >= limit:
+            break
 
 
 def project(state, viewer_id, now=None):
@@ -460,6 +538,8 @@ def project(state, viewer_id, now=None):
         item = {field: player[field] for field in ('id', 'name', 'avatar', 'alive')}
         item['isNarrator'] = player['id'] == state['narratorId']
         item['left'] = bool(player.get('left'))
+        if player.get('isAI'):
+            item['isAI'] = True
         if finished and player['role'] is not None:
             item['role'] = player['role']
         players.append(item)

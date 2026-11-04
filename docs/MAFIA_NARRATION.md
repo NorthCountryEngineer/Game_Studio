@@ -1,6 +1,8 @@
 # Mafia narration
 
-Mafia has a human narrator and an optional AI narrator. The server owns role assignment, secret actions, votes, timers, eliminations and winners in either mode. The human narrator is selected before the round and does not receive a playing role. AI mode lets everyone play and advances phases when their actions are complete or the phase timer expires.
+Mafia has human narration, fixed automatic narration and an optional AI story narrator. The server owns role assignment, secret actions, votes, timers, eliminations and winners in every mode. The human narrator is selected before the round and does not receive a playing role. Automatic and AI story modes let everyone play and advance phases when their actions are complete or the phase timer expires.
+
+The fixed automatic mode needs no generated text or provider calls. Filling a lobby with built-in AI players selects this mode so a solo host can participate. AI opponents are separate from the optional generated story vocabulary described below; its administrator enablement and generation controls are unchanged.
 
 The AI narrator combines a reusable, AI-written atmosphere vocabulary with exact facts from the server. It does not reason about players, read discussion, select targets or decide who wins. Its eight lines cover night, discussion, voting, an elimination, a quiet morning, a tied vote and each team's victory. A quiet morning does not reveal whether a Doctor acted, Mafia votes were split or an action was missed. Canonical facts follow the atmosphere line.
 

@@ -7,6 +7,7 @@ import vm from 'node:vm';
 import ts from 'typescript';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { PartyPlayerName, partyPlayerLabel } from '../src/components/PartyPlayerName';
 
 const ROOM = '11111111-1111-4111-8111-111111111111', OWNER = '22222222-2222-4222-8222-222222222222', OTHER = '33333333-3333-4333-8333-333333333333';
 const TOKEN = 'a'.repeat(43), INVITE = 'b'.repeat(43);
@@ -41,7 +42,7 @@ function mount(options: { kind?: string; roomId?: string; href?: string; fetch?:
   let hooks: Hook[] = [], cursor = 0, dirty = true, tree: Element, effects: Hook[] = [], unmounted = false, lateSetters = 0, timerId = 0; const timers = new Map<number, () => void>(), navigated: string[] = [];
   const react = { useState(initial: any) { const i = cursor++; hooks[i] ??= { value: typeof initial === 'function' ? initial() : initial }; return [hooks[i].value, (next: any) => { if (unmounted) { lateSetters++; return; } const value = typeof next === 'function' ? next(hooks[i].value) : next; if (!Object.is(value, hooks[i].value)) { hooks[i].value = value; dirty = true; } }]; }, useRef(initial: any) { const i = cursor++; hooks[i] ??= { value: { current: initial } }; return hooks[i].value; }, useEffect(setup: () => unknown, deps: unknown[]) { const i = cursor++, prior = hooks[i]; if (!prior || !deps || !prior.deps || deps.some((v, index) => !Object.is(v, prior.deps![index]))) { const hook = { setup, deps, cleanup: prior?.cleanup }; hooks[i] = hook; effects.push(hook); } } };
   const exported: Record<string, any> = {}, browser = { location: { origin: 'http://127.0.0.1:5193', href: options.href ?? `http://127.0.0.1:5193/party/${options.roomId ? 'rooms/' + options.roomId : options.kind ?? ''}` }, setInterval: () => ++timerId, clearInterval: () => {}, setTimeout: (fn: () => void) => { const id = ++timerId; timers.set(id, fn); return id; }, clearTimeout: (id: number) => timers.delete(id) };
-  vm.runInNewContext(transpile('../src/components/PartyGames.tsx'), { exports: exported, require(name: string) { if (name === 'react') return react; if (name === 'react/jsx-runtime') return { jsx, jsxs: jsx, Fragment: 'FRAGMENT' }; if (name === '../lib/party') return api; if (name === '../lib/mafia') return mafia; if (name === './PartyInstructions') return { PartyInstructions: () => null }; if (name === './SketchDrawingBoard') return { SketchDrawingBoard: () => jsx('svg', { 'aria-label': 'Shared drawing canvas' }) }; if (name === '../party.css') return {}; throw new Error(name); }, window: browser, document: { visibilityState: 'visible' }, navigator: { clipboard: { writeText: async () => {} } }, crypto: webcrypto, AbortController, DOMException, Date, Promise, JSON, Error, Number, Object, String, Boolean, Set, Math });
+  vm.runInNewContext(transpile('../src/components/PartyGames.tsx'), { exports: exported, require(name: string) { if (name === 'react') return react; if (name === 'react/jsx-runtime') return { jsx, jsxs: jsx, Fragment: 'FRAGMENT' }; if (name === '../lib/party') return api; if (name === '../lib/mafia') return mafia; if (name === './PartyInstructions') return { PartyInstructions: () => null }; if (name === './PartyPlayerName') return { PartyPlayerName, partyPlayerLabel }; if (name === './SketchDrawingBoard') return { SketchDrawingBoard: () => jsx('svg', { 'aria-label': 'Shared drawing canvas' }) }; if (name === '../party.css') return {}; throw new Error(name); }, window: browser, document: { visibilityState: 'visible' }, navigator: { clipboard: { writeText: async () => {} } }, crypto: webcrypto, AbortController, DOMException, Date, Promise, JSON, Error, Number, Object, String, Boolean, Set, Math });
   function flush() { let turns = 0; while (dirty && !unmounted) { assert.ok(++turns < 40); dirty = false; cursor = 0; effects = []; const outer = exported.PartyGamesPage({ kind: options.kind, roomId: options.roomId, navigate: (path: string) => { navigated.push(path); } }); tree = typeof outer.type === 'function' ? outer.type(outer.props) : outer; for (const hook of effects) { hook.cleanup?.(); const cleanup = hook.setup!(); hook.cleanup = typeof cleanup === 'function' ? cleanup as () => void : undefined; } } }
   async function settle() { for (let i = 0; i < 45; i++) { await Promise.resolve(); flush(); } }
   function field(id: string) { return elements(tree).find(e => e.props.id === id); } function button(label: string) { return elements(tree).find(e => e.type === 'button' && content(e.props.children).includes(label)); }
@@ -88,7 +89,7 @@ test('Starship movement, tasks and repairs wait for the caller’s authoritative
   vm.runInNewContext(transpile('../src/components/PartyGames.tsx'), { exports: exported, require(name: string) {
     if (name === 'react') return { useState: () => [true, () => {}], useEffect: () => {}, useRef: (value: any) => ({ current: value }) };
     if (name === 'react/jsx-runtime') return { jsx, jsxs: jsx, Fragment: 'FRAGMENT' };
-    if (name === '../lib/party') return api; if (name === '../lib/mafia') return mafia; if (name === './PartyInstructions') return { PartyInstructions: () => null }; if (name === './SketchDrawingBoard') return { SketchDrawingBoard: () => jsx('svg', { 'aria-label': 'Shared drawing canvas' }) }; if (name === '../party.css') return {}; throw new Error(name);
+    if (name === '../lib/party') return api; if (name === '../lib/mafia') return mafia; if (name === './PartyInstructions') return { PartyInstructions: () => null }; if (name === './PartyPlayerName') return { PartyPlayerName, partyPlayerLabel }; if (name === './SketchDrawingBoard') return { SketchDrawingBoard: () => jsx('svg', { 'aria-label': 'Shared drawing canvas' }) }; if (name === '../party.css') return {}; throw new Error(name);
   }, Math, Date, Number, String, Object, Boolean });
   const room = fixture({ kind: 'starship-suspects', status: 'playing', phase: 'roaming', round: 1, self: { ...fixture().self, role: 'crew', room: 'reactor', moveReadyAt: 101, taskReadyAt: 101, tasks: [{ id: 't1', room: 'reactor', label: 'Restore power', sequence: ['■', '★', '●'], progress: 1, complete: false }], teammateIds: [], emergencyAvailable: true }, game: { rooms: [{ id: 'reactor', title: 'Reactor', neighbors: ['bridge'], x: 0, y: 0 }, { id: 'bridge', title: 'Bridge', neighbors: ['reactor'], x: 1, y: 1 }], positions: [{ id: OWNER, room: 'reactor', alive: true }], bodies: [], tasksCompleted: 0, tasksTotal: 9, sabotage: { room: 'reactor', deadlineAt: 150, progress: 1 } } });
   for (const now of [100, 101]) {
@@ -155,4 +156,42 @@ test('an unconfirmed drawing from an old phase cannot block actions in the next 
   assert.equal(await view.stage()!.sendDrawing(action), 'retry'); await view.settle(); assert.match(view.content(), /Retry the same action/);
   room.phaseId = 3; room.round = 2; view.poll(); await view.settle(); assert.doesNotMatch(view.content(), /Retry the same action/);
   assert.equal(await view.stage()!.sendDrawing({ ...action, segments: [{ ...action.segments[0], id: ROOM }] }), 'accepted'); await view.settle(); assert.equal(attempts, 2); view.unmount();
+});
+
+test('AI party projections preserve explicit flags, accept legacy humans and reject fake AI authority', () => {
+  const { api } = library(), base = fixture();
+  assert.equal(api.parsePartyRoom(base).players[0].isAI, undefined);
+  const mixed = { ...base, players: base.players.map((player: any, index: number) => ({ ...player, isAI: index === 1 })) };
+  assert.equal(api.parsePartyRoom(mixed).players[1].isAI, true);
+  assert.equal(api.parsePartyRoom(mixed).players[0].isAI, false);
+  for (const value of ['true', 1, null, {}]) assert.throws(() => api.parsePartyRoom({ ...mixed, players: mixed.players.map((player: any, index: number) => index ? { ...player, isAI: value } : player) }), /unsupported response/);
+  assert.throws(() => api.parsePartyRoom({ ...mixed, hostId: OTHER }), /unsupported response/);
+  assert.throws(() => api.parsePartyRoom({ ...mixed, self: { ...base.self, id: OTHER, isHost: false } }), /unsupported response/);
+});
+
+test('every online party lobby explicitly adds an AI seat without starting and stops at capacity', async () => {
+  for (const game of catalog.games.filter((entry: any) => entry.id !== 'mafia')) {
+    const actions: any[] = [], base = fixture(), room = fixture({ kind: game.id, settings: { ...base.settings, maxPlayers: game.maxPlayers }, players: [base.players[0]] });
+    const view = mount({ roomId: ROOM, session: { roomId: ROOM, playerId: OWNER, token: TOKEN }, fetch: async (_url, init) => {
+      if (init?.method === 'POST') { const action = JSON.parse(String(init.body)); actions.push(action); room.players.push({ ...base.players[1], isAI: true }); room.self.actionSequence = action.sequence; }
+      return new Response(JSON.stringify({ room }));
+    } });
+    await view.settle(); const label = game.maxPlayers === 2 ? 'Add AI opponent' : 'Add AI player';
+    assert.equal(view.button(label)!.props.disabled, false); assert.equal(view.button('Start the game')!.props.disabled, true);
+    view.click(label); await view.settle(); assert.equal(actions.length, 1); assert.equal(actions[0].type, 'add-ai'); assert.equal(room.phase, 'lobby'); assert.equal(room.status, 'lobby');
+    assert.match(view.markup(), /aria-label="AI player"/); assert.match(view.markup(), /AI player/);
+    if (game.maxPlayers === 2) assert.equal(view.button(label)!.props.disabled, true);
+    assert.equal(view.button('Start the game')!.props.disabled, room.players.length < game.minPlayers); view.unmount();
+  }
+});
+
+test('group Fill AI is explicit, fills only the minimum and leaves existing human seats intact', async () => {
+  const base = fixture(), room = fixture({ kind: 'starship-suspects', settings: { ...base.settings, maxPlayers: 12 }, players: [base.players[0]] }), actions: any[] = [];
+  const view = mount({ roomId: ROOM, session: { roomId: ROOM, playerId: OWNER, token: TOKEN }, fetch: async (_url, init) => {
+    if (init?.method === 'POST') { const action = JSON.parse(String(init.body)); actions.push(action); for (const [index, id] of [OTHER, ROOM, '44444444-4444-4444-8444-444444444444'].entries()) room.players.push({ id, name: `AI ${index + 1}`, avatar: 'robot', score: 0, isAI: true }); room.self.actionSequence = action.sequence; }
+    return new Response(JSON.stringify({ room }));
+  } });
+  await view.settle(); view.click('Fill to 4 players'); await view.settle(); assert.equal(actions.length, 1); assert.equal(actions[0].type, 'fill-ai'); assert.equal(room.players.length, 4); assert.equal(room.players[0].id, OWNER); assert.equal(room.players[0].isAI, undefined); assert.equal(view.button('Fill to 4 players')!.props.disabled, true); assert.equal(view.button('Start the game')!.props.disabled, false); view.unmount();
+  const guestRoom = { ...room, self: { ...room.self, id: OTHER, isHost: false }, players: room.players.map((player: any) => player.id === OTHER ? { ...player, isAI: false } : player) };
+  const guest = mount({ roomId: ROOM, session: { roomId: ROOM, playerId: OTHER, token: TOKEN }, fetch: async () => new Response(JSON.stringify({ room: guestRoom })) }); await guest.settle(); assert.equal(guest.button('Add AI player'), undefined); assert.equal(guest.button('Fill to 4 players'), undefined); guest.unmount();
 });
