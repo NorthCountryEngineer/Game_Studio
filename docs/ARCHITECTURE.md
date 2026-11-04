@@ -1,5 +1,14 @@
 # Independent Game Studio service
 
+Sketch & Guess's trained recognition runs only on a separate active-seat
+`POST /party/rooms/{roomId}/recognition` request. Room polls and drawing actions
+never import the native runtime. A conditional claim binds public ink to its
+phase, clear epoch and hash; a second conditional write discards stale results.
+The agent receives only cached global label probabilities through its own view,
+never the artist's answer. The existing main API bundles hash-pinned ARM64
+NumPy/Pillow and MIT DoodleNet data. The multiplayer relay remains free of these
+native dependencies. See [recognition boundaries](SKETCH_RECOGNITION.md).
+
 ## Ownership and deployment
 
 Game Studio owns game definitions, private design conversations, playtest acknowledgements, publication snapshots, edition-specific high scores, agent/workflow configuration, its account invitations and branding. A host application owns its lessons, pages, course permissions, assessment policy and the association between a lesson and a Game Studio game ID. NCE Core owns identities, app membership, permissions and deployment authority.

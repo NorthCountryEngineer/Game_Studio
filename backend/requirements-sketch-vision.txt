@@ -1,0 +1,3 @@
+# Fixed inference/rasterization only; no training, TensorFlow, remote providers.
+numpy==2.5.4
+Pillow==13.0.0

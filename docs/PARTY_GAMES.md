@@ -16,7 +16,8 @@ contains Mafia and five additional fixed games, with a consistent choice between
 Starship Suspects uses original presentation and content. It is inspired by the
 hidden-impostor party-game format; it is not an official Among Us client or a
 reproduction of its art. All five new online engines use fixed rules and bounded
-bundled content. They make no model calls. Existing Mafia's approved cached AI
+bundled content. They make no external model calls. Sketch & Guess runs its
+bundled trained classifier separately from drawing updates. Existing Mafia's approved cached AI
 narration remains independent and makes no model calls during play.
 
 ## AI opponents
@@ -41,7 +42,7 @@ game agents with no model charges during play:
 | --- | --- |
 | Mafia | Uses its own role, legitimate allies or investigation results, and public discussion to choose night actions, share short suspicions and vote. It can be mistaken. |
 | Starship Suspects | Moves, completes its own tasks, repairs alerts, reports bodies, and acts according to its own crew or impostor role. Crew can finish tasks as ghosts. |
-| Sketch & Guess | Draws bundled vector illustrations and compares visible public ink to make up to three guesses. Recognition is limited and may miss a freehand drawing. It never reads another artist's secret prompt. |
+| Sketch & Guess | Draws bundled vector illustrations; a trained DoodleNet classifier reads visible public ink to suggest up to three guesses. New games with AI use 38 supported prompts. It waits for developing drawings and never reads another artist's secret prompt. See [recognition and its measured limits](SKETCH_RECOGNITION.md). |
 | Trivia Rally | Uses an imperfect built-in knowledge vocabulary matched to the visible question and options. |
 | Rock–Paper–Scissors Duel | Selects a sealed random hand without reading the human's choice. |
 | Drop Four | Looks for wins, blocks immediate threats and compares legal board replies. |
@@ -144,5 +145,5 @@ API. In another terminal run Vite with `MAFIA_PREVIEW_URL` and
 `PARTY_PREVIEW_URL` set to `http://127.0.0.1:8097`, and
 `VITE_MAFIA_PREVIEW_API=/mafia-api`, `VITE_PARTY_PREVIEW_API=/party-api`.
 Use the local preview configuration rather than a production Core binding. The
-server binds only to loopback and never calls AWS, Core or models. Stop it to
+server binds only to loopback and never calls AWS, Core or external model providers. Install `backend/requirements-sketch-vision.txt` into a local virtual environment to exercise the trained drawing classifier. Stop it to
 discard online rehearsal rooms; local in-person sessions can be reset in the UI.

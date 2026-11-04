@@ -8,6 +8,7 @@ import hashlib
 import hmac
 import importlib.util
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -20,7 +21,11 @@ ROOM_SECONDS = 7200
 MAX_ROOMS = 32
 CREATE_LIMIT = 40
 SOURCE_CREATE_LIMIT = 16
-_engine = _passphrases = None
+_engine = _passphrases = _vision = None
+RECOGNITION_INTERVAL = 3
+RECOGNITION_PHASE_LIMIT = 20
+RECOGNITION_JOB_SECONDS = 10
+RECOGNITION_PRIVATE_BYTES = 3072
 
 
 class PartyError(Exception):
@@ -49,6 +54,13 @@ def passphrases():
     global _passphrases
     if _passphrases is None: _passphrases = load_module('room_passphrases')
     return _passphrases
+
+
+def vision():
+    """The inference runtime is never imported by ordinary room requests."""
+    global _vision
+    if _vision is None: _vision = load_module('sketch_vision')
+    return _vision
 
 
 def phrase_call(operation, *args):
@@ -395,15 +407,139 @@ def room_request(api, event, room_id, body=None):
     fail('The room is busy. Your action was not discarded; retry shortly.', 503)
 
 
+def recognition_ack(room_id, body, status):
+    return {'version': 1, 'roomId': room_id, **body, 'status': status,
+        'retryAfterMs': 10000 if status == 'unavailable' else RECOGNITION_INTERVAL * 1000}
+
+
+def recognition_human(state, event):
+    actor_id = member(state, event)
+    actor = next((player for player in state['game']['players'] if player['id'] == actor_id), None)
+    if not actor or actor.get('left') or actor.get('isAI'):
+        fail('Only an active human room seat can request recognition.', 403)
+    return actor_id
+
+
+def recognition_private_bound(game):
+    value = {key: game[key] for key in ('_recognition', '_recognitionJob', '_recognitionBudget') if key in game}
+    if len(canonical(value).encode()) > RECOGNITION_PRIVATE_BYTES:
+        fail('The drawing observation is outside its allowed size.', 503)
+
+
+def recognition_candidates(value):
+    if not isinstance(value, list) or len(value) > 5:
+        raise ValueError('Invalid drawing classifier candidates.')
+    clean, seen = [], set()
+    for item in value:
+        if not isinstance(item, dict) or set(item) != {'label', 'score'}:
+            raise ValueError('Invalid drawing classifier candidate.')
+        label, score = item['label'], item['score']
+        if (not isinstance(label, str) or not 1 <= len(label) <= 80 or re.search(r'[\x00-\x1f\x7f]', label)
+                or label in seen or type(score) not in (int, float) or not math.isfinite(score) or not 0 <= score <= 1):
+            raise ValueError('Invalid drawing classifier value.')
+        seen.add(label); clean.append({'label': label, 'score': round(float(score), 8)})
+    return sorted(clean, key=lambda item: (-item['score'], item['label']))
+
+
+def recognize_drawing(api, event, room_id, body):
+    """Bounded CPU work on a separate request; drawing requests never wait here.
+
+    The first CAS claims one authoritative public-ink snapshot. After inference,
+    a second CAS can publish only that exact phase/epoch/ink snapshot. Neither
+    transaction changes a player's sequence, room lease or game progression.
+    """
+    fields(body, {'phaseId', 'drawingEpoch', 'inkSha256'})
+    if (type(body['phaseId']) is not int or not 0 <= body['phaseId'] <= 2147483647
+            or type(body['drawingEpoch']) is not int or not 0 <= body['drawingEpoch'] <= 2147483647
+            or not isinstance(body['inkSha256'], str) or not re.fullmatch('[a-f0-9]{64}', body['inkSha256'])):
+        fail('Use the current drawing observation.')
+    identifier(room_id)
+    claim_id = secrets.token_hex(16)
+    snapshot = None
+    for _ in range(2):
+        now = int(time.time())
+        state, previous = open_room(api, room_id, now)
+        recognition_human(state, event)
+        game = state['game']
+        binding = engine().recognition_binding(game)
+        if not binding or game.get('deadlineAt', 0) <= now:
+            return recognition_ack(room_id, body, 'idle')
+        if binding != body:
+            return recognition_ack(room_id, body, 'stale')
+        if engine().recognition_observation(game):
+            return recognition_ack(room_id, body, 'cached')
+        private = game['_game']
+        job = private.get('_recognitionJob')
+        if job and int(job.get('expiresAt', 0)) > now:
+            return recognition_ack(room_id, body, 'busy')
+        budget = private.get('_recognitionBudget', {'phaseId': game['phaseId'], 'count': 0, 'nextAt': 0})
+        if (not isinstance(budget, dict) or set(budget) != {'phaseId', 'count', 'nextAt'}
+                or type(budget['phaseId']) is not int or type(budget['count']) is not int
+                or type(budget['nextAt']) is not int or not 0 <= budget['count'] <= RECOGNITION_PHASE_LIMIT):
+            fail('The drawing observer is temporarily unavailable.', 503)
+        if budget['phaseId'] != game['phaseId']:
+            budget = {'phaseId': game['phaseId'], 'count': 0, 'nextAt': 0}
+        if budget['count'] >= RECOGNITION_PHASE_LIMIT:
+            return recognition_ack(room_id, body, 'idle')
+        if budget['nextAt'] > now:
+            return recognition_ack(room_id, body, 'busy')
+        private['_recognitionJob'] = {'owner': claim_id, **binding, 'startedAt': now, 'expiresAt': now + RECOGNITION_JOB_SECONDS}
+        interval = max(RECOGNITION_INTERVAL, math.ceil(game['settings']['roundSeconds'] / RECOGNITION_PHASE_LIMIT))
+        private['_recognitionBudget'] = {'phaseId': game['phaseId'], 'count': budget['count'] + 1, 'nextAt': now + interval}
+        recognition_private_bound(private)
+        if transact(api, [put('game-party-room', room_id, state, previous)]):
+            snapshot = engine().recognition_strokes(game)
+            break
+    if snapshot is None:
+        return recognition_ack(room_id, body, 'busy')
+
+    candidates, model_version, unavailable = [], '', False
+    try:
+        model = vision()
+        model_version = model.MODEL_VERSION
+        if not isinstance(model_version, str) or not 1 <= len(model_version) <= 120 or re.search(r'[\x00-\x1f\x7f]', model_version):
+            raise ValueError('Invalid drawing classifier version.')
+        candidates = recognition_candidates(model.predict(deepcopy(snapshot)))
+    except Exception as error:
+        # Optional recognition failure does not fail a drawing action or expose
+        # room ink, secrets, labels or credentials in an error/log message.
+        print('Game Studio drawing recognition unavailable:', type(error).__name__)
+        unavailable = True
+
+    for _ in range(2):
+        now = int(time.time())
+        try:
+            state, previous = open_room(api, room_id, now)
+            recognition_human(state, event)
+        except PartyError:
+            return recognition_ack(room_id, body, 'stale')
+        game, private = state['game'], state['game'].get('_game', {})
+        job = private.get('_recognitionJob', {})
+        if job.get('owner') != claim_id:
+            return recognition_ack(room_id, body, 'stale')
+        binding = engine().recognition_binding(game)
+        fresh = binding == body and int(job.get('expiresAt', 0)) > now and game.get('deadlineAt', 0) > now
+        private.pop('_recognitionJob', None)
+        if fresh and not unavailable:
+            private['_recognition'] = {**body, 'modelVersion': model_version, 'candidates': candidates, 'completedAt': now}
+        elif unavailable and fresh:
+            private['_recognitionBudget']['nextAt'] = now + 10
+        recognition_private_bound(private)
+        if transact(api, [put('game-party-room', room_id, state, previous)]):
+            return recognition_ack(room_id, body, 'stale' if not fresh else 'unavailable' if unavailable else 'ready')
+    return recognition_ack(room_id, body, 'stale')
+
+
 def dispatch(api, event, method, path, body):
     if len(canonical(body).encode()) > 16000: fail('This Party request is too large.', 413)
     if path == '/party/config' and method == 'GET': return {'games': engine().catalog()}
     if path == '/party/rooms' and method == 'POST': return create(api, event, body)
     if path == '/party/join-by-passphrase' and method == 'POST': return join_by_passphrase(api, event, body)
-    match = re.fullmatch(r'/party/rooms/(' + UUID.pattern[1:-1] + r')(?:/(join|actions))?', path)
+    match = re.fullmatch(r'/party/rooms/(' + UUID.pattern[1:-1] + r')(?:/(join|actions|recognition))?', path)
     if match:
         room_id, operation = match.groups()
         if operation == 'join' and method == 'POST': return join(api, room_id, body)
         if operation == 'actions' and method == 'POST': return room_request(api, event, room_id, body)
+        if operation == 'recognition' and method == 'POST': return recognize_drawing(api, event, room_id, body)
         if operation is None and method == 'GET': return room_request(api, event, room_id)
     fail('Party route not found.', 404)

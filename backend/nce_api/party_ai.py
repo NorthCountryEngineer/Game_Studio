@@ -6,11 +6,26 @@ validates every suggested action through its normal rules.
 """
 from copy import deepcopy
 import importlib.util
+import math
 from pathlib import Path
 import secrets
 import uuid
 
 _sketch = None
+SKETCH_CONFIDENCE = .25
+RECOGNITION_LABELS = {
+    'hot air balloon': 'hot-air balloon', 'snowman': 'snowman', 'cat': 'sleeping cat',
+    'birthday cake': 'birthday cake', 'cake': 'birthday cake', 'roller coaster': 'roller coaster',
+    'rainbow': 'rainbow', 'cactus': 'cactus', 'skateboard': 'skateboard', 'dragon': 'dragon',
+    'lighthouse': 'lighthouse', 'octopus': 'octopus', 'campfire': 'campfire', 'giraffe': 'giraffe',
+    'ice cream': 'ice cream cone', 'sailboat': 'sailboat', 'butterfly': 'butterfly',
+    'helicopter': 'helicopter', 'penguin': 'penguin', 'elephant': 'elephant', 'windmill': 'windmill',
+    'mountain': 'mountain', 'bicycle': 'bicycle', 'guitar': 'guitar', 'piano': 'piano',
+    'umbrella': 'umbrella', 'backpack': 'backpack', 'crab': 'crab', 'castle': 'castle',
+    'pizza': 'pizza', 'frog': 'frog', 'moon': 'moon', 'snowflake': 'snowflake',
+    'hamburger': 'hamburger', 'whale': 'whale', 'squirrel': 'squirrel', 'crown': 'crown',
+    'sea turtle': 'turtle', 'tennis racquet': 'tennis racket',
+}
 
 
 def sketch():
@@ -24,6 +39,38 @@ def sketch():
 
 def supported_prompts():
     return tuple(sketch().SUPPORTED_PROMPTS)
+
+
+def supported_guess_prompts():
+    return tuple(sorted(set(RECOGNITION_LABELS.values())))
+
+
+def rank_recognition(observation):
+    """Map a trained tool's public-ink scores through one fixed vocabulary.
+
+    Generic labels never select a hidden subtype: cat is the existing accepted
+    alias for sleeping cat; castle always means castle, never sandcastle.
+    Raw classifier probabilities are not renormalized over the prompt bank.
+    """
+    if not isinstance(observation, dict) or not isinstance(observation.get('modelVersion'), str):
+        return []
+    candidates = observation.get('candidates')
+    if not isinstance(candidates, list) or len(candidates) > 5:
+        return []
+    normalized = lambda text: ''.join(char for char in text.casefold() if char.isalnum())
+    labels = {normalized(label): prompt for label, prompt in RECOGNITION_LABELS.items()}
+    ranked = {}
+    for candidate in candidates:
+        if not isinstance(candidate, dict) or set(candidate) != {'label', 'score'}:
+            return []
+        label, score = candidate['label'], candidate['score']
+        if (not isinstance(label, str) or not 1 <= len(label) <= 80 or type(score) not in (int, float)
+                or not math.isfinite(score) or not 0 <= score <= 1):
+            return []
+        prompt = labels.get(normalized(label))
+        if prompt and score >= SKETCH_CONFIDENCE:
+            ranked[prompt] = max(score, ranked.get(prompt, 0))
+    return [prompt for prompt, score in sorted(ranked.items(), key=lambda item: (-item[1], item[0]))]
 
 
 # A deliberately imperfect general-knowledge vocabulary, matched to the public
@@ -193,14 +240,33 @@ def _drawing(view, memory, now):
                                  for index, segment in enumerate(segments)]}
         return None
     strokes = game.get('strokes', [])
-    if own['id'] in game.get('guessedIds', []) or not strokes:
+    if own['id'] in game.get('guessedIds', []):
         return None
-    memory.setdefault('firstInkAt', now)
-    version = [game.get('drawingEpoch', 0), len(strokes), sum(len(stroke.get('points', [])) for stroke in strokes), strokes[-1].get('id', '')]
+    has_ink = any(isinstance(stroke, dict) and str(stroke.get('color', '')).lower() != '#ffffff'
+        and stroke.get('points') for stroke in strokes)
+    version = [game.get('drawingEpoch', 0), len(strokes), sum(len(stroke.get('points', [])) for stroke in strokes), strokes[-1].get('id', '') if strokes else '']
+    prior = memory.get('inkVersion')
+    if not has_ink or isinstance(prior, list) and prior and prior[0] != version[0]:
+        for key in ('firstInkAt', 'pendingLabel', 'pendingSince'):
+            memory.pop(key, None)
     if memory.get('inkVersion') != version:
         memory.update(inkVersion=version, inkChangedAt=now)
+    if not has_ink:
+        return None
+    memory.setdefault('firstInkAt', now)
     guesses = memory.get('guesses', [])
-    if len(guesses) >= 3 or len(strokes) < 3 and now < memory['firstInkAt'] + 3:
+    if len(guesses) >= 3:
+        return None
+    options = [label for label in rank_recognition(game.get('recognition')) if label not in guesses]
+    if not options:
+        memory.pop('pendingLabel', None); memory.pop('pendingSince', None)
+        return None
+    if memory.get('pendingLabel') != options[0] or type(memory.get('pendingSince')) not in (int, float):
+        memory.update(pendingLabel=options[0], pendingSince=now)
+    # Early partial doodles are often confidently wrong. Wait for public ink
+    # to develop and for a label to remain stable; a quiet cached result also
+    # qualifies, without repeating inference or looking at the secret prompt.
+    if now < memory['firstInkAt'] + 8 or now < memory['pendingSince'] + 3:
         return None
     if guesses and now < memory.get('lastGuessAt', 0) + 6:
         return None
@@ -212,7 +278,6 @@ def _drawing(view, memory, now):
         reserve_at = view['deadlineAt'] - seconds * .25
         if now < memory['inkChangedAt'] + 6 and now < reserve_at:
             return None
-    options = [label for label in sketch().rank_guesses(strokes) if label not in guesses]
     if options:
         memory['guesses'] = [*guesses, options[0]][-3:]
         memory['lastGuessAt'] = now
@@ -226,7 +291,7 @@ def decide(view, memory, now):
     if view.get('status') != 'playing':
         return None, memory
     if memory.get('phaseId') != view['phaseId']:
-        for key in ('drawIndex', 'guesses', 'firstInkAt', 'lastGuessAt', 'inkVersion', 'inkChangedAt'):
+        for key in ('drawIndex', 'guesses', 'firstInkAt', 'lastGuessAt', 'inkVersion', 'inkChangedAt', 'pendingLabel', 'pendingSince'):
             memory.pop(key, None)
         memory.update(phaseId=view['phaseId'], phaseSince=now)
     own, game, kind = view['self'], view['game'], view['kind']

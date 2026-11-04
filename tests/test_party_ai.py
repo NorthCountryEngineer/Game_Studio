@@ -1,6 +1,7 @@
 """Provider-free opponents, fair observations and bounded server scheduling."""
 from copy import deepcopy
 import json
+from pathlib import Path
 import socket
 import unittest
 import uuid
@@ -210,14 +211,19 @@ class PartyAITests(unittest.TestCase):
         strokes = self.ai.sketch().drawing_for(prompt)
         for index, stroke in enumerate(strokes):
             state = self.act(state, pid(1), 'stroke', now=1001 + index, **stroke)
+        label = next(label for label, target in self.ai.RECOGNITION_LABELS.items() if target == prompt)
+        state['_game']['_recognition'] = {**engine.recognition_binding(state), 'modelVersion': 'synthetic-ink-tool',
+            'candidates': [{'label': label, 'score': .9}], 'completedAt': 1001 + len(strokes)}
         state = engine.tick(state, 1001 + len(strokes) + 4)
+        self.assertEqual(state['phase'], 'draw')
+        state = engine.tick(state, 1001 + len(strokes) + 12)
         self.assertEqual(state['phase'], 'reveal')
         self.assertIn(ai_id, state['_game']['guessedIds'])
-        state = self.act(state, pid(1), 'advance', now=1002 + len(strokes) + 4)
-        state = engine.tick(state, 1002 + len(strokes) + 4)
+        state = self.act(state, pid(1), 'advance', now=1002 + len(strokes) + 12)
+        state = engine.tick(state, 1002 + len(strokes) + 12)
         artist_view = engine.project(state, ai_id)
         self.assertIn(artist_view['self']['prompt'], self.ai.supported_prompts())
-        start = 1002 + len(strokes) + 4
+        start = 1002 + len(strokes) + 12
         for now in range(start + 2, start + 35, 2):
             state = engine.tick(state, now)
             if state['phase'] != 'draw': break
@@ -234,22 +240,25 @@ class PartyAITests(unittest.TestCase):
         view, memory = self.sketch_view(), {}
         stroke = {'color': '#000000', 'width': 3, 'points': [[.1, .2], [.3, .4]]}
         view['game']['strokes'] = [deepcopy(stroke) for _ in range(3)]
-        with patch.object(self.ai.sketch(), 'rank_guesses', return_value=['treehouse', 'snowman', 'rainbow']):
-            first, memory = self.ai.decide(view, memory, 1000)
+        with patch.object(self.ai, 'rank_recognition', return_value=['treehouse', 'snowman', 'rainbow']):
+            action, memory = self.ai.decide(view, memory, 1000)
+            self.assertIsNone(action)
+            self.assertIsNone(self.ai.decide(view, memory, 1007)[0])
+            first, memory = self.ai.decide(view, memory, 1008)
             self.assertEqual(first['text'], 'treehouse')
-            for now in (1002, 1004):
+            for now in (1010, 1012):
                 view['game']['strokes'].append(deepcopy(stroke))
                 action, memory = self.ai.decide(view, memory, now)
                 self.assertIsNone(action)
             view['game']['strokes'].append(deepcopy(stroke))
-            second, memory = self.ai.decide(view, memory, 1006)
+            second, memory = self.ai.decide(view, memory, 1014)
             self.assertEqual(second['text'], 'snowman')
-            for now in (1008, 1010, 1012):
+            for now in (1016, 1018, 1020):
                 view['game']['strokes'].append(deepcopy(stroke))
                 action, memory = self.ai.decide(view, memory, now)
                 self.assertIsNone(action)
-            self.assertIsNone(self.ai.decide(view, memory, 1016)[0])
-            third, memory = self.ai.decide(view, memory, 1018)
+            self.assertIsNone(self.ai.decide(view, memory, 1024)[0])
+            third, memory = self.ai.decide(view, memory, 1026)
             self.assertEqual(third['text'], 'rainbow')
             self.assertEqual(len(memory['guesses']), 3)
             self.assertLess(len(json.dumps(memory).encode()), 1024)
@@ -258,18 +267,26 @@ class PartyAITests(unittest.TestCase):
         view, memory = self.sketch_view(), {}
         stroke = {'color': '#000000', 'width': 3, 'points': [[.1, .2], [.3, .4]]}
         view['game']['strokes'] = [deepcopy(stroke) for _ in range(3)]
-        with patch.object(self.ai.sketch(), 'rank_guesses', return_value=['treehouse', 'snowman', 'rainbow']):
+        with patch.object(self.ai, 'rank_recognition', return_value=['treehouse', 'snowman', 'rainbow']):
             _, memory = self.ai.decide(view, memory, 1000)
-            _, memory = self.ai.decide(view, memory, 1006)
+            _, memory = self.ai.decide(view, memory, 1008)
+            _, memory = self.ai.decide(view, memory, 1010)
+            _, memory = self.ai.decide(view, memory, 1014)
             view['game'].update(strokes=[], drawingEpoch=1)
-            action, memory = self.ai.decide(view, memory, 1008)
+            action, memory = self.ai.decide(view, memory, 1016)
             self.assertIsNone(action)
             self.assertEqual(len(memory['guesses']), 2)
             view['game']['strokes'] = [deepcopy(stroke) for _ in range(3)]
-            action, memory = self.ai.decide(view, memory, 1012)
+            action, memory = self.ai.decide(view, memory, 1018)
             self.assertIsNone(action)  # Fresh ink resets the idle gate after clear.
+            self.assertEqual(memory['firstInkAt'], 1018)
+            self.assertIsNone(self.ai.decide(view, memory, 1025)[0])
+            action, memory = self.ai.decide(view, memory, 1026)
+            self.assertEqual(action['text'], 'rainbow')
             view.update(phaseId=2, round=2, deadlineAt=1150)
-            action, memory = self.ai.decide(view, memory, 1013)
+            action, memory = self.ai.decide(view, memory, 1027)
+            self.assertIsNone(action)
+            action, memory = self.ai.decide(view, memory, 1035)
             self.assertEqual(action['text'], 'treehouse')
             self.assertEqual(memory['guesses'], ['treehouse'])
 
@@ -278,33 +295,98 @@ class PartyAITests(unittest.TestCase):
         stroke = {'color': '#000000', 'width': 3, 'points': [[.1, .2], [.3, .4]]}
         view['game']['strokes'] = [deepcopy(stroke) for _ in range(3)]
         memory = {'phaseId': 1, 'phaseSince': 1000, 'firstInkAt': 1000,
-                  'guesses': ['treehouse', 'snowman'], 'lastGuessAt': 1010}
-        with patch.object(self.ai.sketch(), 'rank_guesses', return_value=['treehouse', 'snowman', 'rainbow']):
+                  'guesses': ['treehouse', 'snowman'], 'lastGuessAt': 1010,
+                  'pendingLabel': 'rainbow', 'pendingSince': 1050}
+        with patch.object(self.ai, 'rank_recognition', return_value=['treehouse', 'snowman', 'rainbow']):
             action, memory = self.ai.decide(view, memory, 1056)
             self.assertIsNone(action)
             view['game']['strokes'].append(deepcopy(stroke))
             action, memory = self.ai.decide(view, memory, 1057)
             self.assertEqual(action['text'], 'rainbow')
 
-    def test_streamed_bundled_drawings_keep_a_correct_guess_available_after_completion(self):
-        recognized, exhausted = 0, []
+    def test_bundled_artist_ink_is_not_a_recognition_oracle_without_trained_tool_output(self):
         for prompt in self.ai.supported_prompts():
             template = self.ai.sketch().drawing_for(prompt)
             view, memory = self.sketch_view(), {}
-            attempts = []
-            for second in range(2, 76, 2):
-                view['game']['strokes'] = template[:second]
-                action, memory = self.ai.decide(view, memory, 1000 + second)
-                if action:
-                    attempts.append((second, action['text']))
-                    if action['text'] == prompt:
-                        recognized += 1
-                        break
-                self.assertLessEqual(len(json.dumps(memory).encode()), 1024)
-            if len(attempts) == 3 and attempts[-1][0] < len(template) and attempts[-1][1] != prompt:
-                exhausted.append(prompt)
-        self.assertEqual(recognized, len(self.ai.supported_prompts()))
-        self.assertEqual(exhausted, [])
+            view['game']['strokes'] = template
+            with patch.object(self.ai.sketch(), 'rank_guesses', side_effect=AssertionError('No artist-template fallback.')):
+                action, memory = self.ai.decide(view, memory, 1005)
+                self.assertIsNone(action)
+            self.assertLessEqual(len(json.dumps(memory).encode()), 1024)
+
+    def test_tool_aliases_and_coverage_are_fixed_and_do_not_select_hidden_subtypes(self):
+        spec = json.loads((Path(__file__).parents[1] / 'config/sketch-recognition-benchmark.json').read_text())
+        self.assertEqual(set(self.ai.supported_guess_prompts()), set(spec['primaryClassToPrompt'].values()))
+        self.assertEqual(len(self.ai.supported_guess_prompts()), 38)
+        self.assertLess(set(self.ai.supported_guess_prompts()), set(self.ai.supported_prompts()))
+        candidates = [{'label': 'cat', 'score': .9}, {'label': 'castle', 'score': .8},
+            {'label': 'ice cream', 'score': .7}, {'label': 'sea turtle', 'score': .6}, {'label': 'tennis racquet', 'score': .5}]
+        self.assertEqual(self.ai.rank_recognition({'modelVersion': 'synthetic', 'candidates': candidates}),
+            ['sleeping cat', 'castle', 'ice cream cone', 'turtle', 'tennis racket'])
+        self.assertNotIn('sandcastle', self.ai.rank_recognition({'modelVersion': 'synthetic', 'candidates': [{'label': 'castle', 'score': .99}]}))
+        self.assertEqual(self.ai.rank_recognition({'modelVersion': 'synthetic', 'candidates': [{'label': 'pirate ship', 'score': .99}]}), [])
+
+    def test_tool_scores_remain_global_and_low_confidence_or_malformed_results_abstain(self):
+        for candidates in ([{'label': 'cat', 'score': .1}], [{'label': 'cat', 'score': True}],
+                [{'label': 'cat', 'score': float('nan')}], [{'label': 'cat', 'score': .8, 'prompt': 'cat'}]):
+            self.assertEqual(self.ai.rank_recognition({'modelVersion': 'synthetic', 'candidates': candidates}), [])
+        self.assertEqual(self.ai.rank_recognition({'modelVersion': 'synthetic', 'candidates': [
+            {'label': 'airplane', 'score': .9}, {'label': 'cat', 'score': .1}]}), [])
+
+    def test_changed_top_label_must_stabilize_after_the_initial_ink_wait(self):
+        view, memory = self.sketch_view(), {}
+        view['game']['strokes'] = [{'id': 'ink', 'color': '#000000', 'width': 3, 'points': [[.1, .2], [.3, .4]]}]
+        view['game']['recognition'] = {'modelVersion': 'synthetic', 'candidates': [{'label': 'cat', 'score': .9}]}
+        action, memory = self.ai.decide(view, memory, 1000)
+        self.assertIsNone(action)
+        view['game']['recognition']['candidates'] = [{'label': 'snowman', 'score': .8}]
+        action, memory = self.ai.decide(view, memory, 1007)
+        self.assertIsNone(action)
+        action, memory = self.ai.decide(view, memory, 1008)
+        self.assertIsNone(action)
+        action, memory = self.ai.decide(view, memory, 1010)
+        self.assertEqual(action['text'], 'snowman')
+        self.assertEqual(memory['guesses'], ['snowman'])
+
+    def test_absent_or_unmapped_candidate_resets_stability_without_spending_a_guess(self):
+        view, memory = self.sketch_view(), {}
+        view['game']['strokes'] = [{'id': 'ink', 'color': '#000000', 'width': 3, 'points': [[.1, .2], [.3, .4]]}]
+        view['game']['recognition'] = {'modelVersion': 'synthetic', 'candidates': [{'label': 'cat', 'score': .9}]}
+        _, memory = self.ai.decide(view, memory, 1000)
+        view['game']['recognition']['candidates'] = [{'label': 'airplane', 'score': .99}]
+        action, memory = self.ai.decide(view, memory, 1006)
+        self.assertIsNone(action); self.assertNotIn('pendingLabel', memory); self.assertNotIn('guesses', memory)
+        view['game']['recognition']['candidates'] = [{'label': 'cat', 'score': .9}]
+        action, memory = self.ai.decide(view, memory, 1008)
+        self.assertIsNone(action)
+        action, memory = self.ai.decide(view, memory, 1010)
+        self.assertIsNone(action)
+        action, memory = self.ai.decide(view, memory, 1011)
+        self.assertEqual(action['text'], 'sleeping cat')
+
+    def test_white_brush_only_does_not_start_the_first_visible_ink_timer(self):
+        view, memory = self.sketch_view(), {}
+        view['game']['strokes'] = [{'id': 'eraser', 'color': '#ffffff', 'width': 10, 'points': [[.1, .2], [.3, .4]]}]
+        action, memory = self.ai.decide(view, memory, 1000)
+        self.assertIsNone(action); self.assertNotIn('firstInkAt', memory)
+        view['game']['strokes'].append({'id': 'ink', 'color': '#000000', 'width': 3, 'points': [[.1, .2], [.3, .4]]})
+        view['game']['recognition'] = {'modelVersion': 'synthetic', 'candidates': [{'label': 'cat', 'score': .9}]}
+        action, memory = self.ai.decide(view, memory, 1010)
+        self.assertIsNone(action); self.assertEqual(memory['firstInkAt'], 1010)
+        action, memory = self.ai.decide(view, memory, 1013)
+        self.assertIsNone(action)
+        action, memory = self.ai.decide(view, memory, 1018)
+        self.assertEqual(action['text'], 'sleeping cat')
+
+    def test_new_ai_games_choose_only_covered_prompts_while_human_games_keep_the_full_bank(self):
+        human = engine.add_player(engine.new_room(player(1), 'sketch-guess', now=1000), player(2), now=1000)
+        with patch.object(engine, '_shuffle', side_effect=lambda values: values) as shuffled:
+            self.act(human, pid(1), 'start')
+            self.assertEqual(len(shuffled.call_args.args[0]), len(engine.PROMPTS))
+        ai = self.begin('sketch-guess', rounds=24)
+        chosen = {engine.PROMPTS[index][0] for index in ai['_game']['order']}
+        self.assertLessEqual(chosen, set(self.ai.supported_guess_prompts()))
+        self.assertEqual(len(chosen), 24)
 
 
 if __name__ == '__main__':
