@@ -27,9 +27,9 @@ const guides: Record<string, Guide> = {
   mafia: {
     premise: 'A town has secret Mafia members hiding among its civilians. Each night the Mafia choose someone to remove, a Doctor can protect someone, and a Detective can investigate. During the day, the town talks and votes.',
     online: [
-      ['Choose a narrator and gather the town', 'Invite 5–24 players. A human narrator sits out, so you need at least five players plus that narrator. With AI narration, everyone—including the host—plays. The host can hand human narration to someone else before starting.'],
+      ['Choose a narrator and gather the town', 'Gather 5–24 players, including friends or AI players. A human narrator sits out, so you need at least five players plus that narrator. Automatic narration and AI story narration let everyone—including the host—play. The host can hand human narration to someone else before starting.'],
       ['Read your private role', 'Keep your role to yourself. Mafia work together and have their own private chat. The Doctor protects someone, including themselves if they wish. The Detective checks another player. Civilians listen and help the town decide who to trust.'],
-      ['Make night choices', 'When night begins, the Mafia, Doctor and Detective use their private controls to choose a target. Civilians wait for morning. A human narrator leads the phases; AI narration advances them automatically.'],
+      ['Make night choices', 'When night begins, the Mafia, Doctor and Detective use their private controls to choose a target. Civilians wait for morning. A human narrator leads the phases; automatic narration and AI story narration advance them automatically.'],
       ['Discuss and vote in the day', 'Read the night’s result and share theories in town chat. Vote by clicking a player, or skip. Ties eliminate nobody. If you are removed, watch quietly without sharing your secret information.'],
     ],
     inPerson: [
@@ -109,6 +109,7 @@ export function PartyInstructions({ kind, mode = 'online' }: { kind: string; mod
     <div className="party-guide-content">
       <p className="party-guide-premise">{guide.premise}</p>
       <p className="party-guide-mode">{inPerson ? 'Playing together in person · the lead controls the game' : 'Playing online · everyone uses their own screen'}</p>
+      {!inPerson && <section className="party-guide-ai"><h3>Playing with AI</h3><p>{kind === 'mafia' ? 'In the lobby, the host can Add AI player without changing the narrator, or choose Fill with AI & use automatic narrator. Fill adds only the players needed for five and lets the host play. Start remains a separate choice.' : 'Create a room, then choose Add AI opponent or Add AI player in the lobby. For a group game, Fill adds only enough AI players to reach the minimum. The host starts when ready.'}</p><p>AI players have an AI badge. Mix them with friends, or remove them before starting. A human player’s seat is never replaced automatically.</p></section>}
       <ol>{(inPerson ? guide.inPerson : guide.online).map(([title, explanation]) => <li key={title}><strong>{title}</strong><p>{explanation}</p></li>)}</ol>
       <aside><h3>How to win</h3><p>{inPerson ? guide.inPersonWin ?? guide.win : guide.win}</p>{inPerson && <p>The lead records in-person results and decides when to finish. Use Undo last update to correct a mistake.</p>}</aside>
       {!inPerson && <p className="party-guide-timer-note">The game keeps running while you read. You can open this guide before the host starts, and close it whenever you’re ready.</p>}

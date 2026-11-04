@@ -74,7 +74,7 @@ try {
   await vite.listen();
   console.log(`Synthetic multiplayer rehearsal: ${origin}/__multiplayer-fixture`);
   console.log(`Real Python relay logic: ${relayOrigin}; transient in-memory storage only.`);
-  console.log('Open the fixture in two sessions, choose cooperative play, create a room, and paste its invitation into the second session. Ctrl+C removes every local room.');
+  console.log('Open the fixture in two sessions, choose Play together or Asteroids versus, create a room, and paste its invitation into the second session. Ctrl+C removes every local room.');
   if (oneWayDelay || ackDelay) console.log(`Synthetic latency: ${oneWayDelay} ms each way; ${ackDelay} ms additional acknowledgment delay.`);
 } catch (error) { console.error(error instanceof Error ? error.message : 'Local rehearsal failed.'); for (const socket of sockets.values()) socket.close(1000); await vite?.close(); httpServer?.close(); python.kill(); process.exitCode = 1; }
 async function close() { for (const socket of sockets.values()) socket.close(1000); await vite?.close(); httpServer?.close(); python.kill(); process.exit(0); }

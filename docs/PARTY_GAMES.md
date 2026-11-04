@@ -19,6 +19,39 @@ reproduction of its art. All five new online engines use fixed rules and bounded
 bundled content. They make no model calls. Existing Mafia's approved cached AI
 narration remains independent and makes no model calls during play.
 
+## AI opponents
+
+Create an online room and choose **Add AI opponent** for a duel, or **Add AI
+player** for a group game. **Fill to minimum players** adds only the AI seats
+needed to start. Start remains a separate host choice. You can mix friends and
+AI, remove AI in the lobby, or keep waiting for another person. The game never
+silently replaces a person or inserts AI into a game already in progress.
+
+Mafia's **Fill with AI & use automatic narrator** also moves the host into a
+playing seat and selects fixed automatic narration. The separate **Add AI
+player** button preserves the selected narrator, including a person who wants
+to narrate a mixed group. The existing cached AI story narrator remains an
+independent option. In-person manual hosting continues to use the host's names,
+phase controls and physical play.
+
+Every AI seat has an AI badge and a name beginning with `AI`. These are built-in
+game agents with no model charges during play:
+
+| Game | AI behavior |
+| --- | --- |
+| Mafia | Uses its own role, legitimate allies or investigation results, and public discussion to choose night actions, share short suspicions and vote. It can be mistaken. |
+| Starship Suspects | Moves, completes its own tasks, repairs alerts, reports bodies, and acts according to its own crew or impostor role. Crew can finish tasks as ghosts. |
+| Sketch & Guess | Draws bundled vector illustrations and compares visible public ink to make up to three guesses. Recognition is limited and may miss a freehand drawing. It never reads another artist's secret prompt. |
+| Trivia Rally | Uses an imperfect built-in knowledge vocabulary matched to the visible question and options. |
+| Rock–Paper–Scissors Duel | Selects a sealed random hand without reading the human's choice. |
+| Drop Four | Looks for wins, blocks immediate threats and compares legal board replies. |
+
+AI decisions run only when a human participant reads or acts in the room. Due
+turns are paced, bounded and saved with the existing room transaction. AI seats
+do not create browser sessions, call a provider or keep an abandoned room alive.
+An eliminated host can watch the AI finish a match and then choose a rematch.
+Rematches keep the group while clearing prior roles, choices and AI observations.
+
 ## How to play
 
 All six party games have a collapsible **How to play** guide before play and in

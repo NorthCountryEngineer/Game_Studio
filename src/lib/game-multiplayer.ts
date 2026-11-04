@@ -1,12 +1,14 @@
+import { validateVersusMatch, type VersusMatch } from './game-versus';
+
 /** Anonymous two-seat room capabilities live only in the current page's memory. */
 export type MultiplayerSeat = 0 | 1;
-export type MultiplayerRoom = { gameId: string; publishedRevision: number; specSha256: string; roomId: string; token: string; expiresAt: number; socketUrl: string; seat: MultiplayerSeat };
-export type MultiplayerLobbyRoom = { roomId: string; gameId: string; publishedRevision: number; specSha256: string; title: string; expiresAt: number };
+export type MultiplayerRoom = { gameId: string; publishedRevision: number; specSha256: string; roomId: string; token: string; expiresAt: number; socketUrl: string; seat: MultiplayerSeat; match?: VersusMatch };
+export type MultiplayerLobbyRoom = { roomId: string; gameId: string; publishedRevision: number; specSha256: string; title: string; expiresAt: number; match?: VersusMatch };
 export type MultiplayerInvitation = { roomId: string; inviteToken: string };
 export type MultiplayerInputSample = { seq: number; mask: number };
 export type MultiplayerStatus = 'connecting' | 'waiting' | 'connected' | 'reconnecting' | 'ended' | 'expired';
 export type MultiplayerServerMessage =
-  | { type: 'ready'; gameId: string; publishedRevision: number; specSha256: string; roomId: string; seat: MultiplayerSeat; expiresAt: number }
+  | { type: 'ready'; gameId: string; publishedRevision: number; specSha256: string; roomId: string; seat: MultiplayerSeat; expiresAt: number; match?: VersusMatch }
   | { type: 'peer'; connected: boolean }
   | { type: 'input'; seq: number; mask: number; history?: MultiplayerInputSample[] }
   | { type: 'state'; seq: number; state: unknown }
@@ -22,6 +24,7 @@ const tokenPattern = /^[A-Za-z0-9_-]{43}$/;
 const maxMessageBytes = 25600;
 function publication(value: Record<string, unknown>): boolean { return typeof value.gameId === 'string' && roomPattern.test(value.gameId) && Number.isSafeInteger(value.publishedRevision) && Number(value.publishedRevision) >= 1 && Number(value.publishedRevision) <= 1000000000 && typeof value.specSha256 === 'string' && /^[a-f0-9]{64}$/.test(value.specSha256); }
 export function sameMultiplayerPublication(room: Pick<MultiplayerRoom, 'gameId' | 'publishedRevision' | 'specSha256'>, binding: { game_id: string; published_revision: number; spec_sha256: string }): boolean { return room.gameId === binding.game_id && room.publishedRevision === binding.published_revision && room.specSha256 === binding.spec_sha256; }
+export function sameMultiplayerMatch(left?: VersusMatch, right?: VersusMatch): boolean { return left === undefined ? right === undefined : right !== undefined && left.mode === right.mode && left.lives === right.lives && left.timeLimit === right.timeLimit; }
 function object(value: unknown): value is Record<string, unknown> { return Boolean(value && typeof value === 'object' && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype); }
 function exact(value: Record<string, unknown>, keys: string[]) { return Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key)); }
 export function validMultiplayerSequence(value: unknown): value is number { return Number.isSafeInteger(value) && Number(value) >= 1 && Number(value) <= 10000000; }
@@ -69,24 +72,28 @@ export function validateMultiplayerLobby(value: unknown, now = Date.now()): Mult
   if (!object(value) || !exact(value, ['rooms']) || !Array.isArray(value.rooms) || value.rooms.length > 20) return;
   const ids = new Set<string>(), rooms: MultiplayerLobbyRoom[] = [];
   for (const room of value.rooms) {
-    if (!object(room) || !exact(room, ['roomId', 'gameId', 'publishedRevision', 'specSha256', 'title', 'expiresAt']) || typeof room.roomId !== 'string' || !roomPattern.test(room.roomId) || ids.has(room.roomId) || !publication(room) || !expiry(room.expiresAt, now) || typeof room.title !== 'string' || !room.title || room.title !== room.title.trim() || room.title.length > 80 || /[<>\u0000-\u001f\u007f-\u009f]/u.test(room.title)) return;
+    if (!object(room)) return;
+    const hasMatch = Object.hasOwn(room, 'match'), match = hasMatch ? validateVersusMatch(room.match) : undefined;
+    if (!exact(room, ['roomId', 'gameId', 'publishedRevision', 'specSha256', 'title', 'expiresAt', ...(hasMatch ? ['match'] : [])]) || hasMatch && !match || typeof room.roomId !== 'string' || !roomPattern.test(room.roomId) || ids.has(room.roomId) || !publication(room) || !expiry(room.expiresAt, now) || typeof room.title !== 'string' || !room.title || room.title !== room.title.trim() || room.title.length > 80 || /[<>\u0000-\u001f\u007f-\u009f]/u.test(room.title)) return;
     ids.add(room.roomId);
-    rooms.push({ roomId: room.roomId, gameId: room.gameId as string, publishedRevision: room.publishedRevision as number, specSha256: room.specSha256 as string, title: room.title, expiresAt: room.expiresAt });
+    rooms.push({ roomId: room.roomId, gameId: room.gameId as string, publishedRevision: room.publishedRevision as number, specSha256: room.specSha256 as string, title: room.title, expiresAt: room.expiresAt, ...(match ? { match } : {}) });
   }
   return rooms;
 }
 export function validateMultiplayerRoom(value: unknown, seat: MultiplayerSeat, localPreview = false, now = Date.now()): MultiplayerRoom | undefined {
-  if (!object(value) || !exact(value, ['roomId', seat === 0 ? 'hostToken' : 'guestToken', ...(seat === 0 ? ['inviteToken'] : []), 'expiresAt', 'socketUrl', 'gameId', 'publishedRevision', 'specSha256']) || typeof value.roomId !== 'string' || !roomPattern.test(value.roomId) || !expiry(value.expiresAt, now) || !publication(value)) return;
+  if (!object(value)) return;
+  const hasMatch = Object.hasOwn(value, 'match'), match = hasMatch ? validateVersusMatch(value.match) : undefined;
+  if (!exact(value, ['roomId', seat === 0 ? 'hostToken' : 'guestToken', ...(seat === 0 ? ['inviteToken'] : []), 'expiresAt', 'socketUrl', 'gameId', 'publishedRevision', 'specSha256', ...(hasMatch ? ['match'] : [])]) || hasMatch && !match || typeof value.roomId !== 'string' || !roomPattern.test(value.roomId) || !expiry(value.expiresAt, now) || !publication(value)) return;
   const token = value[seat === 0 ? 'hostToken' : 'guestToken'];
   if (typeof token !== 'string' || !tokenPattern.test(token) || (seat === 0 && (typeof value.inviteToken !== 'string' || !tokenPattern.test(value.inviteToken)))) return;
   const socketUrl = validateMultiplayerSocketURL(value.socketUrl, localPreview); if (!socketUrl) return;
-  return { roomId: value.roomId, token, expiresAt: value.expiresAt, socketUrl, seat, gameId: value.gameId as string, publishedRevision: value.publishedRevision as number, specSha256: value.specSha256 as string };
+  return { roomId: value.roomId, token, expiresAt: value.expiresAt, socketUrl, seat, gameId: value.gameId as string, publishedRevision: value.publishedRevision as number, specSha256: value.specSha256 as string, ...(match ? { match } : {}) };
 }
 export function validateMultiplayerServerMessage(raw: unknown, validateState: (state: unknown) => boolean): MultiplayerServerMessage | undefined {
   if (typeof raw !== 'string' || raw.length > maxMessageBytes || new TextEncoder().encode(raw).length > maxMessageBytes) return;
   let value: unknown; try { value = JSON.parse(raw); } catch { return; }
   if (!object(value)) return;
-  if (value.type === 'ready' && exact(value, ['type', 'roomId', 'seat', 'expiresAt', 'gameId', 'publishedRevision', 'specSha256']) && typeof value.roomId === 'string' && roomPattern.test(value.roomId) && (value.seat === 0 || value.seat === 1) && Number.isSafeInteger(value.expiresAt) && Number(value.expiresAt) > 0 && publication(value)) return value as MultiplayerServerMessage;
+  if (value.type === 'ready' && exact(value, ['type', 'roomId', 'seat', 'expiresAt', 'gameId', 'publishedRevision', 'specSha256', ...(Object.hasOwn(value, 'match') ? ['match'] : [])]) && (!Object.hasOwn(value, 'match') || validateVersusMatch(value.match)) && typeof value.roomId === 'string' && roomPattern.test(value.roomId) && (value.seat === 0 || value.seat === 1) && Number.isSafeInteger(value.expiresAt) && Number(value.expiresAt) > 0 && publication(value)) return value as MultiplayerServerMessage;
   if (value.type === 'peer' && exact(value, ['type', 'connected']) && typeof value.connected === 'boolean') return value as MultiplayerServerMessage;
   if (value.type === 'input' && validMultiplayerSequence(value.seq) && validMultiplayerInput(value.mask)) {
     if (exact(value, ['type', 'seq', 'mask'])) return value as MultiplayerServerMessage;
@@ -230,7 +237,7 @@ export function connectMultiplayer(room: MultiplayerRoom, options: {
       if (isTransientMultiplayerServiceError(event.data)) { interrupt(current); return; }
       const message = validateMultiplayerServerMessage(event.data, options.validateState); if (!message) { end('ended', 'invalid-message'); return; }
       if (message.type === 'ready') {
-        if (ready || message.roomId !== room.roomId || message.seat !== room.seat || message.gameId !== room.gameId || message.publishedRevision !== room.publishedRevision || message.specSha256 !== room.specSha256 || !renew(message.expiresAt)) { end('ended', 'invalid-room'); return; }
+        if (ready || message.roomId !== room.roomId || message.seat !== room.seat || message.gameId !== room.gameId || message.publishedRevision !== room.publishedRevision || message.specSha256 !== room.specSha256 || !sameMultiplayerMatch(room.match, message.match) || !renew(message.expiresAt)) { end('ended', 'invalid-room'); return; }
         clearHandshake(); ready = true; healthySince = now(); lastPong = now(); pingPending = false; status('waiting'); return;
       }
       if (!ready) { end('ended', 'invalid-message'); return; }

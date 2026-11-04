@@ -308,7 +308,10 @@ def room_request(api, event, room_id, body=None):
                 bank = cached_bank(api)
                 if not bank: fail('AI narration is not enabled yet. Choose a human narrator.', 409)
                 state['game']['narration'] = bank['phrases']
-            try: state['game'] = engine().apply_action(state['game'], actor, action, now=now)
+            # The pre-action reconciliation already spent this request's
+            # bounded computer-player budget. Human choices can still resolve
+            # a ready phase without running a second set of AI actions.
+            try: state['game'] = engine().apply_action(state['game'], actor, action, now=now, ai_budget=0)
             except engine().MafiaError as error: raise MafiaError(error.status, error.message)
             rate['count'] += 1
             session.update(sequence=body['sequence'], lastFingerprint=fingerprint, rate=rate)

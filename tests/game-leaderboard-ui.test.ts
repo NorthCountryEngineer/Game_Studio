@@ -9,6 +9,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { defaultGameSpec, validateGameSpec } from '../src/lib/game-design';
 import { createPlatformerSpec } from '../src/lib/game-flow';
 import { setCooperativeMode } from '../src/lib/game-multiplayer-design';
+import { isVersusEligible } from '../src/lib/game-versus';
 import { defaultWordGameSpec } from '../src/lib/word-game-design';
 import { defaultMultiGameSpec } from '../src/lib/multi-game';
 import { aggregateMultiGameResults } from '../src/lib/multi-game-session';
@@ -48,7 +49,7 @@ function mount(name: 'GameHighScores' | 'PublishedGame', initial: Record<string,
   const code = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText;
   const modules: Record<string, unknown> = {
     react, 'react/jsx-runtime': { jsx, jsxs: jsx, Fragment: 'FRAGMENT' }, '../lib/game-types': { isCooperativeGameSpec: (spec: GameSpec) => spec.version !== 3 && spec.version !== 8 && Boolean(spec.multiplayer), isEndlessAsteroids: (spec: GameSpec) => spec.version === 6 && Boolean(spec.asteroids?.endless) },
-    '../lib/game-api': {}, './GamePlayer': { GamePlayer: 'PLAYER' }, './CooperativePlayer': { CooperativeGame: 'COOPERATIVE' }, './MultiplayerLobby': {}, './MafiaCategoryCard': {}, './AsteroidPrizeEditor': {}, '../lib/game-design': {}, './ItemActions': {}, './Confirm': {},
+    '../lib/game-versus': { isVersusEligible }, '../lib/game-api': {}, './GamePlayer': { GamePlayer: 'PLAYER' }, './CooperativePlayer': { CooperativeGame: 'COOPERATIVE' }, './MultiplayerLobby': {}, './MafiaCategoryCard': {}, './AsteroidPrizeEditor': {}, '../lib/game-design': {}, './ItemActions': {}, './Confirm': {},
     '../lib/core': { isCore: options.connected ?? true }, '../lib/game-scores': { getGameScores: async (value: Game) => { reads.push(value); return options.read ? options.read() : empty(leaderboard.leaderboardRanking(value.spec)); }, submitGameScore: async (_game: Game, value: GameScoreReport) => { reports.push(value); return options.save ? options.save(value) : { ...empty(), qualified: true }; } },
     '../lib/game-leaderboard': leaderboard, '../lib/branding': {}, './ServiceBadge': {}, './WordGameEditor': {},
   };
@@ -86,6 +87,17 @@ test('every player renders its board outside the cooperative switch and terminal
   for (const spec of [defaultWordGameSpec('crossword'), defaultWordGameSpec('word-search'), defaultWordGameSpec('mad-libs'), createPlatformerSpec(), defaultMultiGameSpec(), defaultGameSpec()]) {
     const other = mount('PublishedGame', { game: game(spec), signed: false }); assert.ok(other.elements().find(value => typeof value.type === 'function' && value.type.name === 'GameHighScores')); other.unmount();
   }
+  view.unmount();
+});
+
+test('a shooting Asteroids edition offers versus without altering its solo completion or requiring cooperative data', () => {
+  const current = game(arcade()), original = JSON.stringify(current.spec), view = mount('PublishedGame', { game: current, signed: false });
+  const modes = view.find('COOPERATIVE'); assert.ok(modes, 'eligible solo Asteroids gets the room selector');
+  const solo = elements(modes.props.children).find(value => value.type === 'PLAYER'); assert.ok(solo);
+  solo.props.onComplete(result(42)); view.flush();
+  assert.equal(view.events.length, 1, 'playing solo retains the existing SDK completion');
+  assert.equal(view.elements().find(value => typeof value.type === 'function' && value.type.name === 'GameHighScores')!.props.run.result.points, 42);
+  assert.equal(JSON.stringify(current.spec), original, 'versus availability does not edit the authored definition');
   view.unmount();
 });
 

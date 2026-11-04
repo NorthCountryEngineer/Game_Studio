@@ -6,11 +6,15 @@ Creators describe an adventure and refine a saved game through conversation or t
 
 The workshop's **Asteroids** starter uses a spaceship and supports uploaded sprites for the ship, asteroids, rewards and enemies. Rocks enter from all four edges, and rewards can be shot or collected by contact in solo and cooperative games. See [sprite uploads and Asteroids behavior](docs/ASTEROID_CUSTOMIZATION.md).
 
+Published shooting Asteroids games also offer **Asteroids versus**: two players shoot each other in one arena, with host-selected lives and a round timer. The last survivor wins; the timer compares remaining lives and permits a draw. Room settings leave the saved game intact. See [versus rules and room settings](docs/ASTEROIDS_VERSUS.md).
+
 The **2D Platformer** starter adds pixel worlds, walking, jumping and eight player-selected characters. Finite solo games share a drag/drop journey editor for levels, client-owned lessons/videos/exercises and an optional level home. Continuous Asteroids has separate survival settings. Clients can consume points, active play time and material completion through the SDK. See [level flows and client adapters](docs/LEVEL_FLOWS.md).
 
 The **Multi-game** category composes complete puzzles and leveled games with generic client objects, videos and interactive objects. It uses the same drag/drop stack and selected-step editor. An optional continuous ending starts after the main result is finalized, keeping free-play scores separate. See [multi-game journeys](docs/MULTI_GAME.md).
 
 The public **Party games** library offers **Mafia**, **Starship Suspects**, **Sketch & Guess**, **Trivia Rally**, **Rock–Paper–Scissors Duel**, and **Drop Four**. Play in private online rooms, or use the shared-screen host controls to add names and run any of the six games in person. Two-player duels sit alongside drawing, trivia and larger-group deduction games. See [party games and in-person hosting](docs/PARTY_GAMES.md).
+
+All six online party games support **AI players**. Create a room, add an AI opponent or fill the seats needed to start, then start when ready. Friends and AI can play together, and every AI seat is labeled. Built-in agents make legal moves without model calls. Mafia can use an automatic narrator so a solo host gets to play. See [AI opponents](docs/PARTY_GAMES.md#ai-opponents).
 
 **Mafia** is a live private party game for 5–24 players. Players join by invitation, choose names and avatars, receive private roles and make synchronized night choices and day votes. The creator narrates by default, can hand narration to another participant before starting, or choose automatic AI narration so everyone can play. Discussion uses text, including a private Mafia channel. Rematches keep the group and clear the previous round's secrets. See [Mafia rules, privacy and workflow](docs/MAFIA.md) and [cached AI narration](docs/MAFIA_NARRATION.md).
 

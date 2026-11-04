@@ -1,6 +1,7 @@
 import { validateArcadeGameSpec } from './game-design';
 import { createGameEngine, installGameDisplayKeyboardBridge, gameCanvasViewportStyles, type GameEntity, type GamePlatform, type GamePowerUpEffects, type GamePowerUpWorld, type GameAdvancedWorld, type AdvancedWorld } from './game-runtime';
-import type { CooperativeGameSpec } from './game-types';
+import type { ArcadeGameSpec, GameLevel } from './game-types';
+import { isVersusEligible, validateVersusMatch, type VersusMatch } from './game-versus';
 
 /** One input bit field, with no player names, chat, or executable payloads. */
 export type CooperativeInputMask = number;
@@ -10,15 +11,16 @@ export type CooperativePlayer = {
 };
 export type CooperativeBullet = { id: number; owner: 0 | 1; x: number; y: number; vx: number; vy: number; ttl: number };
 export type CooperativeState = {
-  levelIndex: number; elapsed: number; outcome: 'playing' | 'won' | 'lost'; running: boolean; paused: boolean;
+  levelIndex: number; elapsed: number; outcome: 'playing' | 'won' | 'lost' | 'finished'; running: boolean; paused: boolean;
   seed: number; nextId: number; nextSnack: number; nextHazard: number;
   powerUps?: GamePowerUpWorld;
   advanced?: GameAdvancedWorld;
+  versus?: { winner: 0 | 1 | 'draw' | null; reason: 'elimination' | 'time' | null };
   players: [CooperativePlayer, CooperativePlayer]; entities: GameEntity[]; bullets: CooperativeBullet[]; platforms: GamePlatform[];
 };
 
 /** Drawing-only motion. Host snapshots still own every gameplay decision. */
-export function createCooperativePresentation(spec: CooperativeGameSpec) {
+export function createCooperativePresentation(spec: ArcadeGameSpec, match?: VersusMatch) {
   type Pose = Pick<CooperativePlayer, 'x' | 'y' | 'angle' | 'vy' | 'grounded' | 'previousJump'>;
   type Correction = { x: number; y: number; angle: number; left: number };
   type Actor = { x: number; y: number; vx: number; vy: number; correction: Correction };
@@ -62,7 +64,7 @@ export function createCooperativePresentation(spec: CooperativeGameSpec) {
       if (player.vy >= 0) for (const platform of latest.platforms) if (oldBottom <= platform.y + 0.5 && player.y + 34 >= platform.y && player.x + 42 > platform.x && player.x < platform.x + platform.w) { player.y = platform.y - 34; player.vy = 0; player.grounded = true; break; }
       // A visual fall cannot remove a life or invent a respawn.
       player.y = Math.min(566, player.y);
-    } else if (spec.arcade?.rotation) {
+    } else if (match || spec.arcade?.rotation) {
       player.angle = ((player.angle + dx * 2.8 * dt) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2);
       const thrust = Number(Boolean(input & 4)) - Number(Boolean(input & 8));
       player.x = Math.max(0, Math.min(918, player.x + Math.cos(player.angle) * thrust * movementSpeed * dt));
@@ -136,14 +138,29 @@ export function createCooperativePresentation(spec: CooperativeGameSpec) {
 /** The host advances one world exactly once. A guest sends only its own controls. */
 export function createCooperativeEngine(base = createGameEngine(), presentation = createCooperativePresentation) {
   const width = 960, height = 540;
-  function create(spec: CooperativeGameSpec, levelIndex = 0): CooperativeState {
-    const single = base.create(spec, levelIndex);
-    const player = (seat: 0 | 1): CooperativePlayer => ({ x: spec.genre === 'platformer' ? 48 + seat * 80 : 350 + seat * 200, y: single.player.y, vy: 0, grounded: single.player.grounded, score: 0, lives: single.lives, invulnerable: 1.5, angle: -Math.PI / 2, previousJump: false, fireCooldown: 0, points: 0, ...(spec.version === 5 || spec.version === 6 && spec.powerUps ? { effects: base.newEffects() } : {}) });
-    return { levelIndex: single.levelIndex, elapsed: 0, outcome: 'playing', running: false, paused: true, seed: single.seed, nextId: single.nextId, nextSnack: single.nextSnack, nextHazard: single.nextHazard, players: [player(0), player(1)], entities: single.entities, bullets: [], platforms: single.platforms, ...((spec.version === 5 || spec.version === 6) && spec.powerUps ? { powerUps: { pickups: [], nextSpawn: spec.powerUps.spawnInterval } } : {}), ...(spec.version === 6 ? { advanced: single.advanced! } : {}) };
+  function respawn(player: CooperativePlayer, seat: number) {
+    player.x = seat === 0 ? 90 : 828; player.y = 253; player.vy = 0; player.angle = seat === 0 ? 0 : Math.PI;
+    player.invulnerable = 1.5; player.fireCooldown = 0;
+    if (player.effects) Object.assign(player.effects, base.newEffects());
+  }
+  function finishVersus(state: CooperativeState, match: VersusMatch) {
+    const [first, second] = state.players;
+    const elimination = first.lives === 0 || second.lives === 0;
+    if (!elimination && Math.round(state.elapsed * 1000) < match.timeLimit * 1000) return;
+    if (!elimination) state.elapsed = match.timeLimit;
+    state.versus = { winner: first.lives === second.lives ? 'draw' : first.lives > second.lives ? 0 : 1, reason: elimination ? 'elimination' : 'time' };
+    state.outcome = 'finished'; state.running = false; state.paused = false;
+  }
+  function create(spec: ArcadeGameSpec, levelIndex = 0, match?: VersusMatch): CooperativeState {
+    if (match && (!validateVersusMatch(match) || !isVersusEligible(spec))) throw new Error('Choose valid Asteroids versus settings.');
+    const single = base.create(spec, match ? 0 : levelIndex);
+    if (match && single.advanced) single.advanced.difficulty = spec.levels?.[0]?.rules.difficulty ?? spec.rules.difficulty;
+    const player = (seat: 0 | 1): CooperativePlayer => ({ x: match ? seat === 0 ? 90 : 828 : spec.genre === 'platformer' ? 48 + seat * 80 : 350 + seat * 200, y: match ? 253 : single.player.y, vy: 0, grounded: single.player.grounded, score: 0, lives: match?.lives ?? single.lives, invulnerable: 1.5, angle: match ? seat === 0 ? 0 : Math.PI : -Math.PI / 2, previousJump: false, fireCooldown: 0, points: 0, ...(spec.version === 5 || spec.version === 6 && spec.powerUps ? { effects: base.newEffects() } : {}) });
+    return { levelIndex: single.levelIndex, elapsed: 0, outcome: 'playing', running: false, paused: true, seed: single.seed, nextId: single.nextId, nextSnack: single.nextSnack, nextHazard: single.nextHazard, players: [player(0), player(1)], entities: single.entities, bullets: [], platforms: single.platforms, ...((spec.version === 5 || spec.version === 6) && spec.powerUps ? { powerUps: { pickups: [], nextSpawn: spec.powerUps.spawnInterval } } : {}), ...(spec.version === 6 ? { advanced: single.advanced! } : {}), ...(match ? { versus: { winner: null, reason: null } } : {}) };
   }
   function random(state: CooperativeState) { state.seed = (Math.imul(state.seed, 1664525) + 1013904223) >>> 0; return state.seed / 4294967296; }
-  function spawn(state: CooperativeState, spec: CooperativeGameSpec, kind: 'snack' | 'hazard') {
-    const rules = spec.levels[state.levelIndex].rules, arcade = spec.genre === 'dodge' && spec.arcade;
+  function spawn(state: CooperativeState, spec: ArcadeGameSpec, kind: 'snack' | 'hazard') {
+    const rules = (spec.levels?.[state.levelIndex]?.rules ?? spec.rules), arcade = spec.genre === 'dodge' && spec.arcade;
     if (state.entities.reduce((count, entity) => count + (entity.asteroid === 'large' && arcade && arcade.splitAsteroids ? 2 : 1), 0) + (kind === 'hazard' && arcade && arcade.splitAsteroids ? 2 : 1) > (spec.version === 5 ? 64 : 96)) return;
     const size = kind === 'snack' ? 22 : arcade && (arcade.shooting || arcade.rotation) ? 42 : 30;
     for (let attempt = 0; attempt < 40; attempt++) {
@@ -159,16 +176,18 @@ export function createCooperativeEngine(base = createGameEngine(), presentation 
       state.entities.push(entity); state.nextId++; return;
     }
   }
-  function step(state: CooperativeState, spec: CooperativeGameSpec, masks: [number, number], elapsed: number): CooperativeState {
+  function step(state: CooperativeState, spec: ArcadeGameSpec, masks: [number, number], elapsed: number, match?: VersusMatch): CooperativeState {
     if (!state.running || state.paused || state.outcome !== 'playing' || !Number.isFinite(elapsed) || elapsed <= 0) return state;
     if (spec.version === 6) {
       const inputs = masks.map(mask => ({ left: Boolean(mask & 1), right: Boolean(mask & 2), up: Boolean(mask & 4), down: Boolean(mask & 8), jump: Boolean(mask & 16), fire: Boolean(mask & 32) }));
-      base.stepAdvanced(state as AdvancedWorld, base.forLevel(spec,state.levelIndex), state.players, inputs, elapsed);
+      base.stepAdvanced(state as AdvancedWorld, base.forLevel(spec,state.levelIndex), state.players, inputs, elapsed, match);
+      if (match) finishVersus(state, match);
       return state;
     }
-    const dt = Math.min(elapsed, 1 / 20), rules = spec.levels[state.levelIndex].rules;
+    const dt = Math.min(elapsed, 1 / 20), rules = spec.levels?.[state.levelIndex]?.rules ?? spec.rules;
+    const before = state.players.map(player => ({ x: player.x, y: player.y }));
     const arcade = spec.genre === 'dodge' ? spec.arcade : undefined;
-    state.elapsed = Math.min(rules.timeLimit, state.elapsed + dt);
+    state.elapsed = Math.min(match?.timeLimit ?? rules.timeLimit, state.elapsed + dt);
     for (let seat = 0; seat < 2; seat++) {
       const player = state.players[seat], mask = masks[seat];
       player.invulnerable = Math.max(0, player.invulnerable - dt); player.fireCooldown = Math.max(0, player.fireCooldown - dt);
@@ -185,7 +204,7 @@ export function createCooperativeEngine(base = createGameEngine(), presentation 
         player.vy += 900 * dt; player.y += player.vy * dt; player.grounded = false;
         if (player.vy >= 0) for (const platform of state.platforms) if (oldBottom <= platform.y + 0.5 && player.y + 34 >= platform.y && player.x + 42 > platform.x && player.x < platform.x + platform.w) { player.y = platform.y - 34; player.vy = 0; player.grounded = true; break; }
         if (player.y > height + 26) { player.lives--; player.x = 48 + seat * 80; player.y = 464; player.vy = 0; player.invulnerable = 1.5; }
-      } else if (arcade?.rotation) {
+      } else if (match || arcade?.rotation) {
         player.angle = ((player.angle + dx * 2.8 * dt) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2);
         const thrust = Number(Boolean(mask & 4)) - Number(Boolean(mask & 8));
         player.x = Math.max(0, Math.min(width - 42, player.x + Math.cos(player.angle) * thrust * speed * dt));
@@ -198,8 +217,8 @@ export function createCooperativeEngine(base = createGameEngine(), presentation 
     if (spec.version === 5 && spec.powerUps && state.powerUps) base.advancePrizes(state, state.powerUps, spec.powerUps, dt, state.players.map(player => ({ x: player.x, y: player.y, effects: player.effects!, lives: player.lives })));
     for (let seat = 0; seat < 2; seat++) {
       const player = state.players[seat], offsets = player.effects?.tripleShot ? [-0.18, 0, 0.18] : [0], limit = spec.version === 5 ? 32 : 16;
-      if (player.lives && arcade?.shooting && (masks[seat] & 32) && !player.fireCooldown && state.bullets.filter(bullet => bullet.owner === seat).length + offsets.length <= limit && state.bullets.length + offsets.length <= limit * 2) {
-        const forward = arcade.rotation ? player.angle : -Math.PI / 2;
+      if (player.lives && (!match || !player.invulnerable) && arcade?.shooting && (masks[seat] & 32) && !player.fireCooldown && state.bullets.filter(bullet => bullet.owner === seat).length + offsets.length <= limit && state.bullets.length + offsets.length <= limit * 2) {
+        const forward = match || arcade.rotation ? player.angle : -Math.PI / 2;
         for (const offset of offsets) { const angle = forward + offset; state.bullets.push({ id: state.nextId++, owner: seat as 0 | 1, x: player.x + 21 + Math.cos(angle) * 25, y: player.y + 17 + Math.sin(angle) * 25, vx: Math.cos(angle) * 620, vy: Math.sin(angle) * 620, ttl: 1.6 }); }
         player.fireCooldown = player.effects?.rapidFire ? 0.08 : 0.22;
       }
@@ -212,9 +231,22 @@ export function createCooperativeEngine(base = createGameEngine(), presentation 
     const removed = new Set<number>(), fragments: GameEntity[] = [];
     state.bullets = state.bullets.filter(bullet => {
       const dx = bullet.vx * dt, dy = bullet.vy * dt;
-      let nearest: GameEntity | undefined, first = Infinity;
-      for (const entity of state.entities) if (!removed.has(entity.id) && (entity.kind === 'hazard' || state.players[bullet.owner].lives && state.players[bullet.owner].score < rules.goal)) { const hit = base.sweptHit(bullet.x, bullet.y, dx - entity.vx * dt, dy - entity.vy * dt, entity); if (hit !== undefined && hit < first) { nearest = entity; first = hit; } }
+      let nearest: GameEntity | undefined, first = Infinity, ship: number | undefined;
+      for (const entity of state.entities) if (!removed.has(entity.id) && (entity.kind === 'hazard' || state.players[bullet.owner].lives && (match || state.players[bullet.owner].score < rules.goal))) { const hit = base.sweptHit(bullet.x, bullet.y, dx - entity.vx * dt, dy - entity.vy * dt, entity); if (hit !== undefined && hit < first) { nearest = entity; first = hit; } }
+      if (match) {
+        const seat = 1 - bullet.owner, target = state.players[seat], origin = before[seat];
+        if (target.lives && !target.invulnerable) {
+          const hit = base.sweptHit(bullet.x, bullet.y, dx - (target.x - origin.x), dy - (target.y - origin.y), { id: 0, kind: 'hazard', x: origin.x, y: origin.y, w: 42, h: 34, vx: 0, vy: 0 });
+          if (hit !== undefined && hit < first) { ship = seat; first = hit; }
+        }
+      }
       if (base.shotPrize(bullet, dt, state.powerUps, spec.powerUps, state.players[bullet.owner], first)) return false;
+      if (ship !== undefined) {
+        const target = state.players[ship];
+        if (target.effects?.shield) { target.effects.shield = 0; target.invulnerable = 1.5; }
+        else { target.lives--; if (target.lives) respawn(target, ship); }
+        return false;
+      }
       if (nearest) {
         if (nearest.kind === 'snack') { removed.add(nearest.id); const owner = state.players[bullet.owner]; owner.score++; if (arcade?.scoring) owner.points += 10; return false; }
         removed.add(nearest.id); if (arcade?.scoring) state.players[bullet.owner].points += nearest.asteroid === 'small' ? 50 : 20;
@@ -241,44 +273,59 @@ export function createCooperativeEngine(base = createGameEngine(), presentation 
         const player = state.players[seat];
         if (!player.lives || !base.overlaps({ x: player.x, y: player.y, w: 42, h: 34 }, entity)) continue;
         if (entity.kind === 'snack') {
-          if (player.score >= rules.goal) continue;
+          if (!match && player.score >= rules.goal) continue;
           removed.add(entity.id); player.score++; if (arcade?.scoring) player.points += 10; collected++; break;
         }
-        if (!player.invulnerable && !entity.grace) { if (player.effects?.shield) player.effects.shield = 0; else player.lives = Math.max(0, player.lives - 1); player.invulnerable = 1.5; if (spec.genre === 'platformer') { player.x = 48 + seat * 80; player.y = 464; player.vy = 0; } }
+        if (!player.invulnerable && !entity.grace) { if (player.effects?.shield) player.effects.shield = 0; else { player.lives = Math.max(0, player.lives - 1); if (match && player.lives) respawn(player, seat); } player.invulnerable = 1.5; if (spec.genre === 'platformer') { player.x = 48 + seat * 80; player.y = 464; player.vy = 0; } }
       }
     }
     state.entities = state.entities.filter(entity => !removed.has(entity.id) && entity.y > -128 && entity.y < height + 60 && entity.x > -64 && entity.x < width + 64).concat(fragments);
     if (spec.genre !== 'dodge') for (let i = 0; i < collected && state.players.some(player => player.score < rules.goal); i++) spawn(state, spec, 'snack');
-    if (state.players.every(player => player.score >= rules.goal)) state.outcome = 'won';
+    if (match) finishVersus(state, match);
+    else if (state.players.every(player => player.score >= rules.goal)) state.outcome = 'won';
     else if (state.players.every(player => !player.lives) || state.elapsed >= rules.timeLimit) state.outcome = 'lost';
     return state;
   }
   /** Round snapshots without feeding network precision back into host physics. */
   function snapshot(state: CooperativeState): CooperativeState { return JSON.parse(JSON.stringify(state, (_key, value) => typeof value === 'number' && !Number.isInteger(value) ? Math.round(value * 1000) / 1000 : value)) as CooperativeState; }
-  return { spritePainter: base.spritePainter, create, step, snapshot, presentation, drawPrizes: base.drawPrizes, effectLabel: base.effectLabel, drawAdvanced: base.drawAdvanced, endless: base.endless, width, height };
+  return { spritePainter: base.spritePainter, levels: base.getLevels, matchConfig: validateVersusMatch, versusEligible: isVersusEligible, create, step, snapshot, presentation, drawPrizes: base.drawPrizes, effectLabel: base.effectLabel, drawAdvanced: base.drawAdvanced, endless: base.endless, width, height };
 }
 
 /** Untrusted relay data is bounded before entering the opaque drawing frame. */
-export function validateCooperativeState(value: unknown, spec: CooperativeGameSpec): CooperativeState | undefined {
+export function validateCooperativeState(value: unknown, spec: ArcadeGameSpec, match?: VersusMatch): CooperativeState | undefined {
   function record(input: unknown, required: string[], optional: string[] = []): input is Record<string, any> { return Boolean(input && typeof input === 'object' && !Array.isArray(input) && [Object.prototype, null].includes(Object.getPrototypeOf(input)) && required.every(key => Object.prototype.hasOwnProperty.call(input, key)) && Object.keys(input).every(key => required.includes(key) || optional.includes(key))); }
   function num(input: unknown, low: number, high: number, integer = false): input is number { return typeof input === 'number' && Number.isFinite(input) && input >= low && input <= high && (!integer || Number.isInteger(input)); }
   try {
-    const advanced = spec.version === 6 ? spec.asteroids! : undefined, endless = Boolean(advanced?.endless);
+    if (match && (!validateVersusMatch(match) || !isVersusEligible(spec))) return;
+    const levels = spec.levels ?? [{ rules: spec.rules }];
+    const advanced = spec.version === 6 ? spec.asteroids! : undefined, endless = !match && Boolean(advanced?.endless);
     const config = spec.version === 5 || spec.version === 6 ? spec.powerUps : undefined;
     const maxId = advanced ? 2147483647 : 10000000;
-    const stateFields = ['levelIndex', 'elapsed', 'outcome', 'running', 'paused', 'seed', 'nextId', 'nextSnack', 'nextHazard', 'players', 'entities', 'bullets', 'platforms', ...(config ? ['powerUps'] : []), ...(advanced ? ['advanced'] : [])];
-    if (JSON.stringify(value).length > 24000 || !record(value, stateFields) || !num(value.levelIndex, 0, endless ? 0 : spec.levels.length - 1, true)) return;
-    const rules = spec.levels[value.levelIndex].rules;
-    if (!num(value.elapsed, 0, endless ? 2147483647 : rules.timeLimit) || !(endless ? ['playing', 'lost'] : ['playing', 'won', 'lost']).includes(value.outcome) || typeof value.running !== 'boolean' || typeof value.paused !== 'boolean' || !num(value.seed, 0, 4294967295, true) || !num(value.nextId, 1, maxId, true) || !num(value.nextSnack, -1, 1) || !num(value.nextHazard, -1, 2)) return;
+    const stateFields = ['levelIndex', 'elapsed', 'outcome', 'running', 'paused', 'seed', 'nextId', 'nextSnack', 'nextHazard', 'players', 'entities', 'bullets', 'platforms', ...(config ? ['powerUps'] : []), ...(advanced ? ['advanced'] : []), ...(match ? ['versus'] : [])];
+    if (JSON.stringify(value).length > 24000 || !record(value, stateFields) || !num(value.levelIndex, 0, endless || match ? 0 : levels.length - 1, true)) return;
+    const rules = levels[value.levelIndex].rules;
+    if (!num(value.elapsed, 0, match?.timeLimit ?? (endless ? 2147483647 : rules.timeLimit)) || !(match ? ['playing', 'finished'] : endless ? ['playing', 'lost'] : ['playing', 'won', 'lost']).includes(value.outcome) || typeof value.running !== 'boolean' || typeof value.paused !== 'boolean' || !num(value.seed, 0, 4294967295, true) || !num(value.nextId, 1, maxId, true) || !num(value.nextSnack, -1, 1) || !num(value.nextHazard, -1, 2)) return;
     if (!Array.isArray(value.players) || value.players.length !== 2 || !Array.isArray(value.entities) || value.entities.length > (config || advanced ? 64 : 96) || !Array.isArray(value.bullets) || value.bullets.length > (config || advanced ? 64 : 32) || !Array.isArray(value.platforms) || value.platforms.length > 6) return;
     const maxPoints = advanced ? Math.min(2147483647,Math.ceil(value.elapsed * 2000)+2000) : 1000000;
-    for (const p of value.players) if (!record(p, ['x', 'y', 'vy', 'grounded', 'score', 'lives', 'invulnerable', 'angle', 'previousJump', 'fireCooldown', 'points', ...(config ? ['effects'] : [])]) || !num(p.x, 0, 918) || !num(p.y, -100, 600) || !num(p.vy, -1000, 1000) || typeof p.grounded !== 'boolean' || !num(p.score, 0, endless ? Math.min(2147483647,Math.ceil(value.elapsed*20)+40) : rules.goal, true) || !num(p.lives, 0, rules.lives, true) || !num(p.invulnerable, 0, 2) || !num(p.angle, -7, 7) || typeof p.previousJump !== 'boolean' || !num(p.fireCooldown, 0, 1) || !num(p.points, 0, maxPoints, true)) return;
+    for (const p of value.players) if (!record(p, ['x', 'y', 'vy', 'grounded', 'score', 'lives', 'invulnerable', 'angle', 'previousJump', 'fireCooldown', 'points', ...(config ? ['effects'] : [])]) || !num(p.x, 0, 918) || !num(p.y, -100, 600) || !num(p.vy, -1000, 1000) || typeof p.grounded !== 'boolean' || !num(p.score, 0, endless || match ? Math.min(2147483647,Math.ceil(value.elapsed*20)+40) : rules.goal, true) || !num(p.lives, 0, match?.lives ?? rules.lives, true) || !num(p.invulnerable, 0, 2) || !num(p.angle, -7, 7) || typeof p.previousJump !== 'boolean' || !num(p.fireCooldown, 0, 1) || !num(p.points, 0, maxPoints, true)) return;
     if (config) for (const p of value.players) {
       if (!record(p.effects, ['tripleShot', 'rapidFire', 'speedBoost', 'shield'])) return;
       for (const [key, type] of [['tripleShot', 'triple-shot'], ['rapidFire', 'rapid-fire'], ['speedBoost', 'speed-boost']] as const) if (!num(p.effects[key], 0, config.duration) || p.effects[key] > 0 && !config.types.includes(type)) return;
       if (!num(p.effects.shield, 0, 1, true) || p.effects.shield && !config.types.includes('shield')) return;
     }
     if (value.outcome === 'won' && value.players.some((p:CooperativePlayer) => p.score !== rules.goal)) return;
+    if (match) {
+      if (!record(value.versus, ['winner', 'reason'])) return;
+      const lives = value.players.map((player: CooperativePlayer) => player.lives);
+      const elimination = lives.some((count: number) => count === 0);
+      const ended = elimination || value.elapsed === match.timeLimit;
+      if (!ended) { if (value.outcome !== 'playing' || value.versus.winner !== null || value.versus.reason !== null) return; }
+      else {
+        const winner = lives[0] === lives[1] ? 'draw' : lives[0] > lives[1] ? 0 : 1;
+        if (value.outcome !== 'finished' || value.running || value.paused || value.versus.winner !== winner || value.versus.reason !== (elimination ? 'elimination' : 'time')) return;
+      }
+    }
+
     const ids = new Set<number>();
     for (const entity of value.entities) {
       if (!record(entity, ['id', 'kind', 'x', 'y', 'w', 'h', 'vx', 'vy'], ['asteroid', 'grace']) || !num(entity.id, 1, maxId, true) || entity.id >= value.nextId || ids.has(entity.id) || !['snack', 'hazard'].includes(entity.kind) || !num(entity.x, -64, 1024) || !num(entity.y, -128, 600) || !num(entity.w, 1, 64) || !num(entity.h, 1, 64) || !num(entity.vx, -1000, 1000) || !num(entity.vy, -1000, 1000) || 'asteroid' in entity && !(advanced?.sizes === 3 ? ['large', 'medium', 'small'] : ['large', 'small']).includes(entity.asteroid) || 'grace' in entity && !num(entity.grace, 0, 1)) return;
@@ -322,7 +369,7 @@ export function startCooperativeSandbox(engine: ReturnType<typeof createCooperat
   const title = document.getElementById('title')!, status = document.getElementById('status')!, announce = document.getElementById('announce')!, instruction = document.getElementById('instruction')!;
   const start = document.getElementById('start') as HTMLButtonElement, pause = document.getElementById('pause') as HTMLButtonElement, next = document.getElementById('next') as HTMLButtonElement;
   let paintSprite = engine.spritePainter();
-  let spec: CooperativeGameSpec | undefined, seat: 0 | 1 = 0, state: CooperativeState | undefined, connected = false, previous = 0, accumulator = 0, broadcast = 0, inputTimer = 0, seq = 0, remoteSeq = 0, remoteMask = 0, remotePressed = 0, remoteAge = 0, lastMask = -1;
+  let spec: ArcadeGameSpec | undefined, match: VersusMatch | undefined, levels: GameLevel[] = [], seat: 0 | 1 = 0, state: CooperativeState | undefined, connected = false, previous = 0, accumulator = 0, broadcast = 0, inputTimer = 0, seq = 0, remoteSeq = 0, remoteMask = 0, remotePressed = 0, remoteAge = 0, lastMask = -1;
   let presentation: ReturnType<typeof createCooperativePresentation> | undefined, delayAnnounced = false;
   const clock = () => typeof performance !== 'undefined' ? performance.now() : Date.now();
   const keys = new Set<string>(), pressed = new Set<string>();
@@ -337,10 +384,10 @@ export function startCooperativeSandbox(engine: ReturnType<typeof createCooperat
     draw();
   }
   function emitState() { if (seat === 0 && state) parent.postMessage({ type: 'game-coop-state', nonce, seq: ++seq, state: engine.snapshot(state) }, '*'); }
-  function reset(level = state?.levelIndex || 0) { if (!spec || seat !== 0 || !connected) return; state = engine.create(spec, level); state.running = true; state.paused = false; clear(); accumulator = 0; emitState(); draw(); canvas.focus(); }
+  function reset(level = state?.levelIndex || 0) { if (!spec || seat !== 0 || !connected) return; state = engine.create(spec, level, match); state.running = true; state.paused = false; clear(); accumulator = 0; emitState(); draw(); canvas.focus(); }
   start.addEventListener('click', () => reset());
   pause.addEventListener('click', () => { if (seat !== 0 || !state || !connected || !state.running || state.outcome !== 'playing') return; state.paused = !state.paused; clear(); emitState(); draw(); if (!state.paused) canvas.focus(); });
-  next.addEventListener('click', () => { if (seat === 0 && state?.outcome === 'won' && spec && state.levelIndex + 1 < spec.levels.length) reset(state.levelIndex + 1); });
+  next.addEventListener('click', () => { if (seat === 0 && state?.outcome === 'won' && spec && !match && state.levelIndex + 1 < levels.length) reset(state.levelIndex + 1); });
   document.addEventListener('keydown', event => { const key = event.key.toLowerCase(); if (['arrowleft', 'arrowright', 'arrowup', 'arrowdown', 'a', 'd', 'w', 's', ' ', 'z'].includes(key)) { if ((event.target as HTMLElement)?.tagName === 'BUTTON') return; event.preventDefault(); keys.add(key); emitInput(); } });
   document.addEventListener('keyup', event => { keys.delete(event.key.toLowerCase()); emitInput(); });
   for (const button of document.querySelectorAll<HTMLButtonElement>('[data-control]')) {
@@ -360,41 +407,48 @@ export function startCooperativeSandbox(engine: ReturnType<typeof createCooperat
     // heartbeat survives. Publish the pause before that suspension happens.
     if (seat === 0 && state?.running && state.outcome === 'playing') {
       state.paused = true; remoteMask = 0;
-      announce.textContent = 'The host game tab is in the background. Return here and choose Resume together.';
+      announce.textContent = `The host game tab is in the background. Return here and choose ${match ? 'Resume match' : 'Resume together'}.`;
       emitState();
     }
   });
   window.addEventListener('message', event => {
     if (event.source !== parent || !event.data || event.data.nonce !== nonce || typeof event.data !== 'object') return;
     const data = event.data, exact = (fields: string[]) => Object.keys(data).length === fields.length && fields.every(key => Object.prototype.hasOwnProperty.call(data, key));
-    if (data.type === 'game-coop-load' && !spec && exact(['type', 'nonce', 'spec', 'seat']) && (data.seat === 0 || data.seat === 1)) {
+    if (data.type === 'game-coop-load' && !spec && exact(['type', 'nonce', 'spec', 'seat', ...(Object.prototype.hasOwnProperty.call(data, 'match') ? ['match'] : [])]) && (data.seat === 0 || data.seat === 1)) {
       try {
-        const loaded = validate(data.spec); if (loaded.version !== 4 && !((loaded.version === 5 || loaded.version === 6) && loaded.multiplayer)) return; spec = loaded as CooperativeGameSpec; paintSprite = engine.spritePainter(spec.sprites); seat = data.seat; if (seat === 1) presentation = engine.presentation(spec);
-        state = engine.create(spec); title.textContent = `${spec.title} · Cooperative play`; instruction.textContent = `You are Player ${seat + 1}. Both players collect their own goal. Shared world; separate lives and points. No friendly fire. The host starts and pauses each level. If a player runs out of lives before finishing their goal, restart the level to try together again.`;
-        if (engine.endless(spec)) instruction.textContent = `You are Player ${seat + 1}. Survive together for as long as possible. Difficulty rises every ${spec.asteroids!.difficultyInterval} active seconds. The run ends when both ships lose all lives. Shared world; separate lives and points; no friendly fire. The authored treasure goal and timer do not end this run.`;
+        const loaded = validate(data.spec);
+        if (Object.prototype.hasOwnProperty.call(data, 'match')) { const checked = engine.matchConfig(data.match); if (!checked || !engine.versusEligible(loaded)) return; match = checked; }
+        else if (loaded.version !== 4 && !((loaded.version === 5 || loaded.version === 6) && loaded.multiplayer)) return;
+        spec = loaded; levels = engine.levels(spec); paintSprite = engine.spritePainter(spec.sprites); seat = data.seat; if (seat === 1) presentation = engine.presentation(spec, match);
+        state = engine.create(spec, 0, match); title.textContent = `${spec.title} · ${match ? 'Versus' : 'Cooperative play'}`; instruction.textContent = `You are Player ${seat + 1}. Both players collect their own goal. Shared world; separate lives and points. No friendly fire. The host starts and pauses each level. If a player runs out of lives before finishing their goal, restart the level to try together again.`;
+        if (!match && engine.endless(spec)) instruction.textContent = `You are Player ${seat + 1}. Survive together for as long as possible. Difficulty rises every ${spec.asteroids!.difficultyInterval} active seconds. The run ends when both ships lose all lives. Shared world; separate lives and points; no friendly fire. The authored treasure goal and timer do not end this run.`;
         document.getElementById('jump')!.hidden = spec.genre !== 'platformer'; document.getElementById('fire')!.hidden = !spec.arcade?.shooting;
-        document.getElementById('controls-help')!.textContent = spec.arcade?.rotation ? 'Left / Right turn · Up thrusts · Down reverses · Space / Z fires' : spec.genre === 'platformer' ? 'Arrows / WASD move · Space / Up jumps' : `Arrows / WASD move${spec.arcade?.shooting ? ' · Space / Z fires' : ''}`;
-        if (spec.powerUps) instruction.textContent += ` Shoot or collect prizes: 3 triple shot, » rapid fire, S one-hit shield, ↑ speed boost. Pickups affect only the ship that collects them.${engine.endless(spec) ? ' Any damaging impact clears that ship’s prizes; a shield absorbs one hit and also clears every prize.' : ''}`;
+        document.getElementById('controls-help')!.textContent = match || spec.arcade?.rotation ? 'Left / Right turn · Up thrusts · Down reverses · Space / Z fires' : spec.genre === 'platformer' ? 'Arrows / WASD move · Space / Up jumps' : `Arrows / WASD move${spec.arcade?.shooting ? ' · Space / Z fires' : ''}`;
+        if (spec.powerUps) instruction.textContent += ` Shoot or collect prizes: 3 triple shot, » rapid fire, S one-hit shield, ↑ speed boost. Pickups affect only the ship that collects them.${!match && engine.endless(spec) ? ' Any damaging impact clears that ship’s prizes; a shield absorbs one hit and also clears every prize.' : ''}`;
         if (spec.version === 6) instruction.textContent += `${spec.arcade?.splitAsteroids ? spec.asteroids!.sizes === 3 ? ' Asteroids split large → two medium → four small pieces.' : ' Large asteroids split into two small pieces.' : ''}${spec.asteroids!.enemies.enabled ? ` Enemy ships take ${spec.asteroids!.enemies.hitPoints} hits; ${spec.asteroids!.enemies.difficulty === 'easy' ? 'easy enemies wander' : spec.asteroids!.enemies.difficulty === 'medium' ? 'medium enemies track gradually' : 'hard enemies pursue and fire aimed shots'}.` : ''}`;
+        if (match) {
+          instruction.textContent = `You are Player ${seat + 1}. Shoot the other ship while avoiding asteroids. Each ship has ${match.lives} lives. Last ship surviving wins; simultaneous final losses draw. At ${match.timeLimit} seconds, the ship with more lives wins; equal lives draw. After losing a life you respawn briefly protected and cannot fire until protection ends. Points do not decide the winner. The host starts, pauses and restarts the match.`;
+          canvas.setAttribute('aria-label', 'Asteroids versus. Two opposing ships with separate lives.');
+        }
         start.hidden = pause.hidden = seat !== 0; draw(); parent.postMessage({ type: 'game-coop-loaded', nonce }, '*');
       } catch { announce.textContent = 'This cooperative game could not be loaded safely.'; }
     } else if (data.type === 'game-coop-peer' && exact(['type', 'nonce', 'connected']) && typeof data.connected === 'boolean') {
       connected = data.connected; clear(); lastMask = -1; inputTimer = 0;
-      if (state && seat === 0) { if (!connected) state.paused = true; emitState(); }
+      if (state && seat === 0) { if (!connected && state.outcome === 'playing') state.paused = true; emitState(); }
       else if (connected) emitInput(true);
       announce.textContent = connected ? seat === 0 ? 'Partner connected. Start or resume when ready.' : 'Connected. The host starts or resumes the game.' : 'Waiting for your partner. Play is paused.';
       // Connection callbacks can arrive while the browser defers this frame's
       // animation loop. Admission must update controls and canvas immediately.
       draw();
     } else if (spec && data.type === 'game-coop-input' && seat === 0 && exact(['type', 'nonce', 'seq', 'mask', ...(Object.prototype.hasOwnProperty.call(data, 'pressedMask') ? ['pressedMask'] : [])]) && Number.isInteger(data.seq) && data.seq > remoteSeq && data.seq <= 10000000 && Number.isInteger(data.mask) && data.mask >= 0 && data.mask <= 63 && (!Object.prototype.hasOwnProperty.call(data, 'pressedMask') || Number.isInteger(data.pressedMask) && data.pressedMask >= 0 && data.pressedMask <= 63)) { remoteSeq = data.seq; remoteMask = connected ? data.mask : 0; remotePressed |= connected ? data.pressedMask || 0 : 0; remoteAge = 0; }
-    else if (spec && data.type === 'game-coop-state' && seat === 1 && exact(['type', 'nonce', 'seq', 'state']) && Number.isInteger(data.seq) && data.seq > remoteSeq && data.seq <= 10000000) { const checked = validateState(data.state, spec); if (checked) { remoteSeq = data.seq; state = checked; presentation?.receive(checked, clock()); draw(); } }
+    else if (spec && data.type === 'game-coop-state' && seat === 1 && exact(['type', 'nonce', 'seq', 'state']) && Number.isInteger(data.seq) && data.seq > remoteSeq && data.seq <= 10000000) { const checked = validateState(data.state, spec, match); if (checked) { remoteSeq = data.seq; state = checked; presentation?.receive(checked, clock()); draw(); } }
   });
   function draw() {
     const view = seat === 1 && connected ? presentation?.render(mask(), clock()) ?? state : state;
     if (seat === 1 && connected && presentation?.isStale()) { announce.textContent = 'Live updates are delayed. Waiting for a fresh host update.'; delayAnnounced = true; }
     else if (delayAnnounced && connected) { announce.textContent = 'Connected. The host starts or resumes the game.'; delayAnnounced = false; }
     if (!ctx || !view || !spec) return;
-    const level = spec.levels[view.levelIndex], dark = level.theme === 'space';
+    const level = levels[view.levelIndex], dark = level.theme === 'space';
     ctx.fillStyle = dark ? '#211d3e' : level.theme === 'garden' ? '#f6f1cf' : '#e4f2e8'; ctx.fillRect(0, 0, 960, 540);
     ctx.fillStyle = dark ? '#baaddb' : '#38796c'; for (let i = 0; i < 25; i++) { ctx.beginPath(); ctx.arc((i * 139 + 31) % 960, (i * 83 + 57) % 520, dark ? 2 : 3, 0, Math.PI * 2); ctx.fill(); }
     ctx.fillStyle = dark ? '#887da5' : '#6a8547'; for (const platform of view.platforms) ctx.fillRect(platform.x, platform.y, platform.w, platform.h);
@@ -413,17 +467,17 @@ export function startCooperativeSandbox(engine: ReturnType<typeof createCooperat
       ctx.fillStyle = dark ? '#fffaf0' : '#254e45'; ctx.font = 'bold 16px system-ui'; ctx.textAlign = 'center'; ctx.fillText(`P${index + 1}`, player.x + 21, player.y - 12);
     });
     if (!connected || !view.running || view.paused || view.outcome !== 'playing') {
-      ctx.fillStyle = dark ? '#211d3ed9' : '#fffaf0df'; ctx.fillRect(0, 0, 960, 540); ctx.fillStyle = dark ? '#fffaf0' : '#254e45'; ctx.textAlign = 'center'; ctx.font = 'bold 34px system-ui'; ctx.fillText(!connected ? 'Waiting for your partner' : !view.running ? 'Two explorers. One adventure.' : view.paused ? 'Cooperative play paused' : view.outcome === 'won' ? 'Both goals complete!' : 'Try this adventure again', 480, 245); ctx.font = '20px system-ui'; ctx.fillText(seat === 0 ? 'Use the host controls below.' : 'The host starts or resumes the level.', 480, 285);
+      ctx.fillStyle = dark ? '#211d3ed9' : '#fffaf0df'; ctx.fillRect(0, 0, 960, 540); ctx.fillStyle = dark ? '#fffaf0' : '#254e45'; ctx.textAlign = 'center'; ctx.font = 'bold 34px system-ui'; ctx.fillText(!connected ? match ? 'Waiting for your opponent' : 'Waiting for your partner' : match ? view.outcome === 'finished' ? view.versus?.winner === 'draw' ? 'Match drawn' : `Player ${Number(view.versus?.winner) + 1} wins!` : view.paused && view.running ? 'Versus match paused' : 'Two ships. One winner.' : !view.running ? 'Two explorers. One adventure.' : view.paused ? 'Cooperative play paused' : view.outcome === 'won' ? 'Both goals complete!' : 'Try this adventure again', 480, 245); ctx.font = '20px system-ui'; ctx.fillText(seat === 0 ? 'Use the host controls below.' : 'The host starts or resumes the level.', 480, 285);
     }
-    const labels = view.players.map((p, index) => `Player ${index + 1}${index === seat ? ' (you)' : ''}: ${engine.endless(spec!) ? `${p.score} collected` : `${p.score}/${level.rules.goal} goal`} · ${p.lives} lives${spec!.arcade?.scoring ? ` · ${p.points} points` : ''}${p.effects ? ` · ${engine.effectLabel(p.effects,engine.endless(spec!))}` : ''}`);
-    status.textContent = engine.endless(spec) ? `Survival ${Math.floor(view.elapsed / 60)}:${String(Math.floor(view.elapsed%60)).padStart(2,'0')} · Difficulty ${view.advanced!.difficulty}` : `Level ${view.levelIndex + 1}/${spec.levels.length} · ${Math.max(0, Math.ceil(level.rules.timeLimit - view.elapsed))}s remaining`;
+    const labels = view.players.map((p, index) => `Player ${index + 1}${index === seat ? ' (you)' : ''}: ${match ? `${p.lives} / ${match.lives} lives` : `${engine.endless(spec!) ? `${p.score} collected` : `${p.score}/${level.rules.goal} goal`} · ${p.lives} lives`}${spec!.arcade?.scoring ? ` · ${p.points} points` : ''}${p.effects ? ` · ${engine.effectLabel(p.effects,!match && engine.endless(spec!))}` : ''}`);
+    status.textContent = match ? view.outcome === 'finished' ? `${view.versus?.winner === 'draw' ? 'Draw' : `Player ${Number(view.versus?.winner) + 1} wins`} · ${view.versus?.reason === 'time' ? 'Time limit' : 'Last lives lost'}` : `Versus · ${Math.max(0, Math.ceil(match.timeLimit - view.elapsed))}s remaining` : engine.endless(spec) ? `Survival ${Math.floor(view.elapsed / 60)}:${String(Math.floor(view.elapsed%60)).padStart(2,'0')} · Difficulty ${view.advanced!.difficulty}` : `Level ${view.levelIndex + 1}/${levels.length} · ${Math.max(0, Math.ceil(level.rules.timeLimit - view.elapsed))}s remaining`;
     document.getElementById('player-1')!.textContent = labels[0]; document.getElementById('player-2')!.textContent = labels[1];
-    start.disabled = !connected; start.textContent = view.running ? 'Restart level' : 'Start together'; pause.disabled = !connected || !view.running || view.outcome !== 'playing'; pause.textContent = view.paused ? 'Resume together' : 'Pause together'; next.hidden = seat !== 0 || view.outcome !== 'won' || view.levelIndex + 1 >= spec.levels.length;
+    start.disabled = !connected; start.textContent = match ? view.outcome === 'finished' ? 'Rematch' : view.running ? 'Restart match' : 'Start match' : view.running ? 'Restart level' : 'Start together'; pause.disabled = !connected || !view.running || view.outcome !== 'playing'; pause.textContent = match ? view.paused ? 'Resume match' : 'Pause match' : view.paused ? 'Resume together' : 'Pause together'; next.hidden = Boolean(match) || seat !== 0 || view.outcome !== 'won' || view.levelIndex + 1 >= levels.length;
   }
   function frame(now: number) {
     const dt = previous ? Math.min((now - previous) / 1000, 0.1) : 0; previous = now;
     remoteAge += dt;
-    if (seat === 0 && state && spec && connected && state.running && !state.paused && state.outcome === 'playing') { accumulator += dt; while (accumulator >= 1 / 60) { engine.step(state, spec, [mask(), remoteAge <= 0.5 ? remoteMask | remotePressed : 0], 1 / 60); remotePressed = 0; accumulator -= 1 / 60; } } else { accumulator = 0; remotePressed = 0; }
+    if (seat === 0 && state && spec && connected && state.running && !state.paused && state.outcome === 'playing') { const previousOutcome = state.outcome; accumulator += dt; while (accumulator >= 1 / 60) { engine.step(state, spec, [mask(), remoteAge <= 0.5 ? remoteMask | remotePressed : 0], 1 / 60, match); remotePressed = 0; accumulator -= 1 / 60; } if (state.outcome !== previousOutcome) { emitState(); broadcast = 0; } } else { accumulator = 0; remotePressed = 0; }
     broadcast += dt; inputTimer += dt;
     // Active worlds stay responsive; a paused world needs only an occasional
     // resync. Changes to start, pause and connection state emit immediately.
@@ -439,5 +493,5 @@ export function startCooperativeSandbox(engine: ReturnType<typeof createCooperat
 
 export function cooperativeGameSandboxDocument(nonce: string): string {
   if (!/^[a-zA-Z0-9_-]{16,100}$/u.test(nonce)) throw new Error('A safe random game nonce is required.');
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-${nonce}'; style-src 'unsafe-inline'; connect-src 'none'; img-src 'none'; media-src 'none'; font-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'; worker-src 'none'"><style>*{box-sizing:border-box}body{margin:0;background:#fffaf0;color:#254e45;font:15px/1.4 system-ui}main{padding:12px}h2{font-size:20px;margin:0 0 6px}canvas{display:block;width:100%;aspect-ratio:16/9;border-radius:10px;outline-offset:3px}button{font:inherit;min-height:44px;min-width:56px;padding:8px 15px;border:1px solid #497267;border-radius:8px;background:#fffaf0;color:#254e45;cursor:pointer;touch-action:none;user-select:none}button:disabled{opacity:.5;cursor:default}button:focus-visible,canvas:focus-visible{outline:3px solid #a94c7b}.buttons,.touch,.players{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin:10px 0}.players>div{flex:1;min-width:240px;padding:8px;border-radius:8px;border:2px solid #b96e98;font-weight:600}.players>div+div{border-color:#2995aa}#status{font-weight:700}#instruction,#controls-help{font-size:13px}#announce{text-align:center;min-height:24px}[hidden]{display:none!important}${gameCanvasViewportStyles}</style></head><body><main><h2 id="title">Loading cooperative game…</h2><div id="status"></div><div class="players"><div id="player-1"></div><div id="player-2"></div></div><p id="instruction"></p><canvas id="game" width="960" height="540" tabindex="0" aria-label="Cooperative game. Separate Player 1 and Player 2 characters share this world."></canvas><div class="buttons"><button id="start" disabled>Start together</button><button id="pause" disabled>Pause together</button><button id="next" hidden>Next level</button></div><div class="touch" aria-label="Your movement controls"><button data-control="left" aria-label="Move left">←</button><button data-control="up" aria-label="Move up or jump">↑</button><button data-control="down" aria-label="Move down">↓</button><button data-control="right" aria-label="Move right">→</button><button data-control="jump" id="jump">Jump</button><button data-control="fire" id="fire" hidden>Fire</button></div><p id="announce" role="status" aria-live="polite">Waiting for your partner.</p><p id="controls-help"></p></main><script nonce="${nonce}">const __name=(fn)=>fn;(${installGameDisplayKeyboardBridge.toString()})("${nonce}");(${startCooperativeSandbox.toString()})((${createCooperativeEngine.toString()})((${createGameEngine.toString()})(),(${createCooperativePresentation.toString()})),(${validateArcadeGameSpec.toString()}),(${validateCooperativeState.toString()}),"${nonce}");</script></body></html>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-${nonce}'; style-src 'unsafe-inline'; connect-src 'none'; img-src 'none'; media-src 'none'; font-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'; worker-src 'none'"><style>*{box-sizing:border-box}body{margin:0;background:#fffaf0;color:#254e45;font:15px/1.4 system-ui}main{padding:12px}h2{font-size:20px;margin:0 0 6px}canvas{display:block;width:100%;aspect-ratio:16/9;border-radius:10px;outline-offset:3px}button{font:inherit;min-height:44px;min-width:56px;padding:8px 15px;border:1px solid #497267;border-radius:8px;background:#fffaf0;color:#254e45;cursor:pointer;touch-action:none;user-select:none}button:disabled{opacity:.5;cursor:default}button:focus-visible,canvas:focus-visible{outline:3px solid #a94c7b}.buttons,.touch,.players{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin:10px 0}.players>div{flex:1;min-width:240px;padding:8px;border-radius:8px;border:2px solid #b96e98;font-weight:600}.players>div+div{border-color:#2995aa}#status{font-weight:700}#instruction,#controls-help{font-size:13px}#announce{text-align:center;min-height:24px}[hidden]{display:none!important}${gameCanvasViewportStyles}</style></head><body><main><h2 id="title">Loading cooperative game…</h2><div id="status"></div><div class="players"><div id="player-1"></div><div id="player-2"></div></div><p id="instruction"></p><canvas id="game" width="960" height="540" tabindex="0" aria-label="Cooperative game. Separate Player 1 and Player 2 characters share this world."></canvas><div class="buttons"><button id="start" disabled>Start together</button><button id="pause" disabled>Pause together</button><button id="next" hidden>Next level</button></div><div class="touch" aria-label="Your movement controls"><button data-control="left" aria-label="Move left">←</button><button data-control="up" aria-label="Move up or jump">↑</button><button data-control="down" aria-label="Move down">↓</button><button data-control="right" aria-label="Move right">→</button><button data-control="jump" id="jump">Jump</button><button data-control="fire" id="fire" hidden>Fire</button></div><p id="announce" role="status" aria-live="polite">Waiting for your partner.</p><p id="controls-help"></p></main><script nonce="${nonce}">const __name=(fn)=>fn;const validateVersusMatch=(${validateVersusMatch.toString()});const isVersusEligible=(${isVersusEligible.toString()});(${installGameDisplayKeyboardBridge.toString()})("${nonce}");(${startCooperativeSandbox.toString()})((${createCooperativeEngine.toString()})((${createGameEngine.toString()})(),(${createCooperativePresentation.toString()})),(${validateArcadeGameSpec.toString()}),(${validateCooperativeState.toString()}),"${nonce}");</script></body></html>`;
 }

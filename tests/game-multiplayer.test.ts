@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test, type TestContext } from 'node:test';
-import { connectMultiplayer, createMultiplayerInvitation, loadMultiplayerAPI, multiplayerRequest, parseMultiplayerInvitation, sameMultiplayerPublication, watchMultiplayerInvitations, validateMultiplayerAPIConfig, validateMultiplayerRoom, validateMultiplayerLobby, validateMultiplayerServerMessage, isTransientMultiplayerServiceError, validateMultiplayerSocketURL, type MultiplayerRoom, type MultiplayerSocket } from '../src/lib/game-multiplayer.ts';
+import { connectMultiplayer, createMultiplayerInvitation, loadMultiplayerAPI, multiplayerRequest, parseMultiplayerInvitation, sameMultiplayerPublication, sameMultiplayerMatch, watchMultiplayerInvitations, validateMultiplayerAPIConfig, validateMultiplayerRoom, validateMultiplayerLobby, validateMultiplayerServerMessage, isTransientMultiplayerServiceError, validateMultiplayerSocketURL, type MultiplayerRoom, type MultiplayerSocket } from '../src/lib/game-multiplayer.ts';
 import { setCooperativeMode, updateArcadeLevelPlan } from '../src/lib/game-multiplayer-design.ts';
 import { defaultGameSpec, planGameLevels, validateGameSpec } from '../src/lib/game-design.ts';
 import { defaultWordGameSpec } from '../src/lib/word-game-design.ts';
@@ -887,4 +887,46 @@ test('thirty healthy seconds of real pongs reset an outage budget rather than im
     resumed.message({ message: 'Too Many Requests', connectionId: 'safe=', requestId: 'safe=' });
     assert.equal(c.statuses.at(-1), 'reconnecting', 'a recovered room has a new bounded outage episode');
   } finally { c.client.close(); }
+});
+
+
+test('versus room and lobby responses admit only explicit bounded match rules while legacy responses remain unchanged', () => {
+  const match = { mode: 'versus' as const, lives: 3, timeLimit: 120 };
+  const hosted = { ...publication, roomId: id, hostToken: token, inviteToken, expiresAt: room.expiresAt, socketUrl: room.socketUrl, match };
+  assert.deepEqual(validateMultiplayerRoom(hosted, 0, false, now), { ...room, match });
+  const entry = { ...publication, roomId: id, title: 'Asteroids duel', expiresAt: room.expiresAt, match };
+  assert.deepEqual(validateMultiplayerLobby({ rooms: [entry] }, now), [entry]);
+  for (const invalid of [null, undefined, {}, { ...match, mode: 'cooperative' }, { ...match, lives: true }, { ...match, lives: 0 }, { ...match, lives: 6 }, { ...match, timeLimit: 29 }, { ...match, timeLimit: 181 }, { ...match, timeLimit: 60.5 }, { ...match, maxPlayers: 12 }]) {
+    assert.equal(validateMultiplayerRoom({ ...hosted, match: invalid }, 0, false, now), undefined);
+    assert.equal(validateMultiplayerLobby({ rooms: [{ ...entry, match: invalid }] }, now), undefined);
+    if (invalid !== undefined) assert.equal(validateMultiplayerServerMessage(JSON.stringify({ type: 'ready', ...publication, roomId: id, seat: 0, expiresAt: room.expiresAt, match: invalid }), strictState), undefined);
+  }
+  assert.equal(sameMultiplayerMatch(undefined, undefined), true);
+  assert.equal(sameMultiplayerMatch(match, { timeLimit: 120, lives: 3, mode: 'versus' }), true);
+  assert.equal(sameMultiplayerMatch(match, undefined), false);
+  assert.equal(sameMultiplayerMatch(undefined, match), false);
+  assert.equal(sameMultiplayerMatch(match, { ...match, lives: 2 }), false);
+  assert.equal(sameMultiplayerMatch(match, { ...match, timeLimit: 90 }), false);
+  const parsed = validateMultiplayerRoom(hosted, 0, false, now)!;
+  hosted.match.lives = 1;
+  assert.equal(parsed.match?.lives, 3, 'parsed settings are isolated from response mutations');
+});
+
+test('the ready handshake binds the exact admitted match and cannot switch between cooperation and versus', () => {
+  const match = { mode: 'versus' as const, lives: 3, timeLimit: 120 };
+  for (const [admitted, received, accepted] of [
+    [match, match, true], [undefined, undefined, true], [match, undefined, false], [undefined, match, false],
+    [match, { ...match, lives: 5 }, false], [match, { ...match, timeLimit: 60 }, false],
+  ] as const) {
+    const socket = new FakeSocket(room.socketUrl), statuses: string[] = [];
+    const client = connectMultiplayer({ ...room, ...(admitted ? { match: admitted } : {}) }, { now: () => now, validateState: strictState,
+      socketFactory: () => socket, onStatus: (status, reason) => statuses.push(reason ? `${status}:${reason}` : status),
+      onPeer: () => {}, onInput: () => {}, onState: () => {} });
+    try {
+      socket.open();
+      socket.message({ type: 'ready', ...publication, roomId: id, seat: 0, expiresAt: room.expiresAt, ...(received ? { match: received } : {}) });
+      assert.equal(statuses.at(-1), accepted ? 'waiting' : 'ended:invalid-room');
+      assert.deepEqual(socket.sent[0], { type: 'join', roomId: id, token, leaseVersion: 1, flowVersion: 3 });
+    } finally { client.close(); }
+  }
 });

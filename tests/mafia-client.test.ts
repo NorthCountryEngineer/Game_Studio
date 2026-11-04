@@ -6,6 +6,7 @@ import vm from 'node:vm';
 import ts from 'typescript';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { PartyPlayerName, partyPlayerLabel } from '../src/components/PartyPlayerName';
 
 const ROOM = '11111111-1111-4111-8111-111111111111', OWNER = '22222222-2222-4222-8222-222222222222', OTHER = '33333333-3333-4333-8333-333333333333', THIRD = '44444444-4444-4444-8444-444444444444';
 const TOKEN = 'seat_capability_012345678901234567890123456', INVITE = 'invite_capability_01234567890123456789012345';
@@ -103,7 +104,7 @@ function mount(options: { roomId?: string; href?: string; fetch?: typeof fetch; 
     useEffect(setup: () => unknown, deps: unknown[]) { const i = cursor++, previous = hooks[i]; if (!previous || !deps || !previous.deps || deps.some((v, index) => !Object.is(v, previous.deps![index]))) { const hook = { setup, deps, cleanup: previous?.cleanup }; hooks[i] = hook; effects.push(hook); } },
   };
   const exported: Record<string, any> = {}, browser = { location: { origin: 'http://127.0.0.1:5193', href: options.href ?? `http://127.0.0.1:5193/mafia${options.roomId ? '/' + options.roomId : ''}` }, setInterval: () => ++timerId, clearInterval: () => {}, setTimeout: (fn: () => void) => { const id = ++timerId; timers.set(id, fn); return id; }, clearTimeout: (id: number) => timers.delete(id) };
-  vm.runInNewContext(transpile('../src/components/Mafia.tsx'), { exports: exported, require(name: string) { if (name === 'react') return react; if (name === 'react/jsx-runtime') return { jsx, jsxs: jsx, Fragment: 'FRAGMENT' }; if (name === '../lib/mafia') return api; if (name === './PartyInstructions') return { PartyInstructions: () => null }; if (name === '../mafia.css') return {}; throw new Error(name); }, window: browser, document: { visibilityState: 'visible' }, navigator: { clipboard: { writeText: async () => {} } }, crypto: webcrypto, AbortController, DOMException, Date, Promise, JSON, Error, Number, Object, String, Boolean });
+  vm.runInNewContext(transpile('../src/components/Mafia.tsx'), { exports: exported, require(name: string) { if (name === 'react') return react; if (name === 'react/jsx-runtime') return { jsx, jsxs: jsx, Fragment: 'FRAGMENT' }; if (name === '../lib/mafia') return api; if (name === './PartyInstructions') return { PartyInstructions: () => null }; if (name === './PartyPlayerName') return { PartyPlayerName, partyPlayerLabel }; if (name === '../mafia.css') return {}; throw new Error(name); }, window: browser, document: { visibilityState: 'visible' }, navigator: { clipboard: { writeText: async () => {} } }, crypto: webcrypto, AbortController, DOMException, Date, Promise, JSON, Error, Number, Object, String, Boolean });
   function flush() { let turns = 0; while (dirty && !unmounted) { assert.ok(++turns < 40); dirty = false; cursor = 0; effects = []; tree = exported.MafiaPage({ roomId: options.roomId, navigate: (path: string) => { navigated.push(path); } }); for (const hook of effects) { hook.cleanup?.(); const cleanup = hook.setup!(); hook.cleanup = typeof cleanup === 'function' ? cleanup as () => void : undefined; } } }
   async function settle() { for (let count = 0; count < 40; count++) { await Promise.resolve(); flush(); } }
   function field(id: string) { return elements(tree).find(e => e.props.id === id); }
@@ -227,4 +228,64 @@ test('mutation responses cannot replace the saved seat with another player’s p
 test('removing a lobby player preserves readable historical chat from that former seat', () => {
   const { api } = library(), room = fixture({ day: 2001, chat: [{ id: 'e2', playerId: '77777777-7777-4777-8777-777777777777', text: 'See you next game!', day: 0, at: 1800000000 }] });
   const parsed = api.parseMafiaRoom(room); assert.equal(parsed.chat[0].text, 'See you next game!'); assert.equal(parsed.day, 2001);
+});
+
+test('Mafia AI projections validate flags and keep AI seats out of owner, narrator and browser authority', () => {
+  const { api } = library(), room = fixture();
+  assert.equal(api.parseMafiaRoom(room).players[1].isAI, undefined);
+  const mixed = { ...room, players: room.players.map((player: any, index: number) => ({ ...player, isAI: index === 2 })) };
+  assert.equal(api.parseMafiaRoom(mixed).players[2].isAI, true);
+  for (const value of ['true', 1, null, {}]) assert.throws(() => api.parseMafiaRoom({ ...mixed, players: mixed.players.map((player: any, index: number) => index === 2 ? { ...player, isAI: value } : player) }), /unsupported response/);
+  assert.throws(() => api.parseMafiaRoom({ ...mixed, ownerId: THIRD }), /unsupported response/);
+  assert.throws(() => api.parseMafiaRoom({ ...mixed, narratorId: THIRD }), /unsupported response/);
+  assert.throws(() => api.parseMafiaRoom({ ...mixed, players: mixed.players.map((player: any, index: number) => index === 2 ? { ...player, isNarrator: true } : player) }), /unsupported response/);
+  assert.throws(() => api.parseMafiaRoom({ ...mixed, self: { ...room.self, id: THIRD, isOwner: false } }), /unsupported response/);
+});
+
+test('Mafia automatic narration parses and creates without the optional AI story capability', async () => {
+  const { api } = library(), room = fixture({ narratorMode: 'automatic' });
+  assert.equal(api.parseMafiaRoom(room).narratorMode, 'automatic');
+  let admission: any; const view = mount({ fetch: async (url, init) => {
+    if (String(url).endsWith('/config')) return new Response(JSON.stringify({ aiAvailable: false }));
+    admission = JSON.parse(String(init?.body)); const id = admission.requestId;
+    return new Response(JSON.stringify({ room: fixture({ roomId: id, ownerId: id, narratorMode: admission.narratorMode, players: [{ ...room.players[0], id, name: admission.name }], self: { ...room.self, id } }), session: { roomId: id, playerId: id, token: admission.playerToken, inviteToken: admission.inviteToken } }));
+  } });
+  await view.settle(); const automatic = elements(view.tree()).find(element => element.type === 'input' && element.props.name === 'mafia-mode' && element.props.value === 'automatic')!; assert.ok(automatic); assert.equal(automatic.props.disabled ?? false, false); automatic.props.onChange(); view.flush(); view.change('mafia-player-name', 'Nova'); view.submit(); await view.settle(); assert.equal(admission.narratorMode, 'automatic'); assert.equal(view.navigated.length, 1); view.unmount();
+});
+
+test('Mafia Fill AI explicitly changes human narration to automatic, lets the host play and leaves Start separate', async () => {
+  const base = fixture(), owner = { ...base.players[0], isNarrator: true }, room = fixture({ players: [owner], narratorMode: 'human', narratorId: OWNER, self: { ...base.self, isNarrator: true } }), actions: any[] = [];
+  const view = mount({ roomId: ROOM, session: { roomId: ROOM, playerId: OWNER, token: TOKEN }, fetch: async (url, init) => {
+    if (String(url).endsWith('/config')) return new Response(JSON.stringify({ aiAvailable: false }));
+    if (init?.method === 'POST') { const action = JSON.parse(String(init.body)); actions.push(action); room.narratorMode = 'automatic'; room.narratorId = null; room.self.isNarrator = false; room.self.actionSequence = action.sequence; room.players = base.players.map((player: any, index: number) => ({ ...player, isNarrator: false, ...(index ? { isAI: true } : {}) })); }
+    return new Response(JSON.stringify({ room }));
+  } });
+  await view.settle(); assert.equal(view.button('Start the first night')!.props.disabled, true); assert.match(view.content(), /Fill uses automatic narration so everyone can play/); view.click('Fill with AI & use automatic narrator'); await view.settle(); assert.equal(actions.length, 1); assert.equal(actions[0].type, 'fill-ai'); assert.equal(room.phase, 'lobby'); assert.equal(room.self.isNarrator, false); assert.equal(view.field('mafia-room-narration')!.props.value, 'automatic'); assert.equal(view.button('Start the first night')!.props.disabled, false); assert.equal(view.button('Fill to 5 players')!.props.disabled, true); assert.match(view.markup(), /aria-label="AI player"/); view.unmount();
+});
+
+test('Mafia AI controls are host-only and AI players never appear in human narrator choices', async () => {
+  const base = fixture(), room = fixture({ players: base.players.map((player: any, index: number) => ({ ...player, isAI: index >= 2, isNarrator: index === 0 })), narratorMode: 'human', narratorId: OWNER, self: { ...base.self, isNarrator: true } });
+  const host = mount({ roomId: ROOM, session: { roomId: ROOM, playerId: OWNER, token: TOKEN }, fetch: async url => String(url).endsWith('/config') ? new Response(JSON.stringify({ aiAvailable: false })) : new Response(JSON.stringify({ room })) });
+  await host.settle(); const options = elements(host.field('mafia-narrator-seat')!.props.children).filter(element => element.type === 'option'); assert.equal(options.length, 2); assert.deepEqual(options.map(element => element.props.value), [OWNER, OTHER]); assert.ok(host.button('Add AI player')); host.unmount();
+  const guestRoom = { ...room, self: { ...room.self, id: OTHER, isOwner: false, isNarrator: false } };
+  const guest = mount({ roomId: ROOM, session: { roomId: ROOM, playerId: OTHER, token: TOKEN }, fetch: async url => String(url).endsWith('/config') ? new Response(JSON.stringify({ aiAvailable: false })) : new Response(JSON.stringify({ room: guestRoom })) }); await guest.settle(); assert.equal(guest.button('Add AI player'), undefined); assert.equal(guest.button('Fill with AI'), undefined); guest.unmount();
+});
+
+test('Mafia bot phase changes release an uncommitted old action so the next human choice remains usable', async () => {
+  const base = fixture(), reports: any[] = [], room = fixture({ narratorMode: 'automatic', phase: 'discussion', phaseId: 2, day: 1, players: base.players.map((player: any, index: number) => ({ ...player, ...(index ? { isAI: true } : {}) })), self: { ...base.self, role: 'civilian' } });
+  const view = mount({ roomId: ROOM, session: { roomId: ROOM, playerId: OWNER, token: TOKEN }, fetch: async (url, init) => {
+    if (String(url).endsWith('/config')) return new Response(JSON.stringify({ aiAvailable: false }));
+    if (init?.method === 'POST') {
+      const action = JSON.parse(String(init.body)); reports.push(action);
+      if (reports.length === 1) return new Response(JSON.stringify({ error: 'The response was lost.' }), { status: 503 });
+      room.self.actionSequence = action.sequence; room.self.hasVoted = true; room.self.voteTargetId = action.targetId;
+    }
+    return new Response(JSON.stringify({ room }));
+  } });
+  await view.settle(); view.click('I’m ready to vote'); await view.settle(); assert.match(view.content(), /Retry the same action/);
+  // Another human request can let the AI players finish discussion while this seat's write was never committed.
+  room.phase = 'voting'; room.phaseId = 3; view.poll(); await view.settle(); assert.doesNotMatch(view.content(), /Retry the same action/);
+  const choices = elements(view.tree()).find(element => typeof element.type === 'function' && element.type.name === 'ChoicePanel')!;
+  assert.ok(choices); assert.equal(choices.props.disabled, false); assert.equal(await choices.props.onChoose(OTHER), true); await view.settle();
+  assert.equal(reports.length, 2); assert.equal(reports[0].phaseId, 2); assert.equal(reports[1].phaseId, 3); assert.equal(reports[0].sequence, 1); assert.equal(reports[1].sequence, 1); assert.notEqual(reports[0].requestId, reports[1].requestId); view.unmount();
 });
