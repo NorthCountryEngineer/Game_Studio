@@ -8,6 +8,7 @@ export const QUESTION_QUEST_AVATARS = [
 ] as const;
 export type QuestAvatar = typeof QUESTION_QUEST_AVATARS[number]['id'];
 export type QuestQuestion = { id: string; prompt: string; choices: string[]; correctIndex: number };
+export type QuestQuestionInput = Omit<QuestQuestion, 'id'>;
 export type QuestTeamSetup = { id: string; name: string; avatar: QuestAvatar };
 export type QuestTeam = QuestTeamSetup & { position: number; points: number };
 export type QuestDice = [number, number];
@@ -124,6 +125,27 @@ export function upsertQuestQuestion(value: QuestState, input: QuestQuestion): Qu
   if (index < 0) { if (state.questions.length >= 100) fail('A game can contain up to 100 questions.'); state.questions.push(card); }
   else state.questions[index] = card;
   return parseQuestionQuest(state);
+}
+/** Append a reviewed batch atomically; imported files never supply identities. */
+export function appendQuestQuestions(value: QuestState, inputs: QuestQuestionInput[], makeId: () => string): QuestState {
+  const state = parseQuestionQuest(value);
+  if (state.phase !== 'questions') fail('Return to question setup before importing questions.');
+  if (!Array.isArray(inputs) || inputs.length < 1 || inputs.length > 100) fail('Import between 1 and 100 questions.');
+  if (state.questions.length + inputs.length > 100) fail(`This import would exceed 100 questions. The current bank has room for ${100 - state.questions.length} more.`);
+  const cards = inputs.map((input, index) => {
+    try {
+      const card = object(input); exact(card, ['prompt', 'choices', 'correctIndex']);
+      return question({ id: `import-${index + 1}`, prompt: card.prompt, choices: card.choices, correctIndex: card.correctIndex });
+    } catch (error) { fail(`Question ${index + 1}: ${error instanceof Error ? error.message : 'Check the question and answer choices.'}`); }
+  });
+  if (typeof makeId !== 'function') fail('New question identifiers are required before importing.');
+  const ids = new Set(state.questions.map(card => card.id));
+  const appended = cards.map(card => {
+    const id = identifier(makeId());
+    if (ids.has(id)) fail('A new question identifier was already in use. No questions were added; try again.');
+    ids.add(id); return { ...card, id };
+  });
+  return parseQuestionQuest({ ...state, questions: [...state.questions, ...appended] });
 }
 export function removeQuestQuestion(value: QuestState, id: string): QuestState {
   const state = parseQuestionQuest(value); if (state.phase !== 'questions') fail('Return to question setup before removing a card.');

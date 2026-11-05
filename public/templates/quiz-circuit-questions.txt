@@ -1,0 +1,26 @@
+# QUIZ CIRCUIT - QUESTION FILE
+# Edit these examples, or copy a complete block for each new question.
+# Keep the fields in this order: Q, A, B, optional C and D, ANSWER.
+# ANSWER is the letter of the correct choice: A, B, C or D.
+# Put --- on a separate line between questions.
+# Keep each question and answer choice on one line. Lines starting with # are comments.
+# Save as plain text (.txt), using UTF-8. Do not save as Word or rich text.
+# In Quiz Circuit, choose the file, review the preview, then confirm the import.
+# You can also enter questions one at a time in the game.
+# Limits: 100 questions in the bank, 300 characters per question, 120 per choice.
+
+Q: What is the capital of Canada?
+A: Toronto
+B: Ottawa
+C: Montreal
+D: Vancouver
+ANSWER: B
+
+---
+
+Q: Which of these numbers is prime?
+A: 4
+B: 6
+C: 7
+D: 9
+ANSWER: C
