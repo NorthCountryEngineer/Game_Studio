@@ -7,6 +7,8 @@ import * as quest from '../src/lib/question-quest';
 import * as questionImport from '../src/lib/question-quest-import';
 import * as questionSources from '../src/lib/question-quest-sources';
 import * as gracieQuestions from '../src/lib/gracie-questions';
+import * as gameBackup from '../src/lib/question-quest-backup';
+import * as questId from '../src/lib/question-quest-id';
 
 type Element = { type: unknown; props: Record<string, any> };
 function elements(value: any): Element[] { if (Array.isArray(value)) return value.flatMap(elements); return value && typeof value === 'object' && 'type' in value ? [value, ...elements(value.props?.children)] : []; }
@@ -23,12 +25,12 @@ function nearHome(): quest.QuestState {
   for (let i = 0; i < 52; i++) s = quest.nextQuestTeam(quest.rollQuestDie(quest.answerQuestCard(quest.drawQuestCard(s, () => 0), 0), () => 0));
   return s;
 }
-function mount(options: { state?: quest.QuestState; raw?: string; readFails?: boolean; saveFails?: boolean; reducedMotion?: boolean; sources?: questionSources.QuestQuestionSources; sidecarRaw?: string; sourceSaveFails?: boolean; storageAccessFails?: boolean } = {}) {
+function mount(options: { state?: quest.QuestState; raw?: string; readFails?: boolean; saveFails?: boolean; reducedMotion?: boolean; sources?: questionSources.QuestQuestionSources; sidecarRaw?: string; sourceSaveFails?: boolean; storageAccessFails?: boolean; standalone?: boolean; resolveAsset?: (path: string) => string; noRandomUUID?: boolean } = {}) {
   const data = new Map<string, string>(); if (options.state) data.set(quest.QUESTION_QUEST_STORAGE_KEY, quest.serializeQuestionQuest(options.state)); if (options.raw !== undefined) data.set(quest.QUESTION_QUEST_STORAGE_KEY, options.raw);
   if (options.sources && options.state) questionSources.saveQuestQuestionSources({ setItem: (key, value) => data.set(key, value) }, options.state, options.sources);
   if (options.sidecarRaw !== undefined) data.set(questionSources.QUEST_QUESTION_SOURCES_STORAGE_KEY, options.sidecarRaw);
-  const writes: { key: string; value: string }[] = [];
-  const storage = { getItem(key: string) { if (options.readFails) throw new Error('unreadable storage'); return data.get(key) ?? null; }, setItem(key: string, value: string) { if (options.saveFails || options.sourceSaveFails && key === questionSources.QUEST_QUESTION_SOURCES_STORAGE_KEY) throw new Error('quota exceeded'); writes.push({ key, value }); data.set(key, value); } };
+  const writes: { key: string; value: string }[] = [], exportedBackups: { filename: string; contents: string }[] = [];
+  const storage = { getItem(key: string) { if (options.readFails) throw new Error('unreadable storage'); return data.get(key) ?? null; }, setItem(key: string, value: string) { if (options.saveFails || options.sourceSaveFails && key === questionSources.QUEST_QUESTION_SOURCES_STORAGE_KEY) throw new Error('quota exceeded'); writes.push({ key, value }); data.set(key, value); }, removeItem(key: string) { if (options.saveFails) throw new Error('quota exceeded'); data.delete(key); } };
   const hooks: any[] = [], effects: any[] = []; let cursor = 0, dirty = true, tree: Element, unmounted = false, lateSetters = 0, now = 0, timerId = 0, random = 0, uuid = 0, randomCalls = 0;
   const timers = new Map<number, { at: number; callback: () => void }>(), windowListeners = new Map<string, () => void>(), docListeners = new Map<string, () => void>();
   const fakeReact = {
@@ -42,8 +44,8 @@ function mount(options: { state?: quest.QuestState; raw?: string; readFails?: bo
   const document = { activeElement: { focus() {} }, fullscreenElement: undefined, getElementById: () => ({ focus() {} }), addEventListener(type: string, fn: () => void) { docListeners.set(type, fn); }, removeEventListener(type: string) { docListeners.delete(type); } };
   const exported: Record<string, any> = {}, navigated: string[] = [];
   const source = ts.transpileModule(readFileSync(new URL('../src/components/QuestionQuest.tsx', import.meta.url), 'utf8'), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true } }).outputText;
-  vm.runInNewContext(source, { exports: exported, require(name: string) { if (name === 'react') return fakeReact; if (name === 'react/jsx-runtime') return { jsx, jsxs: jsx, Fragment: 'FRAGMENT' }; if (name === '../lib/question-quest') return quest; if (name === '../lib/question-quest-import') return questionImport; if (name === '../lib/question-quest-sources') return questionSources; if (name === '../lib/gracie-questions') return gracieQuestions; if (name === '../question-quest.css') return {}; throw new Error(`Unexpected dependency ${name}`); }, window, document, Uint32Array, Uint8Array, crypto: { randomUUID: () => `00000000-0000-4000-8000-${String(++uuid).padStart(12, '0')}`, getRandomValues(value: Uint32Array) { randomCalls++; value[0] = Math.floor(random * 4294967296); return value; } }, setTimeout(callback: () => void, delay: number) { const id = ++timerId; timers.set(id, { at: now + delay, callback }); return id; }, clearTimeout(id: number) { timers.delete(id); }, Error, Math, Object, Array, Number, Boolean, String, Set, Map, Promise });
-  function flush() { let rounds = 0; while (dirty && !unmounted) { assert.ok(++rounds < 50, 'finite render/effect settling'); dirty = false; cursor = 0; effects.length = 0; tree = exported.QuestionQuest({ navigate: (path: string) => { navigated.push(path); } }); for (const effect of [...effects]) { effect.cleanup?.(); effect.cleanup = effect.setup(); } } }
+  vm.runInNewContext(source, { exports: exported, require(name: string) { if (name === 'react') return fakeReact; if (name === 'react/jsx-runtime') return { jsx, jsxs: jsx, Fragment: 'FRAGMENT' }; if (name === '../lib/question-quest') return quest; if (name === '../lib/question-quest-import') return questionImport; if (name === '../lib/question-quest-sources') return questionSources; if (name === '../lib/gracie-questions') return gracieQuestions; if (name === '../lib/question-quest-backup') return gameBackup; if (name === '../lib/question-quest-id') return questId; if (name === '../question-quest.css') return {}; throw new Error(`Unexpected dependency ${name}`); }, window, document, Uint32Array, Uint8Array, crypto: { randomUUID: options.noRandomUUID ? undefined : () => `00000000-0000-4000-8000-${String(++uuid).padStart(12, '0')}`, getRandomValues(value: Uint32Array | Uint8Array) { if (value instanceof Uint8Array) { value.fill(0); value[15] = ++uuid; return value; } randomCalls++; value[0] = Math.floor(random * 4294967296); return value; } }, setTimeout(callback: () => void, delay: number) { const id = ++timerId; timers.set(id, { at: now + delay, callback }); return id; }, clearTimeout(id: number) { timers.delete(id); }, Error, Math, Object, Array, Number, Boolean, String, Set, Map, Promise, TextEncoder });
+  function flush() { let rounds = 0; while (dirty && !unmounted) { assert.ok(++rounds < 50, 'finite render/effect settling'); dirty = false; cursor = 0; effects.length = 0; tree = exported.QuestionQuest({ navigate: (path: string) => { navigated.push(path); }, standalone: options.standalone, resolveAsset: options.resolveAsset, saveBackup: (filename: string, contents: string) => exportedBackups.push({ filename, contents }) }); for (const effect of [...effects]) { effect.cleanup?.(); effect.cleanup = effect.setup(); } } }
   function all() { return elements(tree); }
   const label = (button: Element) => clean(button.props['aria-label'] ?? content(button.props.children));
   function button(text: string) { return all().find(e => e.type === 'button' && label(e) === text); }
@@ -56,9 +58,9 @@ function mount(options: { state?: quest.QuestState; raw?: string; readFails?: bo
   function state(): quest.QuestState { const found = hooks.find(hook => hook.value?.version === 1 && Array.isArray(hook.value?.questions)); assert.ok(found); return found.value; }
   function invoke(callback: () => void) { callback(); flush(); }
   function unmount() { for (const hook of hooks) hook.cleanup?.(); unmounted = true; }
-  function selectFile(file: { name: string; size: number; arrayBuffer: () => Promise<ArrayBuffer> }) { const input = field('quest-question-file'); assert.ok(input); assert.equal(input.props.disabled, false); const target = { files: [file], value: file.name }; input.props.onChange({ currentTarget: target }); assert.equal(target.value, ''); flush(); }
+  function selectFile(file: { name: string; size: number; arrayBuffer: () => Promise<ArrayBuffer> }, id = 'quest-question-file') { const input = field(id); assert.ok(input); assert.equal(input.props.disabled, false); const target = { files: [file], value: file.name }; input.props.onChange({ currentTarget: target }); assert.equal(target.value, ''); flush(); }
   async function settle() { for (let i = 0; i < 8; i++) { await Promise.resolve(); flush(); } }
-  flush(); return { button, click, change, submit, advance, stall, state, invoke, all, field, selectFile, settle, text: () => clean(content(tree)), data, writes, navigated, unmount, timers, random: (value: number) => { random = value; }, randomCalls: () => randomCalls, lateSetters: () => lateSetters };
+  flush(); return { button, click, change, submit, advance, stall, state, invoke, all, field, selectFile, settle, text: () => clean(content(tree)), data, writes, exportedBackups, navigated, unmount, timers, random: (value: number) => { random = value; }, randomCalls: () => randomCalls, lateSetters: () => lateSetters };
 }
 
 test('host authors a question, hides its answer key, names four teams, picks once, and starts a playable game', () => {
@@ -452,4 +454,98 @@ test('a browser that blocks the localStorage property itself still opens recover
   const original = quest.serializeQuestionQuest(active()), view = mount({ raw: original, storageAccessFails: true });
   assert.match(view.text(), /Saved game unavailable/); assert.match(view.text(), /saved data has not been changed/); assert.equal(view.data.get(quest.QUESTION_QUEST_STORAGE_KEY), original); assert.equal(view.writes.length, 0);
   view.click('New game'); view.click('Start new game'); assert.equal(view.state().phase, 'questions'); assert.match(view.text(), /Keep this tab open/); assert.equal(view.data.get(quest.QUESTION_QUEST_STORAGE_KEY), original); assert.equal(view.writes.length, 0); view.unmount();
+});
+
+function offlineBackupFixture() {
+  let state = quest.upsertQuestQuestion(quest.createQuestionQuest('offline-restored-game'), { id: 'restored-secret-card', prompt: 'Restored private question?', choices: ['Restored wrong choice', 'Restored right choice'], correctIndex: 1 });
+  state = quest.finishQuestQuestions(state); state = quest.configureQuestTeams(state, state.teams.map(({ id, avatar }, index) => ({ id, avatar, name: `Recovered team ${index + 1}` }))); state = quest.startQuestionQuest(quest.pickFirstQuestTeam(state, () => .3)); state = quest.rollQuestDie(quest.answerQuestCard(quest.drawQuestCard(state, () => 0), 1), () => .4);
+  return { state, sources: sourceMapFor(state) };
+}
+const backupFile = (backup = offlineBackupFixture()) => localFile(gameBackup.serializeQuestGameBackup(backup.state, backup.sources), 'health-game-backup.json');
+const restorePreview = (view: ReturnType<typeof mount>) => view.all().find(element => element.props['aria-labelledby'] === 'quest-backup-confirm-title');
+
+test('standalone mode resolves every board asset and hides party navigation while defaults keep ordinary web URLs', () => {
+  const paths = new Set<string>(), view = mount({ standalone: true, resolveAsset: path => { paths.add(path); return `data:application/octet-stream;base64,aW5saW5l#${path}`; } });
+  assert.equal(view.button('← Party games'), undefined); assert.ok(view.button('Save game backup ↓'));
+  const assertEmbedded = () => { for (const element of view.all()) for (const name of ['src', 'href']) { const value = element.props[name]; if (typeof value === 'string') assert.doesNotMatch(value, /^\/(?:pieces|branding|templates)\//); } };
+  assertEmbedded(); view.click("Use Gracie's Questions"); view.click('Set up teams →'); assertEmbedded(); view.submit(); view.click('Choose first team'); view.advance(1000); view.click('Start game →'); assertEmbedded(); view.click('Draw a question ↗'); view.advance(700);
+  const card = view.state().questions.find(question => question.id === view.state().turn.questionId)!; view.invoke(view.all().find(element => element.type === 'button' && clean(content(element.props.children)) === `${String.fromCharCode(65 + card.correctIndex)} ${card.choices[card.correctIndex]}`)!.props.onClick);
+  assert.match(view.text(), /Read source \(requires internet\)/); assertEmbedded(); assert.ok(paths.has('/branding/health-school-logo.png')); assert.ok(paths.has('/templates/quiz-circuit-questions.txt')); assert.ok(paths.has('/templates/quiz-circuit-questions.json')); for (const avatar of quest.QUESTION_QUEST_AVATARS) assert.ok(paths.has(avatar.image)); view.unmount();
+  const normal = mount(); assert.ok(normal.button('← Party games')); assert.equal(normal.button('Save game backup ↓'), undefined); assert.ok(normal.all().some(element => element.props.src === '/branding/health-school-logo.png')); assert.ok(normal.all().some(element => element.props.href === '/templates/quiz-circuit-questions.txt')); normal.unmount();
+});
+
+test('standalone exports the complete current match and sources through an explicit save action', () => {
+  const backup = offlineBackupFixture(), view = mount({ ...backup, standalone: true });
+  view.click('Minimize question and show board'); view.click('Save game backup ↓'); assert.equal(view.exportedBackups.length, 1);
+  assert.equal(view.exportedBackups[0].filename, 'health-game-backup.json'); assert.deepEqual(gameBackup.parseQuestGameBackup(new TextEncoder().encode(view.exportedBackups[0].contents)), backup); assert.equal(view.randomCalls(), 0); view.unmount();
+});
+
+test('standalone backup restore previews metadata only and explicitly restores exact progress without rerolling', async () => {
+  const original = authored(), originalSources = sourceMapFor(original), backup = offlineBackupFixture(), view = mount({ state: original, sources: originalSources, standalone: true });
+  const originalRaw = view.data.get(quest.QUESTION_QUEST_STORAGE_KEY)!, sourceRaw = view.data.get(questionSources.QUEST_QUESTION_SOURCES_STORAGE_KEY)!;
+  view.selectFile(backupFile(backup), 'quest-game-backup-file'); await view.settle();
+  assert.equal(view.data.get(quest.QUESTION_QUEST_STORAGE_KEY), originalRaw); const preview = restorePreview(view); assert.ok(preview); assert.match(clean(content(preview)), /Recovered team 2|Game in progress|Question cards/); assert.doesNotMatch(clean(content(preview)), /Restored private question|Restored right choice|Synthetic classroom source|Synthetic explanation/);
+  view.click('Restore this game'); assert.deepEqual(view.state(), backup.state); assert.equal(view.randomCalls(), 0); assert.equal(view.timers.size, 0); assert.equal(view.data.get(`${quest.QUESTION_QUEST_STORAGE_KEY}:previous`), originalRaw); assert.equal(view.data.get(`${questionSources.QUEST_QUESTION_SOURCES_STORAGE_KEY}:previous`), sourceRaw);
+  assert.deepEqual(questionSources.loadQuestQuestionSources({ getItem: key => view.data.get(key) ?? null }, view.state()).sources, backup.sources);
+  view.click('Minimize question and show board'); view.click('Save previous game backup ↓'); assert.equal(view.exportedBackups.length, 1); assert.deepEqual(gameBackup.parseQuestGameBackup(new TextEncoder().encode(view.exportedBackups[0].contents)), { state: original, sources: originalSources }); view.unmount();
+});
+
+test('canceling or invalidating a restore preview prevents retained confirmations from replacing the game', async () => {
+  for (const mode of ['cancel', 'draft', 'teams']) {
+    const view = mount({ state: authored(), standalone: true }); view.selectFile(backupFile(), 'quest-game-backup-file'); await view.settle(); const restore = view.button('Restore this game')!.props.onClick;
+    if (mode === 'cancel') view.click('Cancel restore');
+    if (mode === 'draft') view.change('quest-question-prompt', 'Keep this unsaved card?');
+    if (mode === 'teams') view.click('Set up teams →');
+    const before = quest.serializeQuestionQuest(view.state()); view.invoke(restore); assert.equal(quest.serializeQuestionQuest(view.state()), before); assert.equal(restorePreview(view), undefined); view.unmount();
+  }
+});
+
+test('backup reads cannot survive newer files, manual drafts, state changes, reset or unmount', async () => {
+  for (const mode of ['file', 'draft', 'teams', 'preset', 'reset', 'unmount']) {
+    const view = mount({ state: authored(), standalone: true }), pending = delayedFile('older-game.json'); view.selectFile(pending.file, 'quest-game-backup-file');
+    if (mode === 'file') { const newer = offlineBackupFixture(); newer.state.id = 'newer-game'; view.selectFile(backupFile(newer), 'quest-game-backup-file'); await view.settle(); }
+    if (mode === 'draft') view.change('quest-source-url', citationFixture.url);
+    if (mode === 'teams') view.click('Set up teams →');
+    if (mode === 'preset') view.click("Use Gracie's Questions");
+    if (mode === 'reset') { view.click('New game'); view.click('Start new game'); }
+    if (mode === 'unmount') view.unmount();
+    const before = quest.serializeQuestionQuest(view.state()), writes = view.writes.length; pending.resolve(gameBackup.serializeQuestGameBackup(offlineBackupFixture().state, offlineBackupFixture().sources)); await view.settle();
+    assert.equal(quest.serializeQuestionQuest(view.state()), before, mode); assert.equal(view.writes.length, writes, mode); assert.equal(view.lateSetters(), 0, mode);
+    if (mode === 'file') { assert.ok(restorePreview(view)); view.click('Restore this game'); assert.equal(view.state().id, 'newer-game'); } else assert.equal(restorePreview(view), undefined, mode);
+    if (mode !== 'unmount') view.unmount();
+  }
+});
+
+test('a restore cannot replace a roll after reading begins or while an animation is locked', async () => {
+  for (const mode of ['reading', 'preview']) {
+    const pendingTurn = quest.answerQuestCard(quest.drawQuestCard(active(), () => 0), 0), view = mount({ state: pendingTurn, standalone: true }), pendingFile = delayedFile('restored-game.json');
+    let retainedRestore: (() => void) | undefined;
+    if (mode === 'reading') view.selectFile(pendingFile.file, 'quest-game-backup-file');
+    else { view.selectFile(backupFile(), 'quest-game-backup-file'); await view.settle(); retainedRestore = view.button('Restore this game')!.props.onClick; }
+    view.click('Roll two dice →'); const acceptedRoll = quest.serializeQuestionQuest(view.state());
+    if (mode === 'reading') pendingFile.resolve(gameBackup.serializeQuestGameBackup(offlineBackupFixture().state, offlineBackupFixture().sources)); else view.invoke(retainedRestore!);
+    await view.settle(); assert.equal(quest.serializeQuestionQuest(view.state()), acceptedRoll); assert.equal(restorePreview(view), undefined); assert.equal(view.field('quest-game-backup-file')!.props.disabled, true); view.advance(6000); assert.equal(view.state().id, pendingTurn.id); view.unmount();
+  }
+});
+
+test('invalid and oversized game backup files never change the current match or its sources', async () => {
+  const original = authored(), view = mount({ state: original, sources: sourceMapFor(original), standalone: true }), before = view.data.get(quest.QUESTION_QUEST_STORAGE_KEY), sourcesBefore = view.data.get(questionSources.QUEST_QUESTION_SOURCES_STORAGE_KEY); let readCalls = 0;
+  for (const file of [localFile('{broken', 'bad.json'), localFile(importText(), 'questions.txt'), { name: 'huge.json', size: gameBackup.QUEST_GAME_BACKUP_MAX_BYTES + 1, arrayBuffer: async () => { readCalls++; return new ArrayBuffer(0); } }]) {
+    view.selectFile(file, 'quest-game-backup-file'); await view.settle(); assert.equal(restorePreview(view), undefined); assert.equal(view.data.get(quest.QUESTION_QUEST_STORAGE_KEY), before); assert.equal(view.data.get(questionSources.QUEST_QUESTION_SOURCES_STORAGE_KEY), sourcesBefore); assert.ok(view.all().some(element => element.props.role === 'alert'));
+  }
+  assert.equal(readCalls, 0); view.unmount();
+});
+
+test('standalone starts playable without browser storage and can load, restore and export while preserving inaccessible saves', async () => {
+  for (const mode of ['readFails', 'storageAccessFails'] as const) {
+    const original = quest.serializeQuestionQuest(active()), view = mount({ raw: original, standalone: true, [mode]: true });
+    assert.doesNotMatch(view.text(), /Saved game unavailable/); assert.match(view.text(), /Create the question bank|Browser saving is unavailable/); assert.equal(view.button("Use Gracie's Questions")!.props.disabled, false);
+    view.click("Use Gracie's Questions"); assert.equal(view.state().questions.length, gracieQuestions.GRACIE_QUESTION_PRESET.questions.length); assert.equal(view.data.get(quest.QUESTION_QUEST_STORAGE_KEY), original); assert.equal(view.writes.length, 0);
+    view.click('Save game backup ↓'); assert.equal(gameBackup.parseQuestGameBackup(new TextEncoder().encode(view.exportedBackups[0].contents)).state.questions.length, gracieQuestions.GRACIE_QUESTION_PRESET.questions.length);
+    const backup = offlineBackupFixture(); view.selectFile(backupFile(backup), 'quest-game-backup-file'); await view.settle(); view.click('Restore this game'); assert.deepEqual(view.state(), backup.state); assert.match(view.text(), /This browser could not save it|Save a game backup before closing/); assert.equal(view.data.get(quest.QUESTION_QUEST_STORAGE_KEY), original); assert.equal(view.writes.length, 0); view.unmount();
+  }
+});
+
+test('standalone uses secure UUID fallback when file pages do not expose randomUUID', () => {
+  const view = mount({ standalone: true, noRandomUUID: true }); view.click("Use Gracie's Questions"); assert.equal(view.state().questions.length, gracieQuestions.GRACIE_QUESTION_PRESET.questions.length); assert.equal(new Set(view.state().questions.map(question => question.id)).size, view.state().questions.length); assert.ok(view.state().questions.every(question => /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(question.id))); view.unmount();
 });

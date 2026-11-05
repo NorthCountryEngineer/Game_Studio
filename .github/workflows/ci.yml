@@ -21,6 +21,10 @@ jobs:
       - run: npm ci --no-audit --no-fund
       - run: npm run typecheck
       - run: npm test
+      - name: Verify checked-in offline health package
+        run: |
+          npm run build:offline-health
+          git diff --exit-code -- offline/mac
       - run: python3 -m pip install -r backend/requirements-sketch-vision.txt
       - run: python3 -m unittest discover -s tests -p 'test_*.py'
       - run: python3 -m unittest discover -s scripts/tests -p 'test_*.py'

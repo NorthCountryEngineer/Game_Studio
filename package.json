@@ -17,7 +17,8 @@
     "build:sdk": "node scripts/build-sdk.mjs",
     "prebuild": "npm run build:sdk",
     "dev:multiplayer": "node scripts/multiplayer-preview.mjs",
-    "test:multiplayer-preview": "node --import tsx scripts/test-multiplayer-preview.mjs"
+    "test:multiplayer-preview": "node --import tsx scripts/test-multiplayer-preview.mjs",
+    "build:offline-health": "node scripts/build-offline-health.mjs"
   },
   "dependencies": {
     "react": "18.3.1",

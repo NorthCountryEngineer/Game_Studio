@@ -28,6 +28,12 @@ Every standalone player and private playtest has a **Full screen** button. Press
 
 Owning applications can reuse a game with their own assignment point scale, such as 25 or 100 points. The SDK supplies strict versioned policies, deterministic provisional calculations, exact publication bindings and first/latest/best attempt selection. The host owns student records, server-admitted attempts, policy approval and final awards. See [assignment scoring](docs/ASSIGNMENT_SCORING.md).
 
+## Gracie's health game without internet
+
+The separate `codex/health-offline-mac` branch includes a ready-to-run copy of **Drugs & Decision-Making** at [offline/mac/Drugs-and-Decision-Making.html](offline/mac/Drugs-and-Decision-Making.html). Download that branch's ZIP while connected, extract it, and double-click the HTML file on the Mac. It needs only a modern browser: no installation, terminal, Node, Python, Docker, Kubernetes, AWS or account is required to play.
+
+The school logo, eight pieces, reviewed 19-question bank, templates, citations and current dice/movement animations are bundled inside the file. Custom question upload and manual entry work locally. Use the game's backup controls to move questions and match progress between browsers or computers; browser storage for local files can differ, and moving or renaming the HTML file does not carry its browser save with it. Official source addresses and citations remain visible offline; visiting those external pages requires internet. This package contains only the shared-screen health board, not the online Game Studio services. See [offline setup and backup instructions](docs/OFFLINE_HEALTH.md).
+
 ## Run locally
 
 Requires Node 20.18+ and Python 3.12+. This preview uses browser storage, synthetic account administration and the free guided designer. It makes no AWS or model requests.

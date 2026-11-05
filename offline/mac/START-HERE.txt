@@ -1,0 +1,39 @@
+DRUGS AND DECISION-MAKING
+10th Grade Health - Mac offline copy
+
+PLAY WITHOUT AN INTERNET CONNECTION
+1. Double-click Drugs-and-Decision-Making.html.
+   If it opens as text, Control-click it, choose Open With, then Safari or Firefox.
+2. Click Use Gracie's Questions to load the reviewed 19-question bank.
+   You can also upload a question TXT/JSON file or enter questions one at a time.
+3. Set up the four teams and use Full screen when projecting the board.
+
+No installation, terminal commands, account, internet connection, local server,
+Node, Python, Docker or Kubernetes is required to play. Safari comes with the Mac.
+This HTML file contains the game, styles, school logo, all eight pieces, question
+templates, the reviewed question bank, citations and explanations. You can copy
+just the HTML file to another Mac and it will still open.
+
+SAVE YOUR GAME
+Use Save game backup before closing the browser or moving to another computer.
+Keep the downloaded JSON file. On the other Mac, open the game and choose Restore
+game backup, review the summary, then choose Restore this game.
+Browser saves for local files vary. Moving or renaming the HTML file, changing
+browsers, private browsing or clearing browser data may not preserve that save.
+The backup file carries your questions, sources, teams, points, dice and progress.
+Keep private question banks and backups on devices you control.
+
+QUESTION FILES
+gracies-questions.txt and gracies-questions.json contain the same 19 questions.
+Edit either format offline and upload one file, not both. Importing appends to
+the existing bank; the prepared button skips exact questions already present.
+
+SOURCES
+The included source addresses, citations and explanations are readable offline.
+Links labelled Read source (requires internet) open the original publisher only
+when you choose them. Opening a publisher's website requires a connection.
+
+This package contains only the shared-screen health board. It does not include
+online Game Studio accounts, multiplayer rooms, leaderboards or AI services.
+MANIFEST.json records the source fingerprint and exact file hashes for this copy.
+THIRD-PARTY-NOTICES.txt contains bundled library notices.
