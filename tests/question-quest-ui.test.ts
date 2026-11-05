@@ -52,14 +52,14 @@ function mount(options: { state?: quest.QuestState; raw?: string; readFails?: bo
   flush(); return { button, click, change, submit, advance, state, invoke, all, text: () => clean(content(tree)), data, writes, navigated, unmount, timers, random: (value: number) => { random = value; }, randomCalls: () => randomCalls, lateSetters: () => lateSetters };
 }
 
-test('host authors a question, hides its answer key, names four teams, picks once, and starts a playable quest', () => {
-  const view = mount(); assert.equal(view.button('Set up the teams →')!.props.disabled, true);
+test('host authors a question, hides its answer key, names four teams, picks once, and starts a playable game', () => {
+  const view = mount(); assert.equal(view.button('Set up teams →')!.props.disabled, true);
   view.change('quest-question-prompt', 'Which planet is red?'); view.change('Number of answer choices', '2'); view.change('Answer A', 'Mars'); view.change('Answer B', 'Venus'); view.submit();
   assert.equal(view.state().questions.length, 1); assert.match(view.text(), /Which planet is red/); assert.equal(view.state().questions[0].correctIndex, 0);
-  view.click('Set up the teams →'); assert.equal(view.state().phase, 'teams'); assert.doesNotMatch(view.text(), /Which planet is red|Mars|Venus/);
+  view.click('Set up teams →'); assert.equal(view.state().phase, 'teams'); assert.doesNotMatch(view.text(), /Which planet is red|Mars|Venus/);
   view.change('quest-team-0', 'Comets'); view.click('Penguin for team 1'); view.submit(); assert.equal(view.state().phase, 'first-team-picker'); assert.equal(view.state().teams[0].avatar, 'penguin'); assert.equal(view.state().teams[0].name, 'Comets');
-  const pick = view.button('✦ Pick the first team')!.props.onClick; view.invoke(pick); view.invoke(pick); assert.equal(view.randomCalls(), 1); assert.equal(view.state().firstTeamIndex, 0); assert.match(view.text(), /Choosing your first team/); assert.equal(view.button('Let’s play →'), undefined);
-  view.advance(1000); assert.equal(view.state().firstTeamIndex, 0); view.click('Let’s play →'); assert.equal(view.state().phase, 'playing'); assert.equal(view.state().currentTeamIndex, 0); assert.ok(view.button('Draw a question ↗')); view.unmount();
+  const pick = view.button('Choose first team')!.props.onClick; view.invoke(pick); view.invoke(pick); assert.equal(view.randomCalls(), 1); assert.equal(view.state().firstTeamIndex, 0); assert.match(view.text(), /Choosing first team/); assert.equal(view.button('Start game →'), undefined);
+  view.advance(1000); assert.equal(view.state().firstTeamIndex, 0); view.click('Start game →'); assert.equal(view.state().phase, 'playing'); assert.equal(view.state().currentTeamIndex, 0); assert.ok(view.button('Draw a question ↗')); view.unmount();
 });
 
 test('card and die animation locks prevent double draws, double answers, duplicate rolls, and skipped turns', () => {
@@ -68,7 +68,7 @@ test('card and die animation locks prevent double draws, double answers, duplica
   const answer = view.all().find(e => e.type === 'button' && clean(content(e.props.children)) === 'A Right option'); assert.ok(answer); assert.equal(answer.props.disabled, true); view.invoke(answer.props.onClick); assert.equal(view.state().teams[0].points, 0);
   view.advance(700); const choose = view.all().find(e => e.type === 'button' && clean(content(e.props.children)) === 'A Right option')!.props.onClick;
   view.invoke(choose); view.invoke(choose); assert.equal(view.state().teams[0].points, 1); assert.equal(view.state().turn.stage, 'roll');
-  view.random(0.99); const roll = view.button('Roll the die & make your move →')!.props.onClick; view.invoke(roll); view.invoke(roll); assert.equal(view.state().teams[0].position, 6); assert.equal(view.randomCalls(), 1); assert.equal(view.button('Next team →')!.props.disabled, true);
+  view.random(0.99); const roll = view.button('Roll the die →')!.props.onClick; view.invoke(roll); view.invoke(roll); assert.equal(view.state().teams[0].position, 6); assert.equal(view.randomCalls(), 1); assert.equal(view.button('Next team →')!.props.disabled, true);
   view.advance(850); assert.equal(view.state().teams[0].position, 6); assert.equal(view.state().teams[0].points, 1); assert.equal(view.state().turn.roll, 6);
   const next = view.button('Next team →')!.props.onClick; view.invoke(next); view.invoke(next); assert.equal(view.state().currentTeamIndex, 1); assert.equal(view.state().turnNumber, 2); view.unmount();
 });
@@ -76,15 +76,15 @@ test('card and die animation locks prevent double draws, double answers, duplica
 test('the question editor stores the chosen answer, keeps IDs on edit, and confirms removal', () => {
   const view = mount(); view.change('quest-question-prompt', 'Which planet has rings?'); view.change('Number of answer choices', '2'); view.change('Answer A', 'Mars'); view.change('Answer B', 'Saturn'); view.change('Choice B is correct', ''); view.submit();
   const id = view.state().questions[0].id; assert.equal(view.state().questions[0].correctIndex, 1); view.click('Edit'); view.change('quest-question-prompt', 'Which planet has bright rings?'); view.submit(); assert.equal(view.state().questions.length, 1); assert.equal(view.state().questions[0].id, id); assert.equal(view.state().questions[0].correctIndex, 1);
-  view.click('Remove'); assert.equal(view.state().questions.length, 1); view.click('Keep'); assert.equal(view.state().questions.length, 1); view.click('Remove'); view.click('Confirm remove'); assert.equal(view.state().questions.length, 0); assert.equal(view.button('Set up the teams →')!.props.disabled, true); view.unmount();
+  view.click('Remove'); assert.equal(view.state().questions.length, 1); view.click('Keep'); assert.equal(view.state().questions.length, 1); view.click('Remove'); view.click('Confirm remove'); assert.equal(view.state().questions.length, 0); assert.equal(view.button('Set up teams →')!.props.disabled, true); view.unmount();
 });
 
 test('random picker and die results are saved before their animations so reopening cannot reroll them', () => {
   const setup = quest.finishQuestQuestions(authored()), picker = quest.configureQuestTeams(setup, setup.teams.map(({ id, name, avatar }) => ({ id, name, avatar })));
-  const pickView = mount({ state: picker }); pickView.random(0.8); pickView.click('✦ Pick the first team'); const savedPick = quest.parseQuestionQuest(JSON.parse(pickView.data.get(quest.QUESTION_QUEST_STORAGE_KEY)!)); assert.equal(savedPick.firstTeamIndex, 3);
-  const reopenedPick = mount({ state: savedPick }); assert.equal(reopenedPick.button('✦ Pick the first team'), undefined); assert.ok(reopenedPick.button('Let’s play →')); pickView.unmount(); reopenedPick.unmount();
-  const rollView = mount({ state: quest.answerQuestCard(quest.drawQuestCard(active(), () => 0), 0) }); rollView.random(0.99); rollView.click('Roll the die & make your move →'); const savedRoll = quest.parseQuestionQuest(JSON.parse(rollView.data.get(quest.QUESTION_QUEST_STORAGE_KEY)!)); assert.equal(savedRoll.turn.roll, 6); assert.equal(savedRoll.teams[0].position, 6);
-  const reopenedRoll = mount({ state: savedRoll }); assert.equal(reopenedRoll.button('Roll the die & make your move →'), undefined); assert.ok(reopenedRoll.button('Next team →')); assert.equal(reopenedRoll.state().teams[0].points, 1); rollView.unmount(); reopenedRoll.unmount();
+  const pickView = mount({ state: picker }); pickView.random(0.8); pickView.click('Choose first team'); const savedPick = quest.parseQuestionQuest(JSON.parse(pickView.data.get(quest.QUESTION_QUEST_STORAGE_KEY)!)); assert.equal(savedPick.firstTeamIndex, 3);
+  const reopenedPick = mount({ state: savedPick }); assert.equal(reopenedPick.button('Choose first team'), undefined); assert.ok(reopenedPick.button('Start game →')); pickView.unmount(); reopenedPick.unmount();
+  const rollView = mount({ state: quest.answerQuestCard(quest.drawQuestCard(active(), () => 0), 0) }); rollView.random(0.99); rollView.click('Roll the die →'); const savedRoll = quest.parseQuestionQuest(JSON.parse(rollView.data.get(quest.QUESTION_QUEST_STORAGE_KEY)!)); assert.equal(savedRoll.turn.roll, 6); assert.equal(savedRoll.teams[0].position, 6);
+  const reopenedRoll = mount({ state: savedRoll }); assert.equal(reopenedRoll.button('Roll the die →'), undefined); assert.ok(reopenedRoll.button('Next team →')); assert.equal(reopenedRoll.state().teams[0].points, 1); rollView.unmount(); reopenedRoll.unmount();
 });
 
 test('old answer and next-team callbacks cannot act on a later turn even when the same single card repeats', () => {
@@ -99,42 +99,42 @@ test('old answer and next-team callbacks cannot act on a later turn even when th
 
 test('save failures warn clearly while authored questions and active play remain in memory', () => {
   const view = mount({ saveFails: true }); assert.match(view.text(), /can’t save changes/);
-  view.change('quest-question-prompt', 'Still playable?'); view.change('Number of answer choices', '2'); view.change('Answer A', 'Yes'); view.change('Answer B', 'No'); view.submit(); view.click('Set up the teams →'); view.submit(); view.click('✦ Pick the first team'); view.advance(1000); view.click('Let’s play →');
+  view.change('quest-question-prompt', 'Still playable?'); view.change('Number of answer choices', '2'); view.change('Answer A', 'Yes'); view.change('Answer B', 'No'); view.submit(); view.click('Set up teams →'); view.submit(); view.click('Choose first team'); view.advance(1000); view.click('Start game →');
   assert.equal(view.state().phase, 'playing'); assert.equal(view.state().questions[0].prompt, 'Still playable?'); assert.equal(view.data.size, 0); assert.match(view.text(), /Keep this tab open/); view.click('Draw a question ↗'); view.advance(700); assert.match(view.text(), /Still playable/); view.unmount();
 });
 
-test('a corrupt saved copy is untouched until the host explicitly confirms a fresh quest', () => {
+test('a corrupt saved copy is untouched until the host explicitly confirms a fresh game', () => {
   const original = '{broken save'; const view = mount({ raw: original }); assert.match(view.text(), /saved data has not been changed/); assert.equal(view.writes.length, 0); assert.equal(view.data.get(quest.QUESTION_QUEST_STORAGE_KEY), original);
-  view.click('Start a fresh quest'); view.click('Keep this quest'); assert.equal(view.writes.length, 0); view.click('Start a fresh quest'); view.click('Start a new quest');
+  view.click('New game'); view.click('Cancel'); assert.equal(view.writes.length, 0); view.click('New game'); view.click('Start new game');
   assert.equal(view.state().phase, 'questions'); assert.equal(view.data.get(`${quest.QUESTION_QUEST_STORAGE_KEY}:previous`), original); assert.equal(JSON.parse(view.data.get(quest.QUESTION_QUEST_STORAGE_KEY)!).version, 1); view.unmount();
 });
 
-test('unreadable saved data can be bypassed explicitly for a fresh memory-only quest without overwriting it', () => {
-  const original = quest.serializeQuestionQuest(active()); const view = mount({ raw: original, readFails: true }); assert.equal(view.writes.length, 0); view.click('Start a fresh quest'); view.click('Start a new quest');
-  assert.match(view.text(), /Every great quest/); assert.equal(view.state().phase, 'questions'); assert.equal(view.data.get(quest.QUESTION_QUEST_STORAGE_KEY), original); assert.equal(view.writes.length, 0);
+test('unreadable saved data can be bypassed explicitly for a fresh memory-only game without overwriting it', () => {
+  const original = quest.serializeQuestionQuest(active()); const view = mount({ raw: original, readFails: true }); assert.equal(view.writes.length, 0); view.click('New game'); view.click('Start new game');
+  assert.match(view.text(), /Create the question bank/); assert.equal(view.state().phase, 'questions'); assert.equal(view.data.get(quest.QUESTION_QUEST_STORAGE_KEY), original); assert.equal(view.writes.length, 0);
   view.change('quest-question-prompt', 'New in memory?'); view.change('Number of answer choices', '2'); view.change('Answer A', 'Yes'); view.change('Answer B', 'No'); view.submit(); assert.equal(view.state().questions.length, 1); assert.match(view.text(), /Keep this tab open/); assert.equal(view.writes.length, 0); view.unmount();
 });
 
 test('the first finisher celebrates while the remaining teams continue to the complete results and rematch', () => {
   const view = mount({ state: nearHome() });
   for (let i = 0; i < 4; i++) {
-    assert.equal(view.state().currentTeamIndex, i); view.click('Draw a question ↗'); view.advance(700); view.invoke(view.all().find(e => e.type === 'button' && clean(content(e.props.children)) === 'A Right option')!.props.onClick); view.click('Roll the die & make your move →'); view.advance(850);
+    assert.equal(view.state().currentTeamIndex, i); view.click('Draw a question ↗'); view.advance(700); view.invoke(view.all().find(e => e.type === 'button' && clean(content(e.props.children)) === 'A Right option')!.props.onClick); view.click('Roll the die →'); view.advance(850);
     assert.equal(view.state().teams[i].position, 28); assert.equal(view.state().finishOrder[0], 'team-1');
-    if (i === 0) { assert.match(view.text(), /The adventure keeps going/); assert.equal(view.state().phase, 'playing'); view.click('Keep the quest going →'); }
+    if (i === 0) { assert.match(view.text(), /Play continues until all teams finish/); assert.equal(view.state().phase, 'playing'); view.click('Continue game →'); }
     if (i < 3) view.click('Next team →');
   }
-  assert.equal(view.state().phase, 'results'); assert.match(view.text(), /Everyone’s home/); assert.deepEqual(view.state().finishOrder, ['team-1', 'team-2', 'team-3', 'team-4']); assert.doesNotMatch(view.text(), /Hidden host question|Right option|Wrong option/);
-  view.click('Another quest, same questions →'); assert.equal(view.state().phase, 'first-team-picker'); assert.ok(view.state().teams.every(t => t.position === 0 && t.points === 0)); assert.equal(view.state().questions.length, 1); view.unmount();
+  assert.equal(view.state().phase, 'results'); assert.match(view.text(), /All teams finished/); assert.deepEqual(view.state().finishOrder, ['team-1', 'team-2', 'team-3', 'team-4']); assert.doesNotMatch(view.text(), /Hidden host question|Right option|Wrong option/);
+  view.click('Rematch →'); assert.equal(view.state().phase, 'first-team-picker'); assert.ok(view.state().teams.every(t => t.position === 0 && t.points === 0)); assert.equal(view.state().questions.length, 1); view.unmount();
 });
 
 test('unmounting cancels pending animations and prevents late state writes', () => {
-  const pending = quest.answerQuestCard(quest.drawQuestCard(active(), () => 0), 0); const view = mount({ state: pending }); view.click('Roll the die & make your move →'); assert.equal(view.timers.size, 1); const writes = view.writes.length; view.unmount(); assert.equal(view.timers.size, 0); view.advance(2000); assert.equal(view.lateSetters(), 0); assert.equal(view.writes.length, writes);
+  const pending = quest.answerQuestCard(quest.drawQuestCard(active(), () => 0), 0); const view = mount({ state: pending }); view.click('Roll the die →'); assert.equal(view.timers.size, 1); const writes = view.writes.length; view.unmount(); assert.equal(view.timers.size, 0); view.advance(2000); assert.equal(view.lateSetters(), 0); assert.equal(view.writes.length, writes);
 });
 
-test('a delayed new-bank click cannot let a completed old die animation overwrite a fresh quest', () => {
-  const pending = quest.answerQuestCard(quest.drawQuestCard(active(), () => 0), 0); const view = mount({ state: pending }); const newBank = view.button('New question bank')!.props.onClick; view.click('Roll the die & make your move →'); view.invoke(newBank);
-  const startNew = view.button('Start a new quest');
-  if (startNew) { view.click('Start a new quest'); const id = view.state().id; view.advance(2000); assert.equal(view.state().id, id); assert.equal(view.state().phase, 'questions'); }
+test('a delayed new-bank click cannot let a completed old die animation overwrite a fresh game', () => {
+  const pending = quest.answerQuestCard(quest.drawQuestCard(active(), () => 0), 0); const view = mount({ state: pending }); const newBank = view.button('New game')!.props.onClick; view.click('Roll the die →'); view.invoke(newBank);
+  const startNew = view.button('Start new game');
+  if (startNew) { view.click('Start new game'); const id = view.state().id; view.advance(2000); assert.equal(view.state().id, id); assert.equal(view.state().phase, 'questions'); }
   else { assert.equal(view.state().turn.stage, 'complete'); view.advance(850); assert.equal(view.state().turn.stage, 'complete'); }
   view.unmount();
 });
