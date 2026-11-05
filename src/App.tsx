@@ -142,7 +142,7 @@ export default function App() {
     if(!isCore)localStorage.setItem('game-studio-branding:v1',JSON.stringify(next));
     setConfig(next);
   }
-  useEffect(()=>{document.documentElement.style.setProperty('--service-accent',config.branding.accentColor);document.title=config.branding.appName+' — Imagine. Play. Publish.';},[config.branding.appName,config.branding.accentColor]);
+  useEffect(()=>{document.documentElement.style.setProperty('--service-accent',config.branding.accentColor);document.title=['/party/quiz-circuit','/party/quiz-circuit/host','/party/question-quest','/party/question-quest/host'].includes(pathname)?'10th Grade Health | '+config.branding.appName:config.branding.appName+' — Imagine. Play. Publish.';},[config.branding.appName,config.branding.accentColor,pathname]);
   const badge = <span className="service-badge">{config.branding.badgeText}</span>;
   return <BrandingProvider config={config}>
     {framedPrivate ? <main className="service-main"><h1>Open Game Studio in its own tab.</h1><p>Creation, administration and sign-in run in a separate window.</p><a className="button primary" href={location.href} target="_blank" rel="noopener noreferrer">Open Game Studio ↗</a></main> : embedded ? configReady ? <EmbeddedGame id={pathname.split('/')[3] || ''} config={config}/> : <main className="service-main"><p role="status">{error || 'Loading deployment configuration…'}</p></main> : <>

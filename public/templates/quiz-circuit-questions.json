@@ -2,13 +2,13 @@
   "version": 1,
   "questions": [
     {
-      "question": "What is the capital of Canada?",
-      "choices": ["Toronto", "Ottawa", "Montreal", "Vancouver"],
+      "question": "Which response shows active listening?",
+      "choices": ["Interrupting with advice", "Summarizing what the speaker said", "Looking at another screen", "Changing the subject"],
       "answer": "B"
     },
     {
-      "question": "Which of these numbers is prime?",
-      "choices": ["4", "6", "7", "9"],
+      "question": "Which step helps with making a responsible decision?",
+      "choices": ["Acting without considering the outcome", "Letting someone else decide every time", "Comparing options and their likely consequences", "Ignoring reliable information"],
       "answer": "C"
     }
   ]
