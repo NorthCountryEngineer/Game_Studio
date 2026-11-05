@@ -1,27 +1,26 @@
-# 10TH GRADE HEALTH - QUESTION FILE
-# Prepare review questions for your 10th Grade Health class.
+# 10TH GRADE HEALTH: DRUGS & DECISION-MAKING - QUESTION FILE
+# Prepare drug education review questions for your 10th Grade Health class.
 # Edit these examples, or copy a complete block for each new question.
 # Keep the fields in this order: Q, A, B, optional C and D, ANSWER.
 # ANSWER is the letter of the correct choice: A, B, C or D.
 # Put --- on a separate line between questions.
 # Keep each question and answer choice on one line. Lines starting with # are comments.
 # Save as plain text (.txt), using UTF-8. Do not save as Word or rich text.
-# In 10th Grade Health, choose the file, review the preview, then confirm the import.
+# In Drugs & Decision-Making, choose the file, review the preview, then confirm the import.
 # You can also enter questions one at a time in the game.
 # Limits: 100 questions in the bank, 300 characters per question, 120 per choice.
 
-Q: Which response shows active listening?
-A: Interrupting with advice
-B: Summarizing what the speaker said
-C: Looking at another screen
-D: Changing the subject
+Q: Someone pressures you to try a drug. Which response sets a clear boundary?
+A: Trying it to avoid disagreement
+B: Saying no clearly and leaving the situation
+C: Accepting it because a friend offered it
+D: Letting the group decide for you
 ANSWER: B
-
 ---
 
-Q: Which step helps with making a responsible decision?
-A: Acting without considering the outcome
-B: Letting someone else decide every time
-C: Comparing options and their likely consequences
-D: Ignoring reliable information
+Q: A friend is worried about their substance use. Which response offers support?
+A: Making jokes about their concern
+B: Sharing their concern with the whole group
+C: Listening without judgment and helping them reach a trusted adult
+D: Telling them they must handle it alone
 ANSWER: C

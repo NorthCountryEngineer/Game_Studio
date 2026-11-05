@@ -1,6 +1,6 @@
-# 10th Grade Health
+# 10th Grade Health: Drugs & Decision-Making
 
-10th Grade Health is a school-branded shared-screen board game at the existing `/party/quiz-circuit` route. It supports a 10th Grade Health class review, with the supplied school logo and its forest green (`#004c1c`), gold (`#ffde08`) and white palette. One host operates the computer while four teams answer aloud. It requires no sign-in, online room, model, subscription or generated content.
+Drugs & Decision-Making is a school-branded shared-screen board game at the existing `/party/quiz-circuit` route. It supports a 10th Grade Health drug education review, with the supplied school logo and its forest green (`#004c1c`), gold (`#ffde08`) and white palette. One host operates the computer while four teams answer aloud. It requires no sign-in, online room, model, subscription or generated content.
 
 The class identity appears throughout setup, question-file import, cards, the board, dice and results. The school logo is the original transparent PNG supplied by the user, served locally without alteration. No school name, mascot, official endorsement or curriculum standard is inferred from the mark. This presentation applies to this board game and its library card; other Game Studio games keep their own identity. Hosts continue to supply the actual questions for their class.
 
@@ -22,20 +22,20 @@ Use **Full screen** for projection and the collapsible **How to play** guide for
 The setup screen offers a [plain-text template](../public/templates/quiz-circuit-questions.txt) and a [JSON template](../public/templates/quiz-circuit-questions.json). The text format is intended for ordinary text editors such as TextEdit or Notepad. Edit the examples and copy a complete question block for each additional question. Save as UTF-8 plain text with the `.txt` extension; Word and rich-text files are not supported.
 
 ```text
-Q: Which response shows active listening?
-A: Interrupting with advice
-B: Summarizing what the speaker said
-C: Looking at another screen
-D: Changing the subject
+Q: Someone pressures you to try a drug. Which response sets a clear boundary?
+A: Trying it to avoid disagreement
+B: Saying no clearly and leaving the situation
+C: Accepting it because a friend offered it
+D: Letting the group decide for you
 ANSWER: B
 
 ---
 
-Q: Which step helps with making a responsible decision?
-A: Acting without considering the outcome
-B: Letting someone else decide every time
-C: Comparing options and their likely consequences
-D: Ignoring reliable information
+Q: A friend is worried about their substance use. Which response offers support?
+A: Making jokes about their concern
+B: Sharing their concern with the whole group
+C: Listening without judgment and helping them reach a trusted adult
+D: Telling them they must handle it alone
 ANSWER: C
 ```
 
@@ -48,8 +48,13 @@ The JSON alternative has exactly `version` and `questions` fields; version is `1
   "version": 1,
   "questions": [
     {
-      "question": "Which response shows active listening?",
-      "choices": ["Interrupting with advice", "Summarizing what the speaker said", "Looking at another screen", "Changing the subject"],
+      "question": "Someone pressures you to try a drug. Which response sets a clear boundary?",
+      "choices": [
+        "Trying it to avoid disagreement",
+        "Saying no clearly and leaving the situation",
+        "Accepting it because a friend offered it",
+        "Letting the group decide for you"
+      ],
       "answer": "B"
     }
   ]
@@ -66,4 +71,4 @@ Question banks and match progress are saved privately in the host browser's loca
 
 The fixed TypeScript engine validates bounded inert question and team data, phase transitions, one answer and one roll per turn, deck order, movement, score and finish order. UI projections omit the complete question bank and correct-answer indices. The host's local browser still owns the underlying questions; this is a shared-screen party game, not confidential assessment software. Existing published GameSpecs, identity permissions, leaderboards and online party rooms are unchanged.
 
-The visible game uses mature class-review labels and sans-serif headings. The existing `/party/quiz-circuit` and `/party/quiz-circuit/host` routes, original `/party/question-quest` aliases and question-template URLs are retained. Downloaded template names identify 10th Grade Health, and the sample questions cover active listening and responsible decision-making. Previously prepared files remain valid under the same format. The existing local storage key, version 1 state format and eight internal avatar IDs are retained, preserving saved questions, teams and match progress, including completed single-die turns. The meme artwork replaces the old animal presentation for those same IDs. Branding never rewrites a saved question bank. New turns record both dice and their combined total before the animation starts, so refreshing never rerolls them. Refreshing during an animation restores the committed board position.
+The visible game uses mature class-review labels and sans-serif headings. The existing `/party/quiz-circuit` and `/party/quiz-circuit/host` routes, original `/party/question-quest` aliases and question-template URLs are retained. Downloaded template names identify the drug education unit, and the sample questions cover refusing peer pressure and supporting a friend. These editable examples are consistent with [NIAAA refusal guidance](https://www.niaaa.nih.gov/alcohols-effects-health/niaaa-middle-school/right-resist) and [CDC guidance on talking to a friend about drugs](https://www.cdc.gov/free-mind/teens/talk-to-a-friend.html), checked November 5, 2026. They are examples for the host to review, not a replacement for the class question bank. Previously prepared files remain valid under the same format. The existing local storage key, version 1 state format and eight internal avatar IDs are retained, preserving saved questions, teams and match progress, including completed single-die turns. The meme artwork replaces the old animal presentation for those same IDs. Branding never rewrites a saved question bank. New turns record both dice and their combined total before the animation starts, so refreshing never rerolls them. Refreshing during an animation restores the committed board position.
