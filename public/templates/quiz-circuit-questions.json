@@ -2,13 +2,23 @@
   "version": 1,
   "questions": [
     {
-      "question": "Which response shows active listening?",
-      "choices": ["Interrupting with advice", "Summarizing what the speaker said", "Looking at another screen", "Changing the subject"],
+      "question": "Someone pressures you to try a drug. Which response sets a clear boundary?",
+      "choices": [
+        "Trying it to avoid disagreement",
+        "Saying no clearly and leaving the situation",
+        "Accepting it because a friend offered it",
+        "Letting the group decide for you"
+      ],
       "answer": "B"
     },
     {
-      "question": "Which step helps with making a responsible decision?",
-      "choices": ["Acting without considering the outcome", "Letting someone else decide every time", "Comparing options and their likely consequences", "Ignoring reliable information"],
+      "question": "A friend is worried about their substance use. Which response offers support?",
+      "choices": [
+        "Making jokes about their concern",
+        "Sharing their concern with the whole group",
+        "Listening without judgment and helping them reach a trusted adult",
+        "Telling them they must handle it alone"
+      ],
       "answer": "C"
     }
   ]
