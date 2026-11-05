@@ -26,7 +26,7 @@ const AVATARS = new Set<string>(QUESTION_QUEST_AVATARS.map(avatar => avatar.id))
 const PHASES = ['questions', 'teams', 'first-team-picker', 'playing', 'results'];
 const STAGES = ['draw', 'answer', 'roll', 'complete'];
 export class QuestionQuestError extends Error { constructor(message: string) { super(message); this.name = 'QuestionQuestError'; } }
-function fail(message = 'The saved Question Quest game is invalid. Keep the saved copy and start a new game when ready.'): never { throw new QuestionQuestError(message); }
+function fail(message = 'The saved game is invalid. Keep the saved copy and start a new game when ready.'): never { throw new QuestionQuestError(message); }
 const object = (value: unknown): Record<string, any> => value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, any> : fail();
 function exact(value: Record<string, any>, keys: string[]) { if (Object.keys(value).length !== keys.length || !keys.every(key => Object.hasOwn(value, key))) fail(); }
 const integer = (value: unknown, min: number, max: number): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= min && value <= max;

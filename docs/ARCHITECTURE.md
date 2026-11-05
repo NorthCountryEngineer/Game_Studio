@@ -57,7 +57,7 @@ Party adapters reserve phrases within their existing bounded admission index. Th
 
 Per-source and installation attempt limits constrain lookup traffic. Phrases confer only anonymous room admission, never host/narrator, creator or Core authority. No new infrastructure, IAM grant, schema migration, provider call or assignment SDK change is introduced. See [passphrase joining](ROOM_PASSPHRASES.md).
 
-Question Quest is a separate local shared-screen category at `/party/question-quest`. It has a bounded versioned question bank and deterministic host-operated race state in browser storage, with no online room, provider or Core authority. Its public projection omits the question bank and correct-answer indices; team setup does not mount the editor. Existing online party kinds and published GameSpec formats are unchanged. See [Question Quest](QUESTION_QUEST.md).
+Quiz Circuit is a separate local shared-screen category at `/party/quiz-circuit`. It has a bounded versioned question bank and deterministic host-operated race state in browser storage, with no online room, provider or Core authority. Its public projection omits the question bank and correct-answer indices; team setup does not mount the editor. Existing online party kinds and published GameSpec formats are unchanged. See [Quiz Circuit](QUESTION_QUEST.md).
 
 ## Host embedding
 
