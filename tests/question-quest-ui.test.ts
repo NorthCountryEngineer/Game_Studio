@@ -17,7 +17,7 @@ function authored(count = 1): quest.QuestState {
 function active(): quest.QuestState { const q = quest.finishQuestQuestions(authored()); return quest.startQuestionQuest(quest.pickFirstQuestTeam(quest.configureQuestTeams(q, q.teams.map(({ id, name, avatar }) => ({ id, name, avatar }))), () => 0)); }
 function nearHome(): quest.QuestState {
   let s = active();
-  for (let i = 0; i < 108; i++) s = quest.nextQuestTeam(quest.rollQuestDie(quest.answerQuestCard(quest.drawQuestCard(s, () => 0), 0), () => 0));
+  for (let i = 0; i < 52; i++) s = quest.nextQuestTeam(quest.rollQuestDie(quest.answerQuestCard(quest.drawQuestCard(s, () => 0), 0), () => 0));
   return s;
 }
 function mount(options: { state?: quest.QuestState; raw?: string; readFails?: boolean; saveFails?: boolean; reducedMotion?: boolean } = {}) {
@@ -68,8 +68,8 @@ test('card and die animation locks prevent double draws, double answers, duplica
   const answer = view.all().find(e => e.type === 'button' && clean(content(e.props.children)) === 'A Right option'); assert.ok(answer); assert.equal(answer.props.disabled, true); view.invoke(answer.props.onClick); assert.equal(view.state().teams[0].points, 0);
   view.advance(700); const choose = view.all().find(e => e.type === 'button' && clean(content(e.props.children)) === 'A Right option')!.props.onClick;
   view.invoke(choose); view.invoke(choose); assert.equal(view.state().teams[0].points, 1); assert.equal(view.state().turn.stage, 'roll');
-  view.random(0.99); const roll = view.button('Roll the die →')!.props.onClick; view.invoke(roll); view.invoke(roll); assert.equal(view.state().teams[0].position, 6); assert.equal(view.randomCalls(), 1); assert.equal(view.button('Next team →')!.props.disabled, true);
-  view.advance(850); assert.equal(view.state().teams[0].position, 6); assert.equal(view.state().teams[0].points, 1); assert.equal(view.state().turn.roll, 6);
+  view.random(0.99); const roll = view.button('Roll two dice →')!.props.onClick; view.invoke(roll); view.invoke(roll); assert.equal(view.state().teams[0].position, 12); assert.equal(view.randomCalls(), 2); assert.equal(view.button('Next team →')!.props.disabled, true);
+  view.advance(3800); assert.equal(view.state().teams[0].position, 12); assert.equal(view.state().teams[0].points, 1); assert.equal(view.state().turn.roll, 12); assert.deepEqual(view.state().turn.dice, [6, 6]);
   const next = view.button('Next team →')!.props.onClick; view.invoke(next); view.invoke(next); assert.equal(view.state().currentTeamIndex, 1); assert.equal(view.state().turnNumber, 2); view.unmount();
 });
 
@@ -83,8 +83,8 @@ test('random picker and die results are saved before their animations so reopeni
   const setup = quest.finishQuestQuestions(authored()), picker = quest.configureQuestTeams(setup, setup.teams.map(({ id, name, avatar }) => ({ id, name, avatar })));
   const pickView = mount({ state: picker }); pickView.random(0.8); pickView.click('Choose first team'); const savedPick = quest.parseQuestionQuest(JSON.parse(pickView.data.get(quest.QUESTION_QUEST_STORAGE_KEY)!)); assert.equal(savedPick.firstTeamIndex, 3);
   const reopenedPick = mount({ state: savedPick }); assert.equal(reopenedPick.button('Choose first team'), undefined); assert.ok(reopenedPick.button('Start game →')); pickView.unmount(); reopenedPick.unmount();
-  const rollView = mount({ state: quest.answerQuestCard(quest.drawQuestCard(active(), () => 0), 0) }); rollView.random(0.99); rollView.click('Roll the die →'); const savedRoll = quest.parseQuestionQuest(JSON.parse(rollView.data.get(quest.QUESTION_QUEST_STORAGE_KEY)!)); assert.equal(savedRoll.turn.roll, 6); assert.equal(savedRoll.teams[0].position, 6);
-  const reopenedRoll = mount({ state: savedRoll }); assert.equal(reopenedRoll.button('Roll the die →'), undefined); assert.ok(reopenedRoll.button('Next team →')); assert.equal(reopenedRoll.state().teams[0].points, 1); rollView.unmount(); reopenedRoll.unmount();
+  const rollView = mount({ state: quest.answerQuestCard(quest.drawQuestCard(active(), () => 0), 0) }); rollView.random(0.99); rollView.click('Roll two dice →'); const savedRoll = quest.parseQuestionQuest(JSON.parse(rollView.data.get(quest.QUESTION_QUEST_STORAGE_KEY)!)); assert.equal(savedRoll.turn.roll, 12); assert.deepEqual(savedRoll.turn.dice, [6, 6]); assert.equal(savedRoll.teams[0].position, 12);
+  const reopenedRoll = mount({ state: savedRoll }); assert.equal(reopenedRoll.button('Roll two dice →'), undefined); assert.ok(reopenedRoll.button('Next team →')); assert.equal(reopenedRoll.state().teams[0].points, 1); rollView.unmount(); reopenedRoll.unmount();
 });
 
 test('old answer and next-team callbacks cannot act on a later turn even when the same single card repeats', () => {
@@ -118,7 +118,7 @@ test('unreadable saved data can be bypassed explicitly for a fresh memory-only g
 test('the first finisher celebrates while the remaining teams continue to the complete results and rematch', () => {
   const view = mount({ state: nearHome() });
   for (let i = 0; i < 4; i++) {
-    assert.equal(view.state().currentTeamIndex, i); view.click('Draw a question ↗'); view.advance(700); view.invoke(view.all().find(e => e.type === 'button' && clean(content(e.props.children)) === 'A Right option')!.props.onClick); view.click('Roll the die →'); view.advance(850);
+    assert.equal(view.state().currentTeamIndex, i); view.click('Draw a question ↗'); view.advance(700); view.invoke(view.all().find(e => e.type === 'button' && clean(content(e.props.children)) === 'A Right option')!.props.onClick); view.click('Roll two dice →'); view.advance(3800);
     assert.equal(view.state().teams[i].position, 28); assert.equal(view.state().finishOrder[0], 'team-1');
     if (i === 0) { assert.match(view.text(), /Play continues until all teams finish/); assert.equal(view.state().phase, 'playing'); view.click('Continue game →'); }
     if (i < 3) view.click('Next team →');
@@ -128,13 +128,86 @@ test('the first finisher celebrates while the remaining teams continue to the co
 });
 
 test('unmounting cancels pending animations and prevents late state writes', () => {
-  const pending = quest.answerQuestCard(quest.drawQuestCard(active(), () => 0), 0); const view = mount({ state: pending }); view.click('Roll the die →'); assert.equal(view.timers.size, 1); const writes = view.writes.length; view.unmount(); assert.equal(view.timers.size, 0); view.advance(2000); assert.equal(view.lateSetters(), 0); assert.equal(view.writes.length, writes);
+  const pending = quest.answerQuestCard(quest.drawQuestCard(active(), () => 0), 0); const view = mount({ state: pending }); view.click('Roll two dice →'); assert.ok(view.timers.size > 1); const writes = view.writes.length; view.unmount(); assert.equal(view.timers.size, 0); view.advance(5000); assert.equal(view.lateSetters(), 0); assert.equal(view.writes.length, writes);
 });
 
 test('a delayed new-bank click cannot let a completed old die animation overwrite a fresh game', () => {
-  const pending = quest.answerQuestCard(quest.drawQuestCard(active(), () => 0), 0); const view = mount({ state: pending }); const newBank = view.button('New game')!.props.onClick; view.click('Roll the die →'); view.invoke(newBank);
+  const pending = quest.answerQuestCard(quest.drawQuestCard(active(), () => 0), 0); const view = mount({ state: pending }); const newBank = view.button('New game')!.props.onClick; view.click('Roll two dice →'); view.invoke(newBank);
   const startNew = view.button('Start new game');
-  if (startNew) { view.click('Start new game'); const id = view.state().id; view.advance(2000); assert.equal(view.state().id, id); assert.equal(view.state().phase, 'questions'); }
-  else { assert.equal(view.state().turn.stage, 'complete'); view.advance(850); assert.equal(view.state().turn.stage, 'complete'); }
+  if (startNew) { view.click('Start new game'); const id = view.state().id; view.advance(5000); assert.equal(view.state().id, id); assert.equal(view.state().phase, 'questions'); }
+  else { assert.equal(view.state().turn.stage, 'complete'); view.advance(3800); assert.equal(view.state().turn.stage, 'complete'); }
   view.unmount();
+});
+
+const presentedPosition = (view: ReturnType<typeof mount>, teamId = 'team-1') => view.all().find(element => element.props['data-team-id'] === teamId)!.props['data-position'];
+const shownDice = (view: ReturnType<typeof mount>) => view.all().filter(element => element.props['data-die-face'] !== undefined).map(element => element.props['data-die-face']);
+const diceDialog = (view: ReturnType<typeof mount>) => view.all().find(element => element.props['aria-labelledby'] === 'quest-dice-heading');
+
+test('two dice replace the question, slow down, stop on saved faces, and close before space-by-space movement', () => {
+  const pending = quest.answerQuestCard(quest.drawQuestCard(active(), () => 0), 0), view = mount({ state: pending });
+  view.random(.99); view.click('Roll two dice →');
+  assert.equal(view.randomCalls(), 2); assert.equal(view.state().turn.roll, 12); assert.deepEqual(view.state().turn.dice, [6, 6]);
+  const saved = quest.parseQuestionQuest(JSON.parse(view.data.get(quest.QUESTION_QUEST_STORAGE_KEY)!)); assert.equal(saved.teams[0].position, 12);
+  assert.ok(diceDialog(view)); assert.doesNotMatch(view.text(), /Hidden host question|Right option|Wrong option/); assert.equal(presentedPosition(view), 0);
+  const faces = new Set<number>(), intervals: number[] = [];
+  for (const [index, at] of [50, 110, 180, 260, 355, 465, 595, 750, 935, 1155, 1415, 1720, 2070].entries()) {
+    const before = index ? [50, 110, 180, 260, 355, 465, 595, 750, 935, 1155, 1415, 1720, 2070][index - 1] : 0;
+    view.advance(at - before); shownDice(view).forEach(face => faces.add(face));
+    intervals.push(Number.parseInt(diceDialog(view)!.props.style['--dice-speed'])); assert.equal(presentedPosition(view), 0);
+  }
+  assert.equal(faces.size, 6); assert.ok(intervals.every((interval, index) => !index || interval >= intervals[index - 1]));
+  view.advance(170); assert.deepEqual(shownDice(view), [6, 6]); assert.match(view.text(), /6 \+ 6 = 12/); assert.equal(presentedPosition(view), 0);
+  view.advance(359); assert.ok(diceDialog(view)); view.advance(1); assert.equal(diceDialog(view), undefined); assert.equal(presentedPosition(view), 0);
+  const positions: number[] = [];
+  for (let step = 1; step <= 12; step++) { view.advance(85); positions.push(presentedPosition(view)); assert.equal(view.button('Next team →')!.props.disabled, true); }
+  assert.deepEqual(positions, Array.from({ length: 12 }, (_, index) => index + 1));
+  view.advance(85); assert.equal(presentedPosition(view), 12); assert.equal(view.button('Next team →')!.props.disabled, false); assert.equal(view.randomCalls(), 2); view.unmount();
+});
+
+test('a finishing roll keeps winner, finish badges, and final results hidden until the piece settles', () => {
+  const view = mount({ state: nearHome() }); view.click('Draw a question ↗'); view.advance(700);
+  view.invoke(view.all().find(element => element.type === 'button' && clean(content(element.props.children)) === 'A Right option')!.props.onClick);
+  view.click('Roll two dice →'); assert.equal(view.state().finishOrder.length, 1); assert.equal(presentedPosition(view), 26);
+  assert.doesNotMatch(view.text(), /Continue game|1st · finished/);
+  view.advance(2685); assert.equal(presentedPosition(view), 27); assert.doesNotMatch(view.text(), /Continue game|1st · finished/);
+  view.advance(85); assert.equal(presentedPosition(view), 28); assert.doesNotMatch(view.text(), /Continue game|1st · finished/);
+  view.advance(85); assert.ok(view.button('Continue game →')); assert.match(view.text(), /1st · finished/); view.unmount();
+});
+
+test('reduced motion skips face cycling and travel animation without rerolling or changing the saved result', () => {
+  const pending = quest.answerQuestCard(quest.drawQuestCard(active(), () => 0), 0), view = mount({ state: pending, reducedMotion: true });
+  view.random(.99); view.click('Roll two dice →'); assert.deepEqual(shownDice(view), [6, 6]); assert.equal(view.randomCalls(), 2);
+  view.advance(159); assert.equal(presentedPosition(view), 0); view.advance(1); assert.equal(diceDialog(view), undefined); assert.equal(presentedPosition(view), 12);
+  assert.equal(view.button('Next team →')!.props.disabled, false); assert.equal(view.state().turn.roll, 12); view.unmount();
+});
+
+test('restored legacy single-die turns stay readable and never fabricate a pair or replay an animation', () => {
+  const legacy = quest.rollQuestDie(quest.answerQuestCard(quest.drawQuestCard(active(), () => 0), 0), () => .4);
+  delete legacy.turn.dice;
+  const view = mount({ state: legacy }); assert.equal(view.state().turn.roll, 6); assert.equal(view.state().turn.dice, undefined);
+  assert.equal(presentedPosition(view), 6); assert.equal(diceDialog(view), undefined); assert.equal(view.randomCalls(), 0); assert.equal(view.timers.size, 0);
+  assert.ok(view.all().find(element => element.props['aria-label'] === 'Previous roll 6')); assert.doesNotMatch(view.text(), /undefined|NaN/); view.click('Next team →'); assert.equal(view.state().currentTeamIndex, 1); view.unmount();
+});
+
+test('the last team reaches the finish before final standings and rematch become visible', () => {
+  let lastTurn = nearHome();
+  for (let team = 0; team < 3; team++) lastTurn = quest.nextQuestTeam(quest.rollQuestDie(quest.answerQuestCard(quest.drawQuestCard(lastTurn, () => 0), 0), () => 0));
+  const view = mount({ state: lastTurn }); view.click('Draw a question ↗'); view.advance(700);
+  view.invoke(view.all().find(element => element.type === 'button' && clean(content(element.props.children)) === 'A Right option')!.props.onClick);
+  view.click('Roll two dice →'); assert.equal(view.state().phase, 'results'); assert.equal(presentedPosition(view, 'team-4'), 26);
+  assert.equal(view.button('Rematch →'), undefined); assert.doesNotMatch(view.text(), /All teams finished\.|4th · finished/);
+  view.advance(2770); assert.equal(presentedPosition(view, 'team-4'), 28); assert.equal(view.button('Rematch →'), undefined);
+  assert.doesNotMatch(view.text(), /All teams finished\.|4th · finished/);
+  view.advance(85); assert.ok(view.button('Rematch →')); assert.match(view.text(), /All teams finished\.|4th · finished/); view.unmount();
+});
+
+test('movement remains locked and a reset cancels even retained callbacks from the old roll', () => {
+  const pending = quest.answerQuestCard(quest.drawQuestCard(active(), () => 0), 0), view = mount({ state: pending });
+  const newGame = view.button('New game')!.props.onClick; view.random(.99); view.click('Roll two dice →');
+  const oldCallbacks = [...view.timers.values()].map(timer => timer.callback);
+  view.advance(2685); assert.equal(presentedPosition(view), 1);
+  const next = view.button('Next team →')!; assert.equal(next.props.disabled, true); view.invoke(next.props.onClick); assert.equal(view.state().currentTeamIndex, 0);
+  view.invoke(newGame); view.click('Start new game'); const freshId = view.state().id;
+  oldCallbacks.forEach(callback => view.invoke(callback)); view.advance(5000);
+  assert.equal(view.state().id, freshId); assert.equal(view.state().phase, 'questions'); assert.equal(diceDialog(view), undefined); assert.equal(view.timers.size, 0); view.unmount();
 });

@@ -16,7 +16,7 @@ The public **Party games** library offers **Mafia**, **Starship Suspects**, **Sk
 
 Online hosts can set a custom **passphrase** when creating a private room. Guests enter it on that game's landing page to join without copying an invitation link. This works for all six party games and supported arcade multiplayer, including Asteroids versus. See [passphrase sharing](docs/ROOM_PASSPHRASES.md).
 
-**Quiz Circuit** adds an original four-team, shared-screen board race: enter custom multiple-choice cards, pick the first team at random, answer for points, and roll to move. The first team to finish wins while everyone continues to the finish. Questions and progress stay in the host browser. See [Quiz Circuit](docs/QUESTION_QUEST.md).
+**Quiz Circuit** adds an original four-team, shared-screen board race: enter custom multiple-choice cards, pick the first team at random, answer for points, and roll two animated dice to move the team's piece along the board. The first team to finish wins while everyone continues to the finish. Questions and progress stay in the host browser. See [Quiz Circuit](docs/QUESTION_QUEST.md).
 
 All six online party games support **AI players**. Create a room, add an AI opponent or fill the seats needed to start, then start when ready. Friends and AI can play together, and every AI seat is labeled. Built-in agents make legal moves without paid AI provider calls. Sketch & Guess uses a bundled trained doodle classifier over visible ink; it never sees the artist's secret answer. Mafia can use an automatic narrator so a solo host gets to play. See [AI opponents](docs/PARTY_GAMES.md#ai-opponents) and [drawing recognition](docs/SKETCH_RECOGNITION.md).
 
