@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-labelledby="title">
+  <title id="title">Aura Farmer</title>
+  <path d="m63 7 13 16 22-8-2 24 23 11-16 17 10 22-25 3-4 24-22-11-21 13-7-24-24-1 9-23L7 53l21-14-3-23 24 6Z" fill="#a9dfad" stroke="#fffdf5" stroke-width="10" stroke-linejoin="round"/>
+  <g stroke="#172c26" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="m63 7 13 16 22-8-2 24 23 11-16 17 10 22-25 3-4 24-22-11-21 13-7-24-24-1 9-23L7 53l21-14-3-23 24 6Z" fill="#a9dfad" stroke-width="3"/>
+    <path d="M35 80c-4-9-8-20-5-33 3-17 16-26 33-25 22 1 33 16 31 36l-1 18c14 12 11 31-3 36H39c-17-5-18-21-4-32Z" fill="#ffde08"/>
+    <path d="M42 85c14 10 31 10 45 0l7 25H34Z" fill="#004c1c" stroke="none"/>
+    <path d="m29 43 29 3 6 8 6-7 27-3-5 23-22 1-6-10-6 11-22-2Z" fill="#172c26" stroke-width="3"/>
+    <path d="m38 49 13 2m24 0 12-2" fill="none" stroke="#fffdf5" stroke-width="3"/>
+    <path d="M72 66c14-1 27 1 36 9-11 10-25 11-38 4Z" fill="#f69b43"/>
+    <path d="m76 75 22 1" fill="none" stroke-width="2.5"/>
+    <path d="m18 34 2-7 2 7 7 2-7 2-2 7-2-7-7-2Zm85-10 2-7 2 7 7 2-7 2-2 7-2-7-7-2Z" fill="#fffdf5" stroke-width="2.5"/>
+    <path d="m51 95 5 6 11-12" fill="none" stroke="#ffde08" stroke-width="4"/>
+  </g>
+</svg>

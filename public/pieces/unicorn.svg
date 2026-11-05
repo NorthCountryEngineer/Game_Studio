@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-labelledby="title">
+  <title id="title">Absolute Cinema</title>
+  <path d="M28 54c-11-5-8-20 4-22-4-12 9-21 20-14 6-12 24-12 30 0 14-6 24 5 18 15 13 1 16 16 5 22l-15 59H40Z" fill="#fff1cb" stroke="#fffdf5" stroke-width="11" stroke-linejoin="round"/>
+  <g stroke="#172c26" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="m36 75-14-8-13-18c-3-5 2-8 5-4l6 7-5-17c-1-5 5-7 7-2l5 17-1-14c0-5 6-5 7 0l2 18 5-5c4-3 8 1 5 5l-7 10Z" fill="#efb56e"/>
+    <path d="m92 75 14-8 13-18c3-5-2-8-5-4l-6 7 5-17c1-5-5-7-7-2l-5 17 1-14c0-5-6-5-7 0l-2 18-5-5c-4-3-8 1-5 5l7 10Z" fill="#efb56e"/>
+    <path d="M28 54c-11-5-8-20 4-22-4-12 9-21 20-14 6-12 24-12 30 0 14-6 24 5 18 15 13 1 16 16 5 22Z" fill="#fff1cb"/>
+    <path d="m39 29 5 7 9-3m14-14-3 13 9 5m16 3-6 6" fill="none" stroke="#d6af62" stroke-width="3"/>
+    <path d="M30 54h70l-11 60H41Z" fill="#ec7d68"/>
+    <path d="m40 57 7 54h9l-4-54m25 0-4 54h9l7-54" fill="#fffdf5" stroke="none"/>
+    <path d="M32 54h66v10H32Z" fill="#ffde08" stroke-width="3"/>
+    <path d="m47 75 10 2m18 0 10-2" fill="none" stroke-width="5"/>
+    <path d="M56 91q9 7 18-1" fill="none" stroke-width="4"/>
+    <path d="M44 111h42" fill="none" stroke="#004c1c" stroke-width="4"/>
+  </g>
+</svg>

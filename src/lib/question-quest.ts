@@ -1,10 +1,10 @@
 export const QUEST_BOARD_LENGTH = 28;
 export const QUESTION_QUEST_STORAGE_KEY = 'game-studio-question-quest-v1';
 export const QUESTION_QUEST_AVATARS = [
-  { id: 'fox', label: 'Fox', emoji: '🦊' }, { id: 'panda', label: 'Panda', emoji: '🐼' },
-  { id: 'frog', label: 'Frog', emoji: '🐸' }, { id: 'owl', label: 'Owl', emoji: '🦉' },
-  { id: 'dragon', label: 'Dragon', emoji: '🐲' }, { id: 'penguin', label: 'Penguin', emoji: '🐧' },
-  { id: 'robot', label: 'Robot', emoji: '🤖' }, { id: 'unicorn', label: 'Unicorn', emoji: '🦄' },
+  { id: 'fox', label: 'Mewing Cat', emoji: '🦊', image: '/pieces/fox.svg' }, { id: 'panda', label: 'Aura Farmer', emoji: '🐼', image: '/pieces/panda.svg' },
+  { id: 'frog', label: 'Locked In', emoji: '🐸', image: '/pieces/frog.svg' }, { id: 'owl', label: 'Cooked Toast', emoji: '🦉', image: '/pieces/owl.svg' },
+  { id: 'dragon', label: 'Six Seven', emoji: '🐲', image: '/pieces/dragon.svg' }, { id: 'penguin', label: 'Side Eye', emoji: '🐧', image: '/pieces/penguin.svg' },
+  { id: 'robot', label: 'NPC Buffering', emoji: '🤖', image: '/pieces/robot.svg' }, { id: 'unicorn', label: 'Absolute Cinema', emoji: '🦄', image: '/pieces/unicorn.svg' },
 ] as const;
 export type QuestAvatar = typeof QUESTION_QUEST_AVATARS[number]['id'];
 export type QuestQuestion = { id: string; prompt: string; choices: string[]; correctIndex: number };

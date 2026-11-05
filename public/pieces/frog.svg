@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-labelledby="title">
+  <title id="title">Locked In</title>
+  <path d="M19 45C17 23 33 10 64 10s47 13 45 35l6 9v30l-12 9-9 20H34L24 94 12 85V55Z" fill="#9cc960" stroke="#fffdf5" stroke-width="11" stroke-linejoin="round"/>
+  <g stroke="#172c26" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M24 48C21 21 40 13 64 13s43 8 40 35" fill="none" stroke-width="16"/>
+    <path d="M24 48C21 21 40 13 64 13s43 8 40 35" fill="none" stroke="#a69cdb" stroke-width="8"/>
+    <path d="M30 44 43 31h41l15 15 8 37-17 26H39L21 83Z" fill="#a8d36a"/>
+    <path d="m29 78 17 16h39l16-16-11 31H39Z" fill="#7faf4f" stroke="none"/>
+    <path d="m33 51 23 7-4 17H35Zm39 7 23-7-2 24H76Z" fill="#fffdf5" stroke-width="3"/>
+    <path d="M48 60v9m32-9v9" fill="none" stroke-width="7"/>
+    <path d="m32 47 25 8m15 0 25-9M47 88h34m-25-47 8 5 8-5" fill="none" stroke-width="4"/>
+    <rect x="12" y="48" width="17" height="40" rx="7" fill="#8172b3"/>
+    <rect x="99" y="48" width="17" height="40" rx="7" fill="#8172b3"/>
+    <path d="M107 85v13H91" fill="none" stroke-width="5"/>
+    <rect x="82" y="93" width="14" height="8" rx="4" fill="#ffde08" stroke-width="3"/>
+    <path d="M46 110h37" fill="none" stroke="#004c1c" stroke-width="6"/>
+  </g>
+</svg>
