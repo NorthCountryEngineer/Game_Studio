@@ -10,7 +10,8 @@ export type QuestAvatar = typeof QUESTION_QUEST_AVATARS[number]['id'];
 export type QuestQuestion = { id: string; prompt: string; choices: string[]; correctIndex: number };
 export type QuestTeamSetup = { id: string; name: string; avatar: QuestAvatar };
 export type QuestTeam = QuestTeamSetup & { position: number; points: number };
-export type QuestTurn = { stage: 'draw' | 'answer' | 'roll' | 'complete'; questionId: string | null; selectedIndex: number | null; correct: boolean | null; roll: number | null };
+export type QuestDice = [number, number];
+export type QuestTurn = { stage: 'draw' | 'answer' | 'roll' | 'complete'; questionId: string | null; selectedIndex: number | null; correct: boolean | null; roll: number | null; dice?: QuestDice };
 export type QuestState = {
   version: 1; id: string; phase: 'questions' | 'teams' | 'first-team-picker' | 'playing' | 'results';
   questions: QuestQuestion[]; teams: QuestTeam[]; firstTeamIndex: number | null; currentTeamIndex: number | null;
@@ -25,6 +26,7 @@ const ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const AVATARS = new Set<string>(QUESTION_QUEST_AVATARS.map(avatar => avatar.id));
 const PHASES = ['questions', 'teams', 'first-team-picker', 'playing', 'results'];
 const STAGES = ['draw', 'answer', 'roll', 'complete'];
+const MAX_MOVE = 12;
 export class QuestionQuestError extends Error { constructor(message: string) { super(message); this.name = 'QuestionQuestError'; } }
 function fail(message = 'The saved game is invalid. Keep the saved copy and start a new game when ready.'): never { throw new QuestionQuestError(message); }
 const object = (value: unknown): Record<string, any> => value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, any> : fail();
@@ -70,8 +72,15 @@ export function parseQuestionQuest(value: unknown): QuestState {
   const deck: string[] = s.deck.map(identifier), usedQuestionIds: string[] = s.usedQuestionIds.map(identifier), finishOrder: string[] = s.finishOrder.map(identifier);
   const combined = [...deck, ...usedQuestionIds];
   if (new Set(combined).size !== combined.length || combined.some(id => !ids.has(id)) || new Set(finishOrder).size !== finishOrder.length || finishOrder.some(id => !TEAM_IDS.includes(id))) fail();
-  const turn = object(s.turn); exact(turn, ['stage', 'questionId', 'selectedIndex', 'correct', 'roll']);
-  if (!STAGES.includes(turn.stage) || !(turn.questionId === null || typeof turn.questionId === 'string' && ids.has(turn.questionId)) || !(turn.selectedIndex === null || integer(turn.selectedIndex, 0, 3)) || !(turn.correct === null || typeof turn.correct === 'boolean') || !(turn.roll === null || integer(turn.roll, 1, 6))) fail();
+  const turn = object(s.turn), hasDice = Object.hasOwn(turn, 'dice');
+  exact(turn, ['stage', 'questionId', 'selectedIndex', 'correct', 'roll', ...(hasDice ? ['dice'] : [])]);
+  if (!STAGES.includes(turn.stage) || !(turn.questionId === null || typeof turn.questionId === 'string' && ids.has(turn.questionId)) || !(turn.selectedIndex === null || integer(turn.selectedIndex, 0, 3)) || !(turn.correct === null || typeof turn.correct === 'boolean') || !(turn.roll === null || integer(turn.roll, 1, hasDice ? MAX_MOVE : 6))) fail();
+  // An absent tuple is an unchanged legacy single-die result, never an
+  // invitation to invent faces or roll again. New results carry both faces.
+  if (hasDice && (turn.stage !== 'complete' || turn.correct !== true || !Array.isArray(turn.dice)
+      || turn.dice.length !== 2 || Object.keys(turn.dice).length !== 2
+      || !integer(turn.dice[0], 1, 6) || !integer(turn.dice[1], 1, 6)
+      || turn.roll !== turn.dice[0] + turn.dice[1])) fail();
   const playing = s.phase === 'playing' || s.phase === 'results';
   if (!playing) {
     if (teams.some(team => team.position || team.points) || finishOrder.length || deck.length || usedQuestionIds.length || s.turnNumber || !isEmptyTurn(turn)) fail();
@@ -87,16 +96,23 @@ export function parseQuestionQuest(value: unknown): QuestState {
       if (turn.stage === 'answer') { if (turn.selectedIndex !== null || turn.correct !== null || turn.roll !== null) fail(); }
       else {
         if (!integer(turn.selectedIndex, 0, card.choices.length - 1) || turn.correct !== (turn.selectedIndex === card.correctIndex)) fail();
-        if (turn.stage === 'roll' ? turn.correct !== true || turn.roll !== null : turn.correct ? !integer(turn.roll, 1, 6) : turn.roll !== null) fail();
+        if (turn.stage === 'roll' ? turn.correct !== true || turn.roll !== null : turn.correct ? !integer(turn.roll, 1, hasDice ? MAX_MOVE : 6) : turn.roll !== null) fail();
       }
     }
-    if (teams.some((team, index) => team.points < Math.ceil(team.position / 6) || team.points > team.position + (index === s.currentTeamIndex && turn.stage === 'roll' ? 1 : 0))) fail();
-    if (turn.stage === 'roll' && active.points < Math.ceil(active.position / 6) + 1 || teams.reduce((sum, team) => sum + team.points, 0) > s.turnNumber) fail();
+    // Earlier turns may mix legacy one-die moves with new two-dice moves.
+    if (teams.some((team, index) => team.points < Math.ceil(team.position / MAX_MOVE) || team.points > team.position + (index === s.currentTeamIndex && turn.stage === 'roll' ? 1 : 0))) fail();
+    if (turn.stage === 'roll' && active.points < Math.ceil(active.position / MAX_MOVE) + 1 || teams.reduce((sum, team) => sum + team.points, 0) > s.turnNumber) fail();
+    if (turn.stage === 'complete' && turn.correct) {
+      const previousPoints = active.points - 1;
+      const previousMin = active.position === QUEST_BOARD_LENGTH ? Math.max(0, QUEST_BOARD_LENGTH - turn.roll) : active.position - turn.roll;
+      const previousMax = active.position === QUEST_BOARD_LENGTH ? QUEST_BOARD_LENGTH - 1 : previousMin;
+      if (previousPoints < 0 || Math.max(previousMin, previousPoints, 0) > Math.min(previousMax, previousPoints * MAX_MOVE, QUEST_BOARD_LENGTH - 1)) fail();
+    }
     if (active.position === QUEST_BOARD_LENGTH && !(turn.stage === 'complete' && turn.correct && turn.roll !== null && finishOrder.at(-1) === active.id)) fail();
     if (s.phase === 'results' ? finishOrder.length !== 4 || turn.stage !== 'complete' : finishOrder.length === 4) fail();
   }
   if (teams.some(team => (team.position === QUEST_BOARD_LENGTH) !== finishOrder.includes(team.id))) fail();
-  return { version: 1, id: identifier(s.id), phase: s.phase, questions, teams, firstTeamIndex: s.firstTeamIndex, currentTeamIndex: s.currentTeamIndex, deck, usedQuestionIds, turn: { stage: turn.stage, questionId: turn.questionId, selectedIndex: turn.selectedIndex, correct: turn.correct, roll: turn.roll }, finishOrder, turnNumber: s.turnNumber };
+  return { version: 1, id: identifier(s.id), phase: s.phase, questions, teams, firstTeamIndex: s.firstTeamIndex, currentTeamIndex: s.currentTeamIndex, deck, usedQuestionIds, turn: { stage: turn.stage, questionId: turn.questionId, selectedIndex: turn.selectedIndex, correct: turn.correct, roll: turn.roll, ...(hasDice ? { dice: [turn.dice[0], turn.dice[1]] as QuestDice } : {}) }, finishOrder, turnNumber: s.turnNumber };
 }
 
 export function createQuestionQuest(id: string): QuestState {
@@ -163,11 +179,12 @@ export function answerQuestCard(value: QuestState, choice: number): QuestState {
   state.turn = { ...state.turn, selectedIndex: choice, correct, stage: correct ? 'roll' : 'complete' }; return parseQuestionQuest(state);
 }
 export function rollQuestDie(value: QuestState, rng: QuestRandom): QuestState {
-  const state = parseQuestionQuest(value); if (state.phase !== 'playing' || state.turn.stage !== 'roll') fail('A correct answer permits exactly one die roll.');
-  const roll = 1 + Math.floor(random(rng) * 6), team = state.teams[state.currentTeamIndex!];
+  const state = parseQuestionQuest(value); if (state.phase !== 'playing' || state.turn.stage !== 'roll') fail('A correct answer permits exactly one roll of both dice.');
+  const dice: QuestDice = [1 + Math.floor(random(rng) * 6), 1 + Math.floor(random(rng) * 6)];
+  const roll = dice[0] + dice[1], team = state.teams[state.currentTeamIndex!];
   team.position = Math.min(QUEST_BOARD_LENGTH, team.position + roll);
   if (team.position === QUEST_BOARD_LENGTH) state.finishOrder.push(team.id);
-  state.turn = { ...state.turn, stage: 'complete', roll };
+  state.turn = { ...state.turn, stage: 'complete', roll, dice };
   if (state.finishOrder.length === 4) state.phase = 'results';
   return parseQuestionQuest(state);
 }

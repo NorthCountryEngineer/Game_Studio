@@ -19,6 +19,13 @@ function freeze<T>(value: T): T { if (value && typeof value === 'object') { Obje
 const reject = (value: unknown) => assert.throws(() => parseQuestionQuest(value), QuestionQuestError);
 function store(initial?: string) { const data = new Map<string, string>(initial === undefined ? [] : [[QUESTION_QUEST_STORAGE_KEY, initial]]); return { data, getItem: (key: string) => data.get(key) ?? null, setItem: (key: string, value: string) => { data.set(key, value); } }; }
 function wrongTurn(state: QuestState) { return answerQuestCard(drawQuestCard(state, () => 0), 1); }
+function legacyComplete(roll = 6): QuestState {
+  const state = answerQuestCard(drawQuestCard(playing(), () => 0), 0);
+  state.teams[0].position = roll;
+  state.turn = { stage: 'complete', questionId: 'card-1', selectedIndex: 0, correct: true, roll };
+  return state;
+}
+function faces(...values: number[]) { let at = 0; return () => { assert.ok(at < values.length, 'only the supplied independent dice samples are consumed'); return (values[at++] - 0.5) / 6; }; }
 
 test('new games have four stable teams, an empty private bank, and a fixed 28-space track', () => {
   const s = createQuestionQuest('stable-quest_1'); assert.equal(s.phase, 'questions'); assert.equal(s.id, 'stable-quest_1'); assert.equal(s.version, 1);
@@ -67,16 +74,64 @@ test('a wrong answer can be submitted only once, scores nothing, and permits no 
 test('a correct answer adds one point and permits exactly one roll before the turn can pass', () => {
   const drawn = drawQuestCard(playing(), () => 0), answered = answerQuestCard(drawn, 0); assert.equal(answered.turn.stage, 'roll'); assert.equal(answered.teams[0].points, 1); assert.equal(answered.teams[0].position, 0);
   assert.throws(() => nextQuestTeam(answered), /finish its allowed roll/); assert.throws(() => answerQuestCard(answered, 1), /only once/);
-  const moved = rollQuestDie(freeze(answered), () => 0.5); assert.equal(moved.turn.roll, 4); assert.equal(moved.teams[0].position, 4); assert.equal(moved.teams[0].points, 1); assert.equal(moved.turn.stage, 'complete');
+  const moved = rollQuestDie(freeze(answered), faces(2, 6)); assert.deepEqual(moved.turn.dice, [2, 6]); assert.equal(moved.turn.roll, 8); assert.equal(moved.teams[0].position, 8); assert.equal(moved.teams[0].points, 1); assert.equal(moved.turn.stage, 'complete');
   assert.throws(() => rollQuestDie(moved, () => 0), /exactly one/); assert.equal(answered.teams[0].position, 0); assert.equal(nextQuestTeam(moved).turn.stage, 'draw');
 });
 
-test('all six die faces have equal random intervals with correct boundary behavior', () => {
+test('both dice independently cover all six faces and their 36 outcomes produce the expected sum distribution', () => {
   const ready = freeze(answerQuestCard(drawQuestCard(playing(), () => 0), 0));
-  for (let face = 1; face <= 6; face++) { assert.equal(rollQuestDie(ready, () => (face - 0.5) / 6).turn.roll, face); assert.equal(rollQuestDie(ready, () => (face - 1) / 6).turn.roll, face); }
-  assert.equal(rollQuestDie(ready, () => 1 - Number.EPSILON).turn.roll, 6);
+  const counts = Array<number>(11).fill(0);
+  for (let first = 1; first <= 6; first++) for (let second = 1; second <= 6; second++) {
+    const moved = rollQuestDie(ready, faces(first, second)); assert.deepEqual(moved.turn.dice, [first, second]); assert.equal(moved.turn.roll, first + second); assert.equal(moved.teams[0].position, first + second); assert.equal(moved.teams[0].points, 1); counts[moved.turn.roll! - 2]++;
+  }
+  assert.deepEqual(counts, [1, 2, 3, 4, 5, 6, 5, 4, 3, 2, 1]);
+  for (let face = 1; face <= 6; face++) { const rolled = rollQuestDie(ready, () => (face - 1) / 6); assert.deepEqual(rolled.turn.dice, [face, face]); assert.equal(rolled.turn.roll, face * 2); }
+  assert.deepEqual(rollQuestDie(ready, () => 0).turn.dice, [1, 1]); assert.equal(rollQuestDie(ready, () => 0).turn.roll, 2);
+  assert.deepEqual(rollQuestDie(ready, () => 1 - Number.EPSILON).turn.dice, [6, 6]); assert.equal(rollQuestDie(ready, () => 1 - Number.EPSILON).turn.roll, 12);
   for (const value of [NaN, Infinity, -1, 1]) assert.throws(() => rollQuestDie(ready, () => value), QuestionQuestError);
   for (const choice of [-1, 2, 0.5, NaN, '0']) assert.throws(() => answerQuestCard(drawQuestCard(playing(), () => 0), choice as number), QuestionQuestError);
+});
+
+test('an invalid second random sample leaves the saved answer and its point untouched', () => {
+  const ready = freeze(answerQuestCard(drawQuestCard(playing(), () => 0), 0)), raw = serializeQuestionQuest(ready);
+  let calls = 0; assert.throws(() => rollQuestDie(ready, () => ++calls === 1 ? 0.5 : NaN), QuestionQuestError); assert.equal(calls, 2); assert.equal(serializeQuestionQuest(ready), raw); assert.equal(ready.teams[0].points, 1); assert.equal(ready.teams[0].position, 0); assert.equal(ready.turn.dice, undefined);
+});
+
+test('legacy version-one single-die results load and save exactly without inventing faces or permitting a reroll', () => {
+  for (let total = 1; total <= 6; total++) {
+    const old = freeze(legacyComplete(total)), raw = JSON.stringify(old), saved = store(raw), loaded = readQuestionQuest(saved)!;
+    assert.equal(loaded.turn.roll, total); assert.equal(Object.hasOwn(loaded.turn, 'dice'), false); assert.equal(loaded.teams[0].position, total); assert.equal(loaded.teams[0].points, 1); assert.equal(serializeQuestionQuest(loaded), raw); assert.equal(loadQuestionQuest(saved).status, 'ready');
+    let samples = 0; assert.throws(() => rollQuestDie(loaded, () => { samples++; return 0; }), /exactly one/); assert.equal(samples, 0);
+    const projected = projectQuestionQuest(loaded); assert.equal(Object.hasOwn(projected.turn, 'dice'), false); assert.equal(projected.turn.roll, total);
+  }
+});
+
+test('continuing a legacy save uses two dice only for the next allowed roll and preserves prior movement', () => {
+  const old = readQuestionQuest(store(JSON.stringify(legacyComplete(5))))!;
+  const next = rollQuestDie(answerQuestCard(drawQuestCard(nextQuestTeam(old), () => 0), 0), faces(2, 6));
+  assert.deepEqual(next.turn.dice, [2, 6]); assert.equal(next.turn.roll, 8); assert.equal(next.teams[0].position, 5); assert.equal(next.teams[0].points, 1); assert.equal(next.teams[1].position, 8); assert.equal(next.teams[1].points, 1);
+  assert.deepEqual(readQuestionQuest(store(serializeQuestionQuest(next))), next); const passed = nextQuestTeam(next); assert.equal(Object.hasOwn(passed.turn, 'dice'), false); assert.equal(passed.teams[1].position, 8);
+});
+
+test('legacy completed matches retain all positions and points and rematch without a schema migration', () => {
+  const old = legacyComplete(1); old.phase = 'results'; old.currentTeamIndex = 3; old.turnNumber = 112; old.finishOrder = old.teams.map(team => team.id); old.teams = old.teams.map(team => ({ ...team, position: 28, points: 28 }));
+  const raw = JSON.stringify(old), loaded = readQuestionQuest(store(raw))!; assert.equal(serializeQuestionQuest(loaded), raw); assert.equal(loaded.version, 1); assert.equal(loaded.turn.roll, 1); assert.equal(Object.hasOwn(loaded.turn, 'dice'), false);
+  const reset = rematchQuestionQuest(loaded); assert.equal(reset.phase, 'first-team-picker'); assert.ok(reset.teams.every(team => team.position === 0 && team.points === 0)); assert.equal(Object.hasOwn(reset.turn, 'dice'), false);
+});
+
+test('two-dice parsing rejects forged faces, totals, stages, and movement instead of silently treating them as legacy', () => {
+  const completed = rollQuestDie(answerQuestCard(drawQuestCard(playing(), () => 0), 0), faces(2, 6));
+  for (const dice of [undefined, null, [], [2], [2, 6, 1], ['2', 6], [0, 6], [7, 1], [2.5, 5.5], [NaN, 6], { 0: 2, 1: 6, length: 2 }]) reject({ ...completed, turn: { ...completed.turn, dice } });
+  const extra = [2, 6] as number[] & { extra?: boolean }; extra.extra = true; reject({ ...completed, turn: { ...completed.turn, dice: extra } });
+  for (const total of [null, 0, 1, 7, 9, 13, 8.5]) reject({ ...completed, turn: { ...completed.turn, roll: total } });
+  const absent = clone(completed); delete absent.turn.dice; reject(absent);
+  for (const phase of [playing(), drawQuestCard(playing(), () => 0), answerQuestCard(drawQuestCard(playing(), () => 0), 0), wrongTurn(playing()), createQuestionQuest('setup')]) reject({ ...phase, turn: { ...phase.turn, dice: [1, 1] } });
+  for (const position of [7, 9, 28]) reject({ ...completed, teams: completed.teams.map((team, index) => index === 0 ? { ...team, position } : team) });
+});
+
+test('new dice tuples round-trip by value and cannot mutate the private save through parsing or projection', () => {
+  const completed = freeze(rollQuestDie(answerQuestCard(drawQuestCard(playing(), () => 0), 0), faces(1, 6))), raw = serializeQuestionQuest(completed), parsed = parseQuestionQuest(completed), publicState = projectQuestionQuest(completed);
+  parsed.turn.dice![0] = 6; publicState.turn.dice![1] = 1; assert.deepEqual(completed.turn.dice, [1, 6]); assert.equal(completed.turn.roll, 7); assert.equal(serializeQuestionQuest(completed), raw); assert.deepEqual(readQuestionQuest(store(raw)), completed);
 });
 
 test('turn order rotates strictly from any chosen first team', () => {
@@ -112,11 +167,11 @@ test('a complete legal match caps movement, celebrates the first winner, skips f
   while (s.phase !== 'results') {
     assert.ok(++turns <= 100); const i = s.currentTeamIndex!, before = s.teams[i].position;
     assert.ok(before < 28); s = rollQuestDie(answerQuestCard(drawQuestCard(s, () => 0), 0), () => i === 0 ? 0.99 : 0);
-    assert.equal(s.teams[i].position, Math.min(28, before + (i === 0 ? 6 : 1)));
+    assert.equal(s.teams[i].position, Math.min(28, before + (i === 0 ? 12 : 2)));
     if (s.finishOrder.length) { firstWinner ??= s.finishOrder[0]; assert.equal(projectQuestionQuest(s).winnerTeamId, firstWinner); }
     if (s.phase !== 'results') { s = nextQuestTeam(s); assert.ok(s.teams[s.currentTeamIndex!].position < 28); }
   }
-  assert.equal(turns, 89); assert.equal(firstWinner, 'team-1'); assert.deepEqual(s.finishOrder, ['team-1', 'team-2', 'team-3', 'team-4']); assert.deepEqual(s.teams.map(t => t.points), [5, 28, 28, 28]); assert.ok(s.teams.every(t => t.position === 28));
+  assert.equal(turns, 45); assert.equal(firstWinner, 'team-1'); assert.deepEqual(s.finishOrder, ['team-1', 'team-2', 'team-3', 'team-4']); assert.deepEqual(s.teams.map(t => t.points), [3, 14, 14, 14]); assert.ok(s.teams.every(t => t.position === 28));
   assert.throws(() => nextQuestTeam(s), QuestionQuestError); assert.throws(() => drawQuestCard(s, () => 0), QuestionQuestError);
   const rematch = rematchQuestionQuest(freeze(s)); assert.equal(rematch.phase, 'first-team-picker'); assert.equal(rematch.firstTeamIndex, null); assert.deepEqual(rematch.questions, s.questions); assert.deepEqual(rematch.teams.map(t => [t.id, t.name, t.avatar]), s.teams.map(t => [t.id, t.name, t.avatar])); assert.ok(rematch.teams.every(t => !t.position && !t.points)); assert.deepEqual(rematch.finishOrder, []); assert.equal(startQuestionQuest(pickFirstQuestTeam(rematch, () => 0)).turnNumber, 1);
 });
