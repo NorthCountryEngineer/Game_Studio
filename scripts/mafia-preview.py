@@ -12,7 +12,7 @@ import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -65,9 +65,12 @@ def main():
                 length = int(self.headers.get('Content-Length', '0'))
                 if length > 16000: raise mafia.MafiaError(413, 'Request is too large.')
                 body = json.loads(self.rfile.read(length) or b'{}')
-                path = urlsplit(self.path).path
+                location = urlsplit(self.path)
+                path = location.path
                 adapter = party if path.startswith('/party/') else mafia
-                result = adapter.dispatch(api, {'headers': dict(self.headers), 'requestContext': {'http': {'sourceIp': '127.0.0.1'}}}, method, path, body)
+                result = adapter.dispatch(api, {'headers': dict(self.headers),
+                    'queryStringParameters': {key: ','.join(values) for key, values in parse_qs(location.query, keep_blank_values=True).items()},
+                    'requestContext': {'http': {'sourceIp': '127.0.0.1'}}}, method, path, body)
                 status = 200
             except (mafia.MafiaError, party.PartyError) as error: result, status = {'error': error.message}, error.status
             except Exception as error:

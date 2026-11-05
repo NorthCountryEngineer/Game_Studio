@@ -50,7 +50,7 @@ class PartyAPITests(unittest.TestCase):
             'playerToken': capability(room_id), 'inviteToken': capability('invite-' + room_id), **values}
 
     def request_event(self, player_id=None, ip='192.0.2.5'):
-        return {'requestContext': {'http': {'sourceIp': ip}}, 'headers':
+        return {'requestContext': {'http': {'sourceIp': ip}}, 'queryStringParameters': {'sketchRecognition': '1'}, 'headers':
             {'authorization': 'Bearer ' + self.sessions[player_id]['token']} if player_id else {}}
 
     def create(self, **values):

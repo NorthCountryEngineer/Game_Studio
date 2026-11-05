@@ -54,6 +54,51 @@ test('a three-minute round can reach its nine-second server cadence and complete
   h.scheduler.update(current, session); h.advance(180000); await h.settle(); assert.equal(h.requests.length, 4); assert.equal(h.timers.size, 0); h.scheduler.close();
 });
 
+test('a completed static drawing retries temporary unavailability and stale results until recognition succeeds', async () => {
+  for (const status of ['unavailable', 'stale'] as const) {
+    let count = 0; const delay = status === 'unavailable' ? 10000 : 3000;
+    const h = harness(async target => ({ ...ack(target, ++count === 1 ? status : 'ready'), retryAfterMs: count === 1 ? delay : 3000 })), current = room();
+    h.scheduler.update(current, session); h.advance(); await h.settle();
+    // Repeated unchanged poll snapshots must not cancel the pending recovery.
+    h.scheduler.update({ ...current }, session); h.advance(delay - 1); assert.equal(h.requests.length, 1);
+    h.advance(1); await h.settle(); assert.equal(h.requests.length, 2); assert.deepEqual(h.requests.map(request => request.at), [0, delay]);
+    assert.deepEqual(h.requests[1].target, h.requests[0].target);
+    h.scheduler.update({ ...current }, session); h.advance(60000); await h.settle(); assert.equal(h.requests.length, 2); assert.equal(h.timers.size, 0); h.scheduler.close();
+  }
+});
+
+test('server and network cooldowns start after a slow response, with one initial attempt plus three retries', async () => {
+  for (const status of ['busy', 'unavailable', 'stale', 'network'] as const) {
+    const pending = deferred<PartyRecognitionAck>(), delay = status === 'unavailable' ? 10000 : 3000; let count = 0;
+    const h = harness(async target => {
+      if (++count === 1) return pending.promise;
+      if (status === 'network') throw new Error('Offline');
+      return { ...ack(target, status), retryAfterMs: delay };
+    });
+    h.scheduler.update(room(), session); h.advance(); h.advance(7000); assert.equal(h.requests.length, 1);
+    if (status === 'network') pending.reject(new Error('Offline')); else pending.resolve({ ...ack(h.requests[0].target, status), retryAfterMs: delay });
+    await h.settle(); h.advance(delay - 1); assert.equal(h.requests.length, 1);
+    for (let retry = 0; retry < 3; retry++) { h.advance(retry ? delay : 1); await h.settle(); }
+    assert.equal(h.requests.length, 4); assert.deepEqual(h.requests.map(request => request.at), [0, 7000 + delay, 7000 + delay * 2, 7000 + delay * 3]);
+    h.scheduler.update(room(), session); h.advance(60000); await h.settle(); assert.equal(h.requests.length, 4); assert.equal(h.timers.size, 0); h.scheduler.close();
+  }
+});
+
+test('stale work cannot retry an old hash, and an unavailable cooldown survives a clear but not a new phase', async () => {
+  const pending = deferred<PartyRecognitionAck>(); let count = 0; const first = room(), second = room({ game: { ...first.game, inkSha256: 'b'.repeat(64) } });
+  const h = harness(async target => ++count === 1 ? pending.promise : ack(target)); h.scheduler.update(first, session); h.advance();
+  h.scheduler.update(second, session); h.advance(7000); pending.resolve(ack(h.requests[0].target, 'stale')); await h.settle(); h.advance(); await h.settle();
+  assert.equal(h.requests.length, 2); assert.equal(h.requests[1].target.inkSha256, second.game.inkSha256); assert.equal(h.requests[1].at, 7000); h.scheduler.close();
+  for (const newPhase of [false, true]) {
+    const wait = harness(async target => ({ ...ack(target, 'unavailable'), retryAfterMs: 10000 })); wait.scheduler.update(first, session); wait.advance(); await wait.settle();
+    wait.advance(1000); wait.scheduler.update(room({ game: { ...first.game, drawingEpoch: 1, strokes: [], inkSha256: undefined } }), session);
+    wait.scheduler.update(room({ phaseId: newPhase ? 2 : 1, game: { ...first.game, drawingEpoch: 1, inkSha256: 'c'.repeat(64) } }), session);
+    wait.advance(2000); await wait.settle(); assert.equal(wait.requests.length, newPhase ? 2 : 1);
+    if (!newPhase) { wait.advance(6999); assert.equal(wait.requests.length, 1); wait.advance(1); await wait.settle(); assert.equal(wait.requests.length, 2); }
+    wait.scheduler.close();
+  }
+});
+
 test('phase, clear, room and session changes abort and fence old work without waiting on old promises', async () => {
   for (const change of ['phase', 'epoch', 'room', 'token', 'clear']) {
     const pending: ReturnType<typeof deferred<PartyRecognitionAck>>[] = [], h = harness(async () => { const d = deferred<PartyRecognitionAck>(); pending.push(d); return d.promise; }), base = room();

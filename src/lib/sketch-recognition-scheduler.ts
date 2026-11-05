@@ -25,13 +25,13 @@ function recognitionTarget(room?: PartyRoom, session?: PartySession): SketchReco
 /** Independent, bounded work: never joins the room poll/action/drawing queue. */
 export function createSketchRecognitionScheduler(ports: RecognitionPorts): SketchRecognitionScheduler {
   const now = ports.now ?? Date.now;
-  let closed = false, scope = '', target: SketchRecognitionTarget | undefined, timer: Timer | undefined, lastStartedAt = -Infinity;
+  let closed = false, scope = '', cadenceScope = '', target: SketchRecognitionTarget | undefined, timer: Timer | undefined, lastStartedAt = -Infinity, notBefore = 0;
   let flight: { controller: AbortController; scope: string; hash: string } | undefined;
   const handled = new Set<string>(), attempts = new Map<string, number>();
   function cancelTimer() { if (timer !== undefined) ports.clearTimeout(timer); timer = undefined; }
   function schedule() {
     if (closed || !target || flight || handled.has(target.inkSha256) || timer !== undefined) return;
-    timer = ports.setTimeout(() => { timer = undefined; start(); }, Math.max(0, lastStartedAt + SPACING_MS - now()));
+    timer = ports.setTimeout(() => { timer = undefined; start(); }, Math.max(0, lastStartedAt + SPACING_MS - now(), notBefore - now()));
   }
   function start() {
     if (closed || !target || flight || handled.has(target.inkSha256)) return;
@@ -39,8 +39,17 @@ export function createSketchRecognitionScheduler(ports: RecognitionPorts): Sketc
     flight = work; lastStartedAt = now(); attempts.set(work.hash, (attempts.get(work.hash) ?? 0) + 1);
     void ports.request(snapshot, work.controller.signal).then(ack => {
       if (closed || flight !== work || scope !== work.scope) return;
-      if (ack.status !== 'busy') handled.add(work.hash);
-    }).catch(() => { /* Transient recognition errors never block or replace gameplay. */ }).finally(() => {
+      if (ack.status === 'ready' || ack.status === 'cached' || ack.status === 'idle') handled.add(work.hash);
+      else if (ack.status !== 'stale' || target?.inkSha256 === work.hash) {
+        // A temporary failure is not a completed drawing. Honor cooldowns from
+        // the response time, including a slow request's full retry interval.
+        const delay = Number.isFinite(ack.retryAfterMs) ? Math.max(SPACING_MS, ack.retryAfterMs) : SPACING_MS;
+        notBefore = Math.max(notBefore, now() + delay);
+      }
+    }).catch(() => {
+      if (!closed && flight === work && scope === work.scope) notBefore = Math.max(notBefore, now() + SPACING_MS);
+      /* Transient recognition errors never block or replace gameplay. */
+    }).finally(() => {
       if (closed || flight !== work || scope !== work.scope) return;
       flight = undefined;
       // One initial attempt plus three bounded retries reaches the longest
@@ -56,6 +65,9 @@ export function createSketchRecognitionScheduler(ports: RecognitionPorts): Sketc
     update(room, session) {
       if (closed) return;
       const next = recognitionTarget(room, session);
+      const nextCadenceScope = room?.kind === 'sketch-guess' && room.status === 'playing' && room.phase === 'draw' ? `${room.roomId}:${room.phaseId}` : '';
+      // Clear retains the room's inference budget; a new phase gets its own.
+      if (nextCadenceScope !== cadenceScope) { cadenceScope = nextCadenceScope; notBefore = 0; }
       const nextScope = next ? `${next.roomId}:${next.phaseId}:${next.drawingEpoch}:${session!.playerId}:${next.token}:${room!.game.artistId}` : '';
       if (nextScope !== scope) {
         cancelTimer(); flight?.controller.abort(); flight = undefined; handled.clear(); attempts.clear(); scope = nextScope;

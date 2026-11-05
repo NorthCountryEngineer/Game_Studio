@@ -266,7 +266,12 @@ def _drawing(view, memory, now):
     # Early partial doodles are often confidently wrong. Wait for public ink
     # to develop and for a label to remain stable; a quiet cached result also
     # qualifies, without repeating inference or looking at the secret prompt.
-    if now < memory['firstInkAt'] + 8 or now < memory['pendingSince'] + 3:
+    # Keep the normal development/stability waits, but leave one final bounded
+    # opportunity when the artist starts late. A newly seen label still needs
+    # at least a full second; no hidden answer affects this public deadline gate.
+    first_ready = min(memory['firstInkAt'] + 8, max(memory['firstInkAt'] + 1, view['deadlineAt'] - 2))
+    stable_ready = min(memory['pendingSince'] + 3, max(memory['pendingSince'] + 1, view['deadlineAt'] - 1))
+    if now < first_ready or now < stable_ready:
         return None
     if guesses and now < memory.get('lastGuessAt', 0) + 6:
         return None

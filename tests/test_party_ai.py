@@ -378,6 +378,36 @@ class PartyAITests(unittest.TestCase):
         action, memory = self.ai.decide(view, memory, 1018)
         self.assertEqual(action['text'], 'sleeping cat')
 
+    def test_late_first_ink_has_a_bounded_opportunity_before_public_deadline(self):
+        view, memory = self.sketch_view(), {}
+        view['deadlineAt'] = 1060
+        view['settings']['roundSeconds'] = 60
+        view['game']['strokes'] = [{'id': 'late-ink', 'color': '#000000', 'width': 3, 'points': [[.1, .2], [.3, .4]]}]
+        view['game']['recognition'] = {'modelVersion': 'synthetic', 'candidates': [{'label': 'moon', 'score': .9}]}
+        action, memory = self.ai.decide(view, memory, 1055)
+        self.assertIsNone(action)
+        action, memory = self.ai.decide(view, memory, 1057)
+        self.assertIsNone(action)
+        action, memory = self.ai.decide(view, memory, 1058)
+        self.assertEqual(action, {'type': 'guess', 'text': 'moon'})
+        self.assertEqual(memory['guesses'], ['moon'])
+
+    def test_final_second_label_still_requires_one_second_and_cannot_bypass_confidence(self):
+        view, memory = self.sketch_view(), {}
+        view.update(deadlineAt=1060)
+        view['game']['strokes'] = [{'id': 'ink', 'color': '#000000', 'width': 3, 'points': [[.1, .2], [.3, .4]]}]
+        view['game']['recognition'] = {'modelVersion': 'synthetic', 'candidates': [{'label': 'moon', 'score': .9}]}
+        _, memory = self.ai.decide(view, memory, 1000)
+        view['game']['recognition']['candidates'] = [{'label': 'cat', 'score': .9}]
+        action, memory = self.ai.decide(view, memory, 1058)
+        self.assertIsNone(action)
+        action, memory = self.ai.decide(view, memory, 1058.5)
+        self.assertIsNone(action)
+        action, memory = self.ai.decide(view, memory, 1059)
+        self.assertEqual(action, {'type': 'guess', 'text': 'sleeping cat'})
+        view['game']['recognition']['candidates'] = [{'label': 'moon', 'score': .24999}]
+        self.assertIsNone(self.ai.decide(view, {}, 1059)[0])
+
     def test_new_ai_games_choose_only_covered_prompts_while_human_games_keep_the_full_bank(self):
         human = engine.add_player(engine.new_room(player(1), 'sketch-guess', now=1000), player(2), now=1000)
         with patch.object(engine, '_shuffle', side_effect=lambda values: values) as shuffled:

@@ -358,6 +358,12 @@ def room_request(api, event, room_id, body=None):
         now = int(time.time())
         state, previous = open_room(api, room_id, now)
         actor = member(state, event)
+        seat = next((player for player in state['game']['players'] if player['id'] == actor), {})
+        if (body is None and engine().recognition_guessers(state['game'])
+                and state['game'].get('deadlineAt', 0) > now
+                and seat and not seat.get('left') and not seat.get('isAI')
+                and (event.get('queryStringParameters') or {}).get('sketchRecognition') != '1'):
+            fail('Refresh this page to enable AI guesses. Your room is saved.', 426)
         if body is not None:
             session = state['members'][actor]
             fingerprint = digest(canonical(body))
@@ -421,7 +427,7 @@ def recognition_human(state, event):
 
 
 def recognition_private_bound(game):
-    value = {key: game[key] for key in ('_recognition', '_recognitionJob', '_recognitionBudget') if key in game}
+    value = {key: game[key] for key in ('_recognition', '_recognitionJob', '_recognitionBudget', '_recognitionGeneration', '_recognitionFailure') if key in game}
     if len(canonical(value).encode()) > RECOGNITION_PRIVATE_BYTES:
         fail('The drawing observation is outside its allowed size.', 503)
 
@@ -445,7 +451,9 @@ def recognize_drawing(api, event, room_id, body):
     """Bounded CPU work on a separate request; drawing requests never wait here.
 
     The first CAS claims one authoritative public-ink snapshot. After inference,
-    a second CAS can publish only that exact phase/epoch/ink snapshot. Neither
+    a second CAS can publish only in the same phase/epoch and append-only ink
+    generation. Erasers and compacted/dropped ink invalidate that generation.
+    Neither
     transaction changes a player's sequence, room lease or game progression.
     """
     fields(body, {'phaseId', 'drawingEpoch', 'inkSha256'})
@@ -466,7 +474,9 @@ def recognize_drawing(api, event, room_id, body):
             return recognition_ack(room_id, body, 'idle')
         if binding != body:
             return recognition_ack(room_id, body, 'stale')
-        if engine().recognition_observation(game):
+        # A usable prefix can inform an agent, but only an exact cache can
+        # satisfy this request: new ink must still receive its own CPU turn.
+        if engine().recognition_observation(game, now, exact=True):
             return recognition_ack(room_id, body, 'cached')
         private = game['_game']
         job = private.get('_recognitionJob')
@@ -483,7 +493,9 @@ def recognize_drawing(api, event, room_id, body):
             return recognition_ack(room_id, body, 'idle')
         if budget['nextAt'] > now:
             return recognition_ack(room_id, body, 'busy')
-        private['_recognitionJob'] = {'owner': claim_id, **binding, 'startedAt': now, 'expiresAt': now + RECOGNITION_JOB_SECONDS}
+        generation = private.get('_recognitionGeneration', 0)
+        private['_recognitionJob'] = {'owner': claim_id, **binding, 'generation': generation,
+            'startedAt': now, 'expiresAt': now + RECOGNITION_JOB_SECONDS}
         interval = max(RECOGNITION_INTERVAL, math.ceil(game['settings']['roundSeconds'] / RECOGNITION_PHASE_LIMIT))
         private['_recognitionBudget'] = {'phaseId': game['phaseId'], 'count': budget['count'] + 1, 'nextAt': now + interval}
         recognition_private_bound(private)
@@ -518,12 +530,18 @@ def recognize_drawing(api, event, room_id, body):
         if job.get('owner') != claim_id:
             return recognition_ack(room_id, body, 'stale')
         binding = engine().recognition_binding(game)
-        fresh = binding == body and int(job.get('expiresAt', 0)) > now and game.get('deadlineAt', 0) > now
+        fresh = (binding is not None and binding['phaseId'] == body['phaseId']
+            and binding['drawingEpoch'] == body['drawingEpoch']
+            and private.get('_recognitionGeneration', 0) == generation
+            and int(job.get('expiresAt', 0)) > now and game.get('deadlineAt', 0) > now)
         private.pop('_recognitionJob', None)
         if fresh and not unavailable:
-            private['_recognition'] = {**body, 'modelVersion': model_version, 'candidates': candidates, 'completedAt': now}
+            private['_recognition'] = {**body, 'generation': generation, 'modelVersion': model_version,
+                'candidates': candidates, 'capturedAt': job['startedAt'], 'completedAt': now}
+            private.pop('_recognitionFailure', None)
         elif unavailable and fresh:
             private['_recognitionBudget']['nextAt'] = now + 10
+            private['_recognitionFailure'] = {'generation': generation, 'at': now}
         recognition_private_bound(private)
         if transact(api, [put('game-party-room', room_id, state, previous)]):
             return recognition_ack(room_id, body, 'stale' if not fresh else 'unavailable' if unavailable else 'ready')
