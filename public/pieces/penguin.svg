@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-labelledby="title">
+  <title id="title">Side Eye</title>
+  <path d="M35 54c-7-22 5-39 29-40 28-1 43 14 41 35l-5 26 10 25c-8 18-59 24-81 7l7-30-19-5-5-10Z" fill="#aab8d3" stroke="#fffdf5" stroke-width="11" stroke-linejoin="round"/>
+  <g stroke="#172c26" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M35 54c-7-22 5-39 29-40 28-1 43 14 41 35l-5 26 10 25c-8 18-59 24-81 7l7-30Z" fill="#aab8d3"/>
+    <path d="m37 74 10 17 39 1 14-18 7 25c-15 14-49 15-73 5Z" fill="#7faeac" stroke="none"/>
+    <path d="M35 53 12 62l5 10 20 5 8-13Z" fill="#efb267"/>
+    <path d="m17 64 18 2" fill="none" stroke-width="3"/>
+    <ellipse cx="77" cy="53" rx="24" ry="21" fill="#fffdf5" stroke-width="3.5"/>
+    <ellipse cx="90" cy="56" rx="7" ry="11" fill="#172c26" stroke="none"/>
+    <path d="M54 42c12-4 29-4 47 1l-4-13-33-3Z" fill="#aab8d3" stroke="none"/>
+    <path d="m54 42 47 1" fill="none" stroke-width="5"/>
+    <path d="m46 87 28 12 22-10m-51 17 31-7" fill="none" stroke-width="4"/>
+    <path d="m49 81 8 4 8-2" fill="none" stroke="#004c1c" stroke-width="4"/>
+    <path d="M82 112h12m-47 2h12" fill="none" stroke="#efb267" stroke-width="6"/>
+  </g>
+</svg>

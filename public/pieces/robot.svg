@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-labelledby="title">
+  <title id="title">NPC Buffering</title>
+  <path d="M42 35V16h44v19h10l10 13h9v37h-11v18l-10 11H34l-10-11V85H13V48h11l10-13Z" fill="#a8d2c4" stroke="#fffdf5" stroke-width="11" stroke-linejoin="round"/>
+  <g stroke="#172c26" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="13" y="49" width="16" height="36" rx="5" fill="#ffde08"/>
+    <rect x="99" y="49" width="16" height="36" rx="5" fill="#ffde08"/>
+    <path d="M35 35h58l11 12v56l-10 11H34l-10-11V47Z" fill="#a8d2c4"/>
+    <path d="M34 100h60v13H34Z" fill="#77b4a3" stroke="none"/>
+    <path d="M39 59h17m17 0h17" fill="none" stroke-width="7"/>
+    <path d="M40 83h48" fill="none" stroke-width="4"/>
+    <path d="M52 78v10m12-10v10m12-10v10" fill="none" stroke-width="3"/>
+    <path d="M45 101h9m20 0h9" fill="none" stroke="#004c1c" stroke-width="4"/>
+    <circle cx="64" cy="25" r="17" fill="#fffdf5" stroke="#fffdf5" stroke-width="12"/>
+    <circle cx="64" cy="25" r="17" fill="#fffdf5" stroke-width="9"/>
+    <path d="M64 8a17 17 0 1 1-16 11" fill="none" stroke="#ffde08" stroke-width="5.5"/>
+  </g>
+</svg>

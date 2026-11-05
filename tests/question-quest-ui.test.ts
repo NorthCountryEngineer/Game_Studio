@@ -60,7 +60,7 @@ test('host authors a question, hides its answer key, names four teams, picks onc
   view.change('quest-question-prompt', 'Which planet is red?'); view.change('Number of answer choices', '2'); view.change('Answer A', 'Mars'); view.change('Answer B', 'Venus'); view.submit();
   assert.equal(view.state().questions.length, 1); assert.match(view.text(), /Which planet is red/); assert.equal(view.state().questions[0].correctIndex, 0);
   view.click('Set up teams →'); assert.equal(view.state().phase, 'teams'); assert.doesNotMatch(view.text(), /Which planet is red|Mars|Venus/);
-  view.change('quest-team-0', 'Comets'); view.click('Penguin for team 1'); view.submit(); assert.equal(view.state().phase, 'first-team-picker'); assert.equal(view.state().teams[0].avatar, 'penguin'); assert.equal(view.state().teams[0].name, 'Comets');
+  view.change('quest-team-0', 'Comets'); view.click('Side Eye for team 1'); view.submit(); assert.equal(view.state().phase, 'first-team-picker'); assert.equal(view.state().teams[0].avatar, 'penguin'); assert.equal(view.state().teams[0].name, 'Comets');
   const pick = view.button('Choose first team')!.props.onClick; view.invoke(pick); view.invoke(pick); assert.equal(view.randomCalls(), 1); assert.equal(view.state().firstTeamIndex, 0); assert.match(view.text(), /Choosing first team/); assert.equal(view.button('Start game →'), undefined);
   view.advance(1000); assert.equal(view.state().firstTeamIndex, 0); view.click('Start game →'); assert.equal(view.state().phase, 'playing'); assert.equal(view.state().currentTeamIndex, 0); assert.ok(view.button('Draw a question ↗')); view.unmount();
 });

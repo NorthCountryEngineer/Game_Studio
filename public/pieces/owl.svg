@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-labelledby="title">
+  <title id="title">Cooked Toast</title>
+  <g stroke="#fffdf5" stroke-width="10" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M24 43C7 28 30 20 22 8c22 10 23 22 17 35Z" fill="#ed7743"/>
+    <path d="M80 40c-1-17 23-20 18-33 22 18 16 29 4 41Z" fill="#ed7743"/>
+    <path d="M29 50C7 39 16 20 39 19h50c24 0 33 21 10 31v57c0 7-5 11-12 11H41c-8 0-12-4-12-11Z" fill="#d69752"/>
+  </g>
+  <g stroke="#172c26" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M24 43C7 28 30 20 22 8c22 10 23 22 17 35Z" fill="#ed7743"/>
+    <path d="M80 40c-1-17 23-20 18-33 22 18 16 29 4 41Z" fill="#ed7743"/>
+    <path d="m25 36 5-12 6 14m57-2 7-14 1 17" fill="#ffde08" stroke="none"/>
+    <path d="M29 50C7 39 16 20 39 19h50c24 0 33 21 10 31v57c0 7-5 11-12 11H41c-8 0-12-4-12-11Z" fill="#cb8b4d"/>
+    <path d="M24 43C7 28 30 20 22 8c22 10 23 22 17 35Z" fill="#ed7743" stroke-width="3.5"/>
+    <path d="M80 40c-1-17 23-20 18-33 22 18 16 29 4 41Z" fill="#ed7743" stroke-width="3.5"/>
+    <path d="m25 36 5-12 6 14m57-2 7-14 1 17" fill="#ffde08" stroke="none"/>
+    <path d="M39 50c-13-2-16-17 2-20h46c18 4 15 17 2 20v55H39Z" fill="#f4d7a4" stroke-width="3"/>
+    <path d="m39 47 14-4m23 0 14 5" fill="none" stroke-width="4"/>
+    <ellipse cx="48" cy="61" rx="10" ry="13" fill="#fffdf5" stroke-width="3"/>
+    <ellipse cx="80" cy="61" rx="10" ry="13" fill="#fffdf5" stroke-width="3"/>
+    <path d="M49 58v7m30-7v7" fill="none" stroke-width="5"/>
+    <path d="M47 84 55 77 65 81 76 77 84 85 80 99H50Z" fill="#172c26" stroke-width="3"/>
+    <path d="m52 82 24 0-2 5H54Z" fill="#fffdf5" stroke="none"/>
+    <path d="m58 97 6-5 8 5" fill="#ec8876" stroke="none"/>
+    <path d="M103 68c9 10 9 16 2 16s-8-6-2-16Z" fill="#83cdd0" stroke-width="3"/>
+  </g>
+</svg>

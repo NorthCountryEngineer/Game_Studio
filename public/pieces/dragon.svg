@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-labelledby="title">
+  <title id="title">Six Seven</title>
+  <path d="m37 28 15-12h24l15 12 15 20-12 14v50H34V62L22 48Z" fill="#7769ad" stroke="#fffdf5" stroke-width="11" stroke-linejoin="round"/>
+  <g stroke="#172c26" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="m35 68-14 8-9-9-2-23c0-5 6-5 7 0l2 10 1-18c0-5 6-5 6 0v18l4-12c2-5 7-3 6 2l-3 13 7-2c5 0 6 5 2 8Z" fill="#efb56e"/>
+    <path d="m93 68 14 8 9-9 2-23c0-5-6-5-7 0l-2 10-1-18c0-5-6-5-6 0v18l-4-12c-2-5-7-3-6 2l3 13-7-2c-5 0-6 5-2 8Z" fill="#efb56e"/>
+    <path d="m37 28 15-12c1 14 23 14 24 0l15 12 15 20-12 14v50H34V62L22 48Z" fill="#8171b9"/>
+    <path d="m38 29-9 18 9 8m52-26 9 18-9 8M37 105h54" fill="none" stroke="#ffde08" stroke-width="5"/>
+    <path d="m46 42 11 2m15 0 10-2" fill="none" stroke-width="4"/>
+    <path d="M50 49v2m27-2v2m-17 4 9 1" fill="none" stroke-width="4"/>
+    <path d="M57 67H46c-6 0-7 5-7 11v12c0 6 3 9 9 9s9-3 9-9-3-9-9-9h-8" fill="none" stroke="#fffdf5" stroke-width="7"/>
+    <path d="M71 67h17L75 99" fill="none" stroke="#fffdf5" stroke-width="7"/>
+  </g>
+</svg>
