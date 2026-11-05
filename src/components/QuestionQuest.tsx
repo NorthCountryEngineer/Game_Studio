@@ -23,8 +23,9 @@ const COLORS = ['#00652b', '#8a6800', '#4e6c79', '#865f40'];
 const COLOR_NAMES = ['Forest', 'Gold', 'Slate', 'Bronze'];
 const LETTERS = ['A', 'B', 'C', 'D'];
 const FACES = ['⚀', '⚁', '⚂', '⚃', '⚄', '⚅'];
-const DICE_FRAME_TIMES = [50, 110, 180, 260, 355, 465, 595, 750, 935, 1155, 1415, 1720, 2070];
-const DICE_SETTLE_AT = 2240, DICE_CLOSE_AT = 2600, PIECE_STEP_MS = 85;
+const DICE_FRAME_TIMES = [30, 70, 115, 170, 235, 310, 400, 505, 630, 780, 960, 1170, 1390];
+// The final-face pose settles over 150 ms, leaving 1.2 seconds fully still.
+const DICE_SETTLE_AT = 1650, DICE_CLOSE_AT = 3000, REDUCED_DICE_HOLD_MS = 1200, PIECE_STEP_MS = 220;
 const PIPS = [[], [4], [0, 8], [0, 4, 8], [0, 2, 6, 8], [0, 2, 4, 6, 8], [0, 2, 3, 5, 6, 8]];
 const HOMES = [[206, 214], [594, 214], [594, 586], [206, 586]];
 const FINISHES = [[265, 290], [535, 290], [535, 510], [265, 510]];
@@ -269,23 +270,34 @@ export function QuestionQuest({ navigate }: { navigate: Navigate }) {
       }, delay);
       timers.current.push(timer);
     };
+    const finishMovement = () => {
+      setPieceMotion(undefined); locked.current = false; setBusy(undefined);
+      document.getElementById('quest-current-team')?.focus();
+    };
+    const distance = to - from;
+    const moveOneSpace = (step: number) => {
+      setPieceMotion({ ...motion, position: from + step });
+      // Chain each step from the callback that actually ran. Delayed browser
+      // timers cannot collapse the remaining spaces into one visual jump.
+      schedule(step < distance ? () => moveOneSpace(step + 1) : finishMovement, PIECE_STEP_MS);
+    };
+    const closeDice = () => {
+      setDiceOverlay(undefined); setBusy('moving');
+      if (reducedMotion || distance === 0) finishMovement();
+      else schedule(() => moveOneSpace(1), PIECE_STEP_MS);
+    };
     if (!reducedMotion) {
       DICE_FRAME_TIMES.forEach((at, index) => schedule(() => setDiceOverlay({
         faces: [(index * 5 + 2) % 6 + 1, (index * 5 + 4) % 6 + 1], settled: false,
         cadence: at - (DICE_FRAME_TIMES[index - 1] ?? 0),
       }), at));
-      schedule(() => setDiceOverlay({ faces, settled: true, cadence: 350 }), DICE_SETTLE_AT);
-    }
-    const closeAt = reducedMotion ? 160 : DICE_CLOSE_AT;
-    schedule(() => { setDiceOverlay(undefined); setBusy('moving'); }, closeAt);
-    const distance = to - from;
-    if (!reducedMotion) {
-      for (let step = 1; step <= distance; step++) schedule(() => setPieceMotion({ ...motion, position: from + step }), closeAt + step * PIECE_STEP_MS);
-    }
-    schedule(() => {
-      setPieceMotion(undefined); locked.current = false; setBusy(undefined);
-      document.getElementById('quest-current-team')?.focus();
-    }, closeAt + (reducedMotion ? 0 : (distance + 1) * PIECE_STEP_MS));
+      schedule(() => {
+        setDiceOverlay({ faces, settled: true, cadence: 350 });
+        // Start the readable pause when the settled result is presented,
+        // rather than sharing an absolute deadline with the cycling frames.
+        schedule(closeDice, DICE_CLOSE_AT - DICE_SETTLE_AT);
+      }, DICE_SETTLE_AT);
+    } else schedule(closeDice, REDUCED_DICE_HOLD_MS);
   }
   function nextTeam() { if (locked.current) return; const next = apply(nextQuestTeam); if (next) { setCardOpen(false); setNotice(''); } }
   function pickFirst() {
