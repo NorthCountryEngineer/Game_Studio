@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState, type CSSProperties, type FormEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import {
   QUESTION_QUEST_AVATARS, QUESTION_QUEST_STORAGE_KEY, QUEST_BOARD_LENGTH,
-  createQuestionQuest, upsertQuestQuestion, removeQuestQuestion, finishQuestQuestions,
+  createQuestionQuest, upsertQuestQuestion, appendQuestQuestions, removeQuestQuestion, finishQuestQuestions,
   configureQuestTeams, pickFirstQuestTeam, startQuestionQuest, drawQuestCard,
   answerQuestCard, rollQuestDie, nextQuestTeam, rematchQuestionQuest,
   projectQuestionQuest, loadQuestionQuest, saveQuestionQuest,
   type QuestQuestion, type QuestState, type QuestTeamSetup,
 } from '../lib/question-quest';
+import { QUEST_IMPORT_MAX_BYTES, parseQuestQuestionImport, type QuestImportPreview, type QuestImportFormat } from '../lib/question-quest-import';
 import '../question-quest.css';
 
 type Navigate = (path: string) => void | Promise<void>;
@@ -14,6 +15,7 @@ type TeamDraft = QuestTeamSetup;
 type Boot = { state: QuestState; blocked: boolean; message: string };
 type PieceMotion = { teamId: string; position: number; phase: QuestState['phase']; currentTeamIndex: number | null; finishOrder: string[] };
 type DiceOverlay = { faces: [number, number]; settled: boolean; cadence: number };
+type PendingQuestionImport = QuestImportPreview & { base: QuestState; generation: number };
 const COLORS = ['#cf6652', '#25887e', '#5874bb', '#c29132'];
 const COLOR_NAMES = ['Coral', 'Jade', 'Blue', 'Gold'];
 const LETTERS = ['A', 'B', 'C', 'D'];
@@ -52,6 +54,8 @@ export function QuestionQuest({ navigate }: { navigate: Navigate }) {
   const [notice, setNotice] = useState(initial.message), [error, setError] = useState('');
   const [fullscreen, setFullscreen] = useState(false), [reducedMotion, setReducedMotion] = useState(false);
   const [question, setQuestion] = useState(''), [choices, setChoices] = useState(blankChoices), [choiceCount, setChoiceCount] = useState(4), [correctIndex, setCorrectIndex] = useState(0), [editing, setEditing] = useState<string>();
+  const importGeneration = useRef(0);
+  const [importReading, setImportReading] = useState(false), [importPreview, setImportPreview] = useState<PendingQuestionImport>(), [importError, setImportError] = useState('');
   const [teamDrafts, setTeamDrafts] = useState<TeamDraft[]>(() => state.teams.map(team => ({ id: team.id, name: team.name, avatar: team.avatar })));
   const [busy, setBusy] = useState<'card' | 'dice' | 'moving' | 'picker'>(), [picker, setPicker] = useState<number>();
   const [diceOverlay, setDiceOverlay] = useState<DiceOverlay>(), [pieceMotion, setPieceMotion] = useState<PieceMotion>();
@@ -80,6 +84,39 @@ export function QuestionQuest({ navigate }: { navigate: Navigate }) {
     timers.current.forEach(clearTimeout); timers.current = []; animationEpoch.current += 1;
     locked.current = false; setBusy(undefined); setDiceOverlay(undefined); setPieceMotion(undefined);
   }
+  function cancelQuestionImport() {
+    importGeneration.current += 1;
+    setImportReading(false); setImportPreview(undefined); setImportError('');
+  }
+  async function readQuestionFile(file: File | undefined) {
+    if (current.current !== state || state.phase !== 'questions' || state.questions.length >= 100 || unsavedQuestion || locked.current) return;
+    cancelQuestionImport();
+    if (!file) return;
+    const expected = state, generation = importGeneration.current;
+    const live = () => mounted.current && importGeneration.current === generation && current.current === expected;
+    const extension = file.name.split('.').pop()?.toLowerCase();
+    if (extension !== 'txt' && extension !== 'json') { setImportError('Choose a .txt or .json question file.'); return; }
+    if (!Number.isSafeInteger(file.size) || file.size < 1 || file.size > QUEST_IMPORT_MAX_BYTES) { setImportError('Choose a nonempty file no larger than 256 KB.'); return; }
+    setImportReading(true); setNotice('');
+    try {
+      const bytes = await file.arrayBuffer();
+      if (!live()) return;
+      const preview = parseQuestQuestionImport(new Uint8Array(bytes), extension as QuestImportFormat);
+      if (live()) setImportPreview({ ...preview, base: expected, generation });
+    } catch (value) {
+      if (live()) setImportError(problem(value));
+    } finally {
+      if (live()) setImportReading(false);
+    }
+  }
+  function importQuestions() {
+    const preview = importPreview;
+    if (!preview || importReading || unsavedQuestion || preview.generation !== importGeneration.current || current.current !== preview.base) return;
+    if (preview.questions.length + current.current.questions.length > 100) { setImportError('This file would exceed the limit of 100 questions. Remove questions from the file or the bank first.'); return; }
+    const next = apply(value => appendQuestQuestions(value, preview.questions, () => crypto.randomUUID()), preview.base);
+    if (next) { const count = preview.questions.length; cancelQuestionImport(); setNotice(`${count} ${count === 1 ? 'question imported' : 'questions imported'}. Existing questions were kept.`); }
+  }
+  function leaveGame() { cancelQuestionImport(); void navigate('/party'); }
   function trapFocus(event: ReactKeyboardEvent<HTMLElement>) {
     if (event.key !== 'Tab') return;
     const dialog = event.currentTarget;
@@ -119,8 +156,9 @@ export function QuestionQuest({ navigate }: { navigate: Navigate }) {
     const motion = () => setReducedMotion(media.matches);
     const change = () => setFullscreen(document.fullscreenElement === root.current);
     motion(); media.addEventListener('change', motion); document.addEventListener('fullscreenchange', change);
-    return () => { mounted.current = false; timers.current.forEach(clearTimeout); media.removeEventListener('change', motion); document.removeEventListener('fullscreenchange', change); };
+    return () => { mounted.current = false; importGeneration.current += 1; timers.current.forEach(clearTimeout); media.removeEventListener('change', motion); document.removeEventListener('fullscreenchange', change); };
   }, []);
+  useEffect(() => { cancelQuestionImport(); }, [state]);
   useEffect(() => {
     const listener = (event: KeyboardEvent) => {
       const element = event.target as HTMLElement;
@@ -148,13 +186,13 @@ export function QuestionQuest({ navigate }: { navigate: Navigate }) {
       else setNotice('Full screen is unavailable in this browser. You can still play on this page.');
     } catch { setNotice('Full screen could not open. You can keep playing on this page.'); }
   }
-  function resetEditor() { setQuestion(''); setChoices(blankChoices()); setCorrectIndex(0); setChoiceCount(4); setEditing(undefined); }
+  function resetEditor() { cancelQuestionImport(); setQuestion(''); setChoices(blankChoices()); setCorrectIndex(0); setChoiceCount(4); setEditing(undefined); }
   function saveQuestion(event: FormEvent) {
     event.preventDefault();
     const next = apply(value => upsertQuestQuestion(value, { id: editing ?? crypto.randomUUID(), prompt: question, choices: choices.slice(0, choiceCount), correctIndex }));
     if (next) { resetEditor(); setNotice(editing ? 'Question updated.' : 'Question added.'); }
   }
-  function editQuestion(value: QuestQuestion) { setEditing(value.id); setQuestion(value.prompt); setChoices([...value.choices, ...blankChoices()].slice(0, 4)); setChoiceCount(value.choices.length); setCorrectIndex(value.correctIndex); setError(''); document.getElementById('quest-question-prompt')?.focus(); }
+  function editQuestion(value: QuestQuestion) { cancelQuestionImport(); setEditing(value.id); setQuestion(value.prompt); setChoices([...value.choices, ...blankChoices()].slice(0, 4)); setChoiceCount(value.choices.length); setCorrectIndex(value.correctIndex); setError(''); document.getElementById('quest-question-prompt')?.focus(); }
   function draw() {
     if (locked.current) return;
     const rect = deck.current?.getBoundingClientRect();
@@ -212,7 +250,7 @@ export function QuestionQuest({ navigate }: { navigate: Navigate }) {
   function startTeams(event: FormEvent) { event.preventDefault(); apply(value => configureQuestTeams(value, teamDrafts)); }
   function newGame() {
     if (current.current !== state) return;
-    cancelAnimations(); setRecoveryOpen(false);
+    cancelQuestionImport(); cancelAnimations(); setRecoveryOpen(false);
     try {
       const previous = window.localStorage.getItem(QUESTION_QUEST_STORAGE_KEY);
       if (previous) window.localStorage.setItem(`${QUESTION_QUEST_STORAGE_KEY}:previous`, previous);
@@ -223,7 +261,7 @@ export function QuestionQuest({ navigate }: { navigate: Navigate }) {
   }
   function recover() {
     if (current.current !== state) return;
-    cancelAnimations();
+    cancelQuestionImport(); cancelAnimations();
     const next = boot();
     if (next.blocked) { setNotice(next.message); return; }
     current.current = next.state; setState(next.state); setStorageBlocked(false); setRecoveryOpen(false); setNotice('Saved game restored.'); setError('');
@@ -236,11 +274,11 @@ export function QuestionQuest({ navigate }: { navigate: Navigate }) {
   const first = state.firstTeamIndex === null ? undefined : state.teams[state.firstTeamIndex];
 
   return <main id="main" ref={root} className={`quest-page ${fullscreen ? 'quest-fullscreen' : ''}`}>
-    <header className="quest-header"><div className="quest-brand"><div><h1>Quiz Circuit</h1></div></div><nav className="quest-header-actions" aria-label="Game controls"><button onClick={() => void navigate('/party')} className="quest-button quest-button-quiet">← Party games</button><button onClick={() => void toggleFullscreen()} className="quest-button quest-button-outline">{fullscreen ? '↙ Exit full screen' : '↗ Full screen'}</button></nav></header>
+    <header className="quest-header"><div className="quest-brand"><div><h1>Quiz Circuit</h1></div></div><nav className="quest-header-actions" aria-label="Game controls"><button onClick={leaveGame} className="quest-button quest-button-quiet">← Party games</button><button onClick={() => void toggleFullscreen()} className="quest-button quest-button-outline">{fullscreen ? '↙ Exit full screen' : '↗ Full screen'}</button></nav></header>
     <div className="quest-subbar"><span className="quest-local-note"><i aria-hidden="true"/> Shared screen. Four teams. Custom questions.</span><details className="quest-help"><summary>How to play <span aria-hidden="true">?</span></summary><div><strong>Rules</strong><ol><li>Before play, the host adds multiple-choice questions and selects each correct answer.</li><li>Set up four teams with names and icons. Choose the first team at random.</li><li>On each turn, draw a question card. The host selects the team’s answer.</li><li>A correct answer earns one point and a roll of two dice. Move the sum of both dice, stopping at the finish. An incorrect answer earns no point or movement.</li><li>The first team to reach the finish wins. Continue in team order, skipping finished teams, until all four teams finish.</li></ol><p>Every question is used before the cards are reshuffled. Progress is saved in this browser.</p></div></details></div>
 
     {recoveryOpen ? <section className="quest-recovery quest-panel"><span className="quest-eyebrow">SAVED GAME</span><h2>Saved game unavailable</h2><p>{notice}</p><div className="quest-actions"><button className="quest-button quest-button-primary" onClick={recover}>Try again</button><button className="quest-button quest-button-outline-dark" onClick={() => setConfirm('recover')}>New game</button></div></section> : <>
-      {state.phase === 'questions' && <section className="quest-setup"><div className="quest-setup-heading"><div><span className="quest-eyebrow">01 / QUESTIONS</span><h2>Create the question bank</h2><p>Add multiple-choice questions and select the correct answer. Questions and answer keys are hidden after setup.</p></div></div><div className="quest-question-grid"><form className="quest-panel quest-question-editor" onSubmit={saveQuestion}><div className="quest-panel-heading"><h3>{editing ? 'Edit your question' : `Question ${state.questions.length + 1}`}</h3><span>HOST SETUP</span></div><label htmlFor="quest-question-prompt">Your question<textarea id="quest-question-prompt" value={question} onChange={event => setQuestion(event.target.value)} required maxLength={300} rows={3} placeholder="What will you ask your teams?"/></label><div className="quest-choice-heading"><strong>Answer choices</strong><label>Choices<select aria-label="Number of answer choices" value={choiceCount} onChange={event => { const count = Number(event.target.value); setChoiceCount(count); if (correctIndex >= count) setCorrectIndex(0); }}>{[2, 3, 4].map(count => <option key={count} value={count}>{count}</option>)}</select></label></div><fieldset className="quest-answer-editor"><legend>Choose the correct answer</legend>{choices.slice(0, choiceCount).map((choice, index) => <div key={index} className={correctIndex === index ? 'is-correct-choice' : ''}><label className="quest-correct-picker"><input type="radio" name="quest-correct" checked={correctIndex === index} onChange={() => setCorrectIndex(index)} aria-label={`Choice ${LETTERS[index]} is correct`}/><span>{LETTERS[index]}</span></label><label className="quest-answer-field"><span className="quest-sr-only">Answer {LETTERS[index]}</span><input value={choice} onChange={event => setChoices(values => values.map((value, at) => at === index ? event.target.value : value))} required maxLength={120} placeholder={`Answer ${LETTERS[index]}`}/></label><span className="quest-correct-tag">{correctIndex === index ? '✓ Correct' : ''}</span></div>)}</fieldset><div className="quest-actions"><button className="quest-button quest-button-primary">{editing ? 'Save changes' : '+ Add question'}</button>{unsavedQuestion && <button type="button" className="quest-button quest-button-text" onClick={resetEditor}>{editing ? 'Cancel edit' : 'Clear draft'}</button>}</div></form><aside className="quest-panel quest-bank"><div className="quest-panel-heading"><h3>Question bank</h3><span>{state.questions.length} {state.questions.length === 1 ? 'CARD' : 'CARDS'}</span></div>{state.questions.length ? <ol>{state.questions.map((item, index) => <li key={item.id}><span className="quest-bank-number">{String(index + 1).padStart(2, '0')}</span><div><strong>{item.prompt}</strong><div className="quest-bank-controls"><button type="button" onClick={() => editQuestion(item)}>Edit</button>{remove === item.id ? <><button type="button" onClick={() => { apply(value => removeQuestQuestion(value, item.id)); setRemove(undefined); if (editing === item.id) resetEditor(); }}>Confirm remove</button><button type="button" onClick={() => setRemove(undefined)}>Keep</button></> : <button type="button" onClick={() => setRemove(item.id)}>Remove</button>}</div></div></li>)}</ol> : <div className="quest-empty-stack"><h4>No questions yet.</h4><p>Add at least one question to continue.</p></div>}<div className="quest-bank-footer"><p>{unsavedQuestion ? 'Add or clear the question in the editor before continuing.' : 'Questions and answer keys will be hidden during team setup.'}</p><button className="quest-button quest-button-primary" disabled={!state.questions.length || unsavedQuestion} onClick={() => { const next = apply(finishQuestQuestions); if (next) { resetEditor(); setNotice(''); } }}>Set up teams <span aria-hidden="true">→</span></button></div></aside></div></section>}
+      {state.phase === 'questions' && <section className="quest-setup"><div className="quest-setup-heading"><div><span className="quest-eyebrow">01 / QUESTIONS</span><h2>Create the question bank</h2><p>Upload a completed question template, or enter questions one at a time below. Questions and answer keys are hidden after setup.</p></div></div><section className="quest-panel quest-import-panel" aria-labelledby="quest-import-heading"><div className="quest-import-intro"><span className="quest-eyebrow">UPLOAD QUESTIONS</span><h3 id="quest-import-heading">Start with a question file</h3><p>Download a template, fill in your questions and correct answers, then choose the file to review it. Importing adds to your existing bank.</p><div className="quest-template-links"><a href="/templates/quiz-circuit-questions.txt" download="quiz-circuit-questions.txt">Download text template ↓</a><a href="/templates/quiz-circuit-questions.json" download="quiz-circuit-questions.json">JSON template ↓</a></div></div><div className="quest-import-picker"><label htmlFor="quest-question-file">Choose a question file<input id="quest-question-file" type="file" accept=".txt,.json,text/plain,application/json" disabled={unsavedQuestion || state.questions.length >= 100} aria-describedby="quest-import-help" onChange={event => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ''; void readQuestionFile(file); }}/></label><p id="quest-import-help">{unsavedQuestion ? 'Add or save the manual question, or use Clear draft / Cancel edit, before importing.' : `${state.questions.length} / 100 questions. Files stay in this browser. Maximum file size: 256 KB.`}</p>{state.questions.length >= 100 && <p>The bank is full. Remove a question before importing more.</p>}{importReading && <div className="quest-import-status" role="status"><span>Reading question file…</span><button type="button" className="quest-button quest-button-text" onClick={cancelQuestionImport}>Cancel import</button></div>}{importError && <p className="quest-import-error" role="alert">{importError}</p>}</div>{importPreview && <div className="quest-import-review"><div className="quest-import-review-heading"><div><h4>Review {importPreview.questions.length} {importPreview.questions.length === 1 ? 'question' : 'questions'}</h4><p>Correct answers are marked below. Nothing has been added yet. Editing a manual question cancels this preview.</p></div><strong>{state.questions.length} existing + {importPreview.questions.length} new</strong></div><ol className="quest-import-list" tabIndex={0} aria-label="Imported questions and correct answers">{importPreview.questions.map((item, index) => <li key={index}><h5>{index + 1}. {item.prompt}</h5><ol type="A">{item.choices.map((choice, choiceIndex) => <li key={choiceIndex} className={item.correctIndex === choiceIndex ? 'is-correct-answer' : ''}>{choice}{item.correctIndex === choiceIndex && <strong> — Correct answer</strong>}</li>)}</ol></li>)}</ol>{state.questions.length + importPreview.questions.length > 100 && <p className="quest-import-error" role="alert">This file would bring the bank to {state.questions.length + importPreview.questions.length} questions. The limit is 100. Choose a smaller file or cancel and remove existing questions.</p>}<div className="quest-actions"><button type="button" className="quest-button quest-button-primary" disabled={unsavedQuestion || state.questions.length + importPreview.questions.length > 100} onClick={importQuestions}>Import {importPreview.questions.length} {importPreview.questions.length === 1 ? 'question' : 'questions'}</button><button type="button" className="quest-button quest-button-outline-dark" onClick={cancelQuestionImport}>Cancel import</button></div></div>}</section><div className="quest-question-grid"><form className="quest-panel quest-question-editor" onChangeCapture={cancelQuestionImport} onSubmit={saveQuestion}><div className="quest-panel-heading"><h3>{editing ? 'Edit your question' : `Question ${state.questions.length + 1}`}</h3><span>HOST SETUP</span></div><label htmlFor="quest-question-prompt">Your question<textarea id="quest-question-prompt" value={question} onChange={event => setQuestion(event.target.value)} required maxLength={300} rows={3} placeholder="What will you ask your teams?"/></label><div className="quest-choice-heading"><strong>Answer choices</strong><label>Choices<select aria-label="Number of answer choices" value={choiceCount} onChange={event => { const count = Number(event.target.value); setChoiceCount(count); if (correctIndex >= count) setCorrectIndex(0); }}>{[2, 3, 4].map(count => <option key={count} value={count}>{count}</option>)}</select></label></div><fieldset className="quest-answer-editor"><legend>Choose the correct answer</legend>{choices.slice(0, choiceCount).map((choice, index) => <div key={index} className={correctIndex === index ? 'is-correct-choice' : ''}><label className="quest-correct-picker"><input type="radio" name="quest-correct" checked={correctIndex === index} onChange={() => setCorrectIndex(index)} aria-label={`Choice ${LETTERS[index]} is correct`}/><span>{LETTERS[index]}</span></label><label className="quest-answer-field"><span className="quest-sr-only">Answer {LETTERS[index]}</span><input value={choice} onChange={event => setChoices(values => values.map((value, at) => at === index ? event.target.value : value))} required maxLength={120} placeholder={`Answer ${LETTERS[index]}`}/></label><span className="quest-correct-tag">{correctIndex === index ? '✓ Correct' : ''}</span></div>)}</fieldset><div className="quest-actions"><button className="quest-button quest-button-primary">{editing ? 'Save changes' : '+ Add question'}</button>{unsavedQuestion && <button type="button" className="quest-button quest-button-text" onClick={resetEditor}>{editing ? 'Cancel edit' : 'Clear draft'}</button>}</div></form><aside className="quest-panel quest-bank"><div className="quest-panel-heading"><h3>Question bank</h3><span>{state.questions.length} {state.questions.length === 1 ? 'CARD' : 'CARDS'}</span></div>{state.questions.length ? <ol>{state.questions.map((item, index) => <li key={item.id}><span className="quest-bank-number">{String(index + 1).padStart(2, '0')}</span><div><strong>{item.prompt}</strong><div className="quest-bank-controls"><button type="button" onClick={() => editQuestion(item)}>Edit</button>{remove === item.id ? <><button type="button" onClick={() => { apply(value => removeQuestQuestion(value, item.id)); setRemove(undefined); if (editing === item.id) resetEditor(); }}>Confirm remove</button><button type="button" onClick={() => setRemove(undefined)}>Keep</button></> : <button type="button" onClick={() => setRemove(item.id)}>Remove</button>}</div></div></li>)}</ol> : <div className="quest-empty-stack"><h4>No questions yet.</h4><p>Add at least one question to continue.</p></div>}<div className="quest-bank-footer"><p>{unsavedQuestion ? 'Add or clear the question in the editor before continuing.' : importReading || importPreview ? 'Import or cancel the selected file before continuing.' : 'Questions and answer keys will be hidden during team setup.'}</p><button className="quest-button quest-button-primary" disabled={!state.questions.length || unsavedQuestion || importReading || Boolean(importPreview)} onClick={() => { const next = apply(finishQuestQuestions); if (next) { resetEditor(); setNotice(''); } }}>Set up teams <span aria-hidden="true">→</span></button></div></aside></div></section>}
 
       {state.phase === 'teams' && <section className="quest-team-setup"><div className="quest-center-heading"><span className="quest-eyebrow">02 / TEAMS</span><h2>Set up four teams</h2><p>Enter a name and select an icon for each team.</p></div><form onSubmit={startTeams}><div className="quest-team-drafts">{teamDrafts.map((team, index) => <section key={team.id} className="quest-team-draft" style={{ '--team-color': COLORS[index] } as CSSProperties}><span className="quest-eyebrow">TEAM {index + 1} · {COLOR_NAMES[index]}</span><span className="quest-selected-avatar" aria-hidden="true">{avatar(team.avatar).emoji}</span><label htmlFor={`quest-team-${index}`}>Team name<input id={`quest-team-${index}`} value={team.name} onChange={event => setTeamDrafts(values => values.map((value, at) => at === index ? { ...value, name: event.target.value } : value))} maxLength={32} required autoComplete="off"/></label><fieldset><legend>Pick your icon</legend><div>{QUESTION_QUEST_AVATARS.map(icon => <button key={icon.id} type="button" aria-label={`${icon.label} for team ${index + 1}`} aria-pressed={team.avatar === icon.id} className={team.avatar === icon.id ? 'is-selected' : ''} onClick={() => setTeamDrafts(values => values.map((value, at) => at === index ? { ...value, avatar: icon.id } : value))}>{icon.emoji}</button>)}</div></fieldset></section>)}</div><button className="quest-button quest-button-primary quest-button-large" type="submit">Continue <span aria-hidden="true">→</span></button></form></section>}
 

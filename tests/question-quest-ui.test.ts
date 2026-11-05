@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import ts from 'typescript';
 import * as quest from '../src/lib/question-quest';
+import * as questionImport from '../src/lib/question-quest-import';
 
 type Element = { type: unknown; props: Record<string, any> };
 function elements(value: any): Element[] { if (Array.isArray(value)) return value.flatMap(elements); return value && typeof value === 'object' && 'type' in value ? [value, ...elements(value.props?.children)] : []; }
@@ -36,20 +37,22 @@ function mount(options: { state?: quest.QuestState; raw?: string; readFails?: bo
   const document = { activeElement: { focus() {} }, fullscreenElement: undefined, getElementById: () => ({ focus() {} }), addEventListener(type: string, fn: () => void) { docListeners.set(type, fn); }, removeEventListener(type: string) { docListeners.delete(type); } };
   const exported: Record<string, any> = {}, navigated: string[] = [];
   const source = ts.transpileModule(readFileSync(new URL('../src/components/QuestionQuest.tsx', import.meta.url), 'utf8'), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true } }).outputText;
-  vm.runInNewContext(source, { exports: exported, require(name: string) { if (name === 'react') return fakeReact; if (name === 'react/jsx-runtime') return { jsx, jsxs: jsx, Fragment: 'FRAGMENT' }; if (name === '../lib/question-quest') return quest; if (name === '../question-quest.css') return {}; throw new Error(`Unexpected dependency ${name}`); }, window, document, Uint32Array, crypto: { randomUUID: () => `00000000-0000-4000-8000-${String(++uuid).padStart(12, '0')}`, getRandomValues(value: Uint32Array) { randomCalls++; value[0] = Math.floor(random * 4294967296); return value; } }, setTimeout(callback: () => void, delay: number) { const id = ++timerId; timers.set(id, { at: now + delay, callback }); return id; }, clearTimeout(id: number) { timers.delete(id); }, Error, Math, Object, Array, Number, Boolean, String, Set, Map, Promise });
+  vm.runInNewContext(source, { exports: exported, require(name: string) { if (name === 'react') return fakeReact; if (name === 'react/jsx-runtime') return { jsx, jsxs: jsx, Fragment: 'FRAGMENT' }; if (name === '../lib/question-quest') return quest; if (name === '../lib/question-quest-import') return questionImport; if (name === '../question-quest.css') return {}; throw new Error(`Unexpected dependency ${name}`); }, window, document, Uint32Array, Uint8Array, crypto: { randomUUID: () => `00000000-0000-4000-8000-${String(++uuid).padStart(12, '0')}`, getRandomValues(value: Uint32Array) { randomCalls++; value[0] = Math.floor(random * 4294967296); return value; } }, setTimeout(callback: () => void, delay: number) { const id = ++timerId; timers.set(id, { at: now + delay, callback }); return id; }, clearTimeout(id: number) { timers.delete(id); }, Error, Math, Object, Array, Number, Boolean, String, Set, Map, Promise });
   function flush() { let rounds = 0; while (dirty && !unmounted) { assert.ok(++rounds < 50, 'finite render/effect settling'); dirty = false; cursor = 0; effects.length = 0; tree = exported.QuestionQuest({ navigate: (path: string) => { navigated.push(path); } }); for (const effect of [...effects]) { effect.cleanup?.(); effect.cleanup = effect.setup(); } } }
   function all() { return elements(tree); }
   const label = (button: Element) => clean(button.props['aria-label'] ?? content(button.props.children));
   function button(text: string) { return all().find(e => e.type === 'button' && label(e) === text); }
   function click(text: string) { const found = button(text); assert.ok(found, `button: ${text}`); assert.equal(found.props.disabled ?? false, false, `enabled: ${text}`); found.props.onClick(); flush(); }
   function field(id: string) { return all().find(e => e.props.id === id || e.props['aria-label'] === id || e.props.placeholder === id); }
-  function change(id: string, value: string) { const input = field(id); assert.ok(input, `field: ${id}`); input.props.onChange({ target: { value } }); flush(); }
+  function change(id: string, value: string) { const input = field(id); assert.ok(input, `field: ${id}`); all().find(element => element.type === 'form')?.props.onChangeCapture?.(); input.props.onChange({ target: { value } }); flush(); }
   function submit() { const form = all().find(e => e.type === 'form'); assert.ok(form, 'form'); form.props.onSubmit({ preventDefault() {} }); flush(); }
   function advance(ms: number) { const target = now + ms; for (;;) { const next = [...timers].filter(([, t]) => t.at <= target).sort((a, b) => a[1].at - b[1].at)[0]; if (!next) break; timers.delete(next[0]); now = next[1].at; next[1].callback(); flush(); } now = target; }
   function state(): quest.QuestState { const found = hooks.find(hook => hook.value?.version === 1 && Array.isArray(hook.value?.questions)); assert.ok(found); return found.value; }
   function invoke(callback: () => void) { callback(); flush(); }
   function unmount() { for (const hook of hooks) hook.cleanup?.(); unmounted = true; }
-  flush(); return { button, click, change, submit, advance, state, invoke, all, text: () => clean(content(tree)), data, writes, navigated, unmount, timers, random: (value: number) => { random = value; }, randomCalls: () => randomCalls, lateSetters: () => lateSetters };
+  function selectFile(file: { name: string; size: number; arrayBuffer: () => Promise<ArrayBuffer> }) { const input = field('quest-question-file'); assert.ok(input); assert.equal(input.props.disabled, false); const target = { files: [file], value: file.name }; input.props.onChange({ currentTarget: target }); assert.equal(target.value, ''); flush(); }
+  async function settle() { for (let i = 0; i < 8; i++) { await Promise.resolve(); flush(); } }
+  flush(); return { button, click, change, submit, advance, state, invoke, all, field, selectFile, settle, text: () => clean(content(tree)), data, writes, navigated, unmount, timers, random: (value: number) => { random = value; }, randomCalls: () => randomCalls, lateSetters: () => lateSetters };
 }
 
 test('host authors a question, hides its answer key, names four teams, picks once, and starts a playable game', () => {
@@ -210,4 +213,73 @@ test('movement remains locked and a reset cancels even retained callbacks from t
   view.invoke(newGame); view.click('Start new game'); const freshId = view.state().id;
   oldCallbacks.forEach(callback => view.invoke(callback)); view.advance(5000);
   assert.equal(view.state().id, freshId); assert.equal(view.state().phase, 'questions'); assert.equal(diceDialog(view), undefined); assert.equal(view.timers.size, 0); view.unmount();
+});
+
+const importText = (label = 'Imported question') => `Q: ${label}?\nA: First choice\nB: Second choice\nANSWER: B`;
+function localFile(text: string, name = 'questions.txt') { const bytes = new TextEncoder().encode(text); return { name, size: bytes.byteLength, arrayBuffer: async () => bytes.buffer as ArrayBuffer }; }
+function delayedFile(name = 'questions.txt') { let resolve!: (value: ArrayBuffer) => void; const data = new Promise<ArrayBuffer>(done => { resolve = done; }); return { file: { name, size: 100, arrayBuffer: () => data }, resolve(text: string) { resolve(new TextEncoder().encode(text).buffer as ArrayBuffer); } }; }
+
+test('a local file previews every answer, appends once without replacing existing cards, and leaves manual entry available', async () => {
+  const view = mount({ state: authored() }), original = quest.serializeQuestionQuest(view.state());
+  assert.ok(view.all().find(element => element.type === 'a' && element.props.href === '/templates/quiz-circuit-questions.txt'));
+  view.selectFile(localFile(`${importText('First imported')}\n---\n${importText('Second imported')}`, 'private-bank-name.txt')); await view.settle();
+  assert.equal(quest.serializeQuestionQuest(view.state()), original); assert.match(view.text(), /First imported|Second imported/); assert.match(view.text(), /Correct answer/);
+  const confirm = view.button('Import 2 questions')!.props.onClick; view.invoke(confirm); view.invoke(confirm);
+  assert.equal(view.state().questions.length, 3); assert.equal(view.state().questions[0].id, 'card-1'); assert.equal(new Set(view.state().questions.map(card => card.id)).size, 3);
+  assert.deepEqual(view.state().questions.slice(1).map(card => card.correctIndex), [1, 1]); assert.doesNotMatch(view.data.get(quest.QUESTION_QUEST_STORAGE_KEY)!, /private-bank-name/);
+  view.change('quest-question-prompt', 'Manual question after upload?'); view.change('Number of answer choices', '2'); view.change('Answer A', 'Yes'); view.change('Answer B', 'No'); view.submit();
+  assert.equal(view.state().questions.length, 4); view.click('Set up teams →'); assert.doesNotMatch(view.text(), /First imported|Second imported|First choice|Second choice|Correct answer|Manual question after upload/); view.unmount();
+});
+
+test('canceling a preview prevents even a retained confirmation from changing the bank', async () => {
+  const view = mount({ state: authored() }), original = quest.serializeQuestionQuest(view.state());
+  view.selectFile(localFile(importText())); await view.settle(); const confirm = view.button('Import 1 question')!.props.onClick;
+  view.click('Cancel import'); view.invoke(confirm); assert.equal(quest.serializeQuestionQuest(view.state()), original); assert.equal(view.button('Import 1 question'), undefined); view.unmount();
+});
+
+test('a newly selected file wins over an older pending read and a manual draft invalidates its preview', async () => {
+  const view = mount(), old = delayedFile(); view.selectFile(old.file); assert.match(view.text(), /Reading question file/);
+  view.selectFile(localFile(importText('New selection'))); await view.settle(); old.resolve(importText('Obsolete selection')); await view.settle();
+  assert.match(view.text(), /New selection/); assert.doesNotMatch(view.text(), /Obsolete selection/);
+  const confirm = view.button('Import 1 question')!.props.onClick;
+  view.change('quest-question-prompt', 'Unsaved manual question?'); view.invoke(confirm);
+  assert.equal(view.state().questions.length, 0); assert.equal(view.field('quest-question-file')!.props.disabled, true); assert.equal(view.field('quest-question-prompt')!.props.value, 'Unsaved manual question?');
+  view.click('Clear draft'); assert.equal(view.field('quest-question-file')!.props.disabled, false); view.unmount();
+});
+
+test('pending file reads cannot survive a draft change, accepted setup transition, reset, navigation, or unmount', async () => {
+  for (const mode of ['draft', 'teams', 'reset', 'navigate', 'unmount']) {
+    const view = mount({ state: authored() }), pending = delayedFile(), next = view.button('Set up teams →')!.props.onClick;
+    view.selectFile(pending.file);
+    if (mode === 'draft') view.change('quest-question-prompt', 'Still editing?');
+    if (mode === 'teams') view.invoke(next);
+    if (mode === 'reset') { view.click('New game'); view.click('Start new game'); }
+    if (mode === 'navigate') view.click('← Party games');
+    if (mode === 'unmount') view.unmount();
+    const saved = quest.serializeQuestionQuest(view.state()), writes = view.writes.length;
+    pending.resolve(importText('Late file result')); await view.settle();
+    assert.equal(quest.serializeQuestionQuest(view.state()), saved, mode); assert.equal(view.writes.length, writes, mode); assert.equal(view.button('Import 1 question'), undefined, mode); assert.equal(view.lateSetters(), 0, mode);
+    if (mode !== 'unmount') view.unmount();
+  }
+});
+
+test('unsupported, oversized, unreadable, malformed and invalid UTF-8 files leave the existing bank unchanged', async () => {
+  const view = mount({ state: authored() }), original = quest.serializeQuestionQuest(view.state()); let readCalls = 0;
+  const badFiles = [
+    { name: 'questions.csv', size: 20, arrayBuffer: async () => { readCalls++; return new ArrayBuffer(0); } },
+    { name: 'questions.txt', size: questionImport.QUEST_IMPORT_MAX_BYTES + 1, arrayBuffer: async () => { readCalls++; return new ArrayBuffer(0); } },
+    { name: 'questions.txt', size: 20, arrayBuffer: async () => { throw new Error('Synthetic file read failed.'); } },
+    localFile('Q: Missing answer\nA: One\nB: Two'),
+    { name: 'questions.txt', size: 2, arrayBuffer: async () => new Uint8Array([0xc3, 0x28]).buffer as ArrayBuffer },
+    localFile('{"version":1,"questions":[]}', 'questions.json'),
+  ];
+  for (const file of badFiles) { view.selectFile(file); await view.settle(); assert.ok(view.all().some(element => element.props.role === 'alert')); assert.equal(quest.serializeQuestionQuest(view.state()), original); assert.equal(view.button('Import 1 question'), undefined); }
+  assert.equal(readCalls, 0); view.unmount();
+});
+
+test('capacity is checked against existing questions and only an explicit import can fill the final slot', async () => {
+  const view = mount({ state: authored(99) }); view.selectFile(localFile(`${importText('One')}\n---\n${importText('Two')}`)); await view.settle();
+  const tooMany = view.button('Import 2 questions')!; assert.equal(tooMany.props.disabled, true); view.invoke(tooMany.props.onClick); assert.equal(view.state().questions.length, 99); assert.match(view.text(), /101 questions|limit of 100/);
+  view.selectFile(localFile(JSON.stringify({ version: 1, questions: [{ question: 'Last slot?', choices: ['One', 'Two'], answer: 'A' }] }), 'questions.json')); await view.settle();
+  view.click('Import 1 question'); assert.equal(view.state().questions.length, 100); assert.equal(view.field('quest-question-file')!.props.disabled, true); assert.equal(view.state().questions[99].prompt, 'Last slot?'); view.unmount();
 });

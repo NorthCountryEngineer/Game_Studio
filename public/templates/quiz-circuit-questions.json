@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "questions": [
+    {
+      "question": "What is the capital of Canada?",
+      "choices": ["Toronto", "Ottawa", "Montreal", "Vancouver"],
+      "answer": "B"
+    },
+    {
+      "question": "Which of these numbers is prime?",
+      "choices": ["4", "6", "7", "9"],
+      "answer": "C"
+    }
+  ]
+}

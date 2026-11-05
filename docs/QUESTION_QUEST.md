@@ -4,7 +4,7 @@ Quiz Circuit is an original shared-screen board game at `/party/quiz-circuit`. O
 
 ## Prepare and play
 
-1. Add your own multiple-choice questions one at a time. Each has two to four choices and exactly one correct answer. Add at least one question before continuing; a larger bank gives the group more variety.
+1. Add your own multiple-choice questions one at a time, or download a question-file template, fill it out offline and upload it during setup. Review the preview and confirm the import to add the questions to the current bank. Each has two to four choices and exactly one correct answer. Add at least one question before continuing; a larger bank gives the group more variety.
 2. Hide the question editor, then let each of the four teams enter a name and choose an icon. Questions and correct answers are absent from the team setup screen.
 3. Use the random team picker to choose the first team. Turns continue in that order, skipping teams already finished.
 4. Draw a card from the board's deck. The card flies into view and presents the question and choices. The host selects the answer given by the current team.
@@ -14,6 +14,49 @@ Quiz Circuit is an original shared-screen board game at `/party/quiz-circuit`. O
 The deck is shuffled and uses every question before reshuffling. A short question bank repeats; the next cycle avoids immediately repeating the previous card when possible. There are no collision penalties or hidden special-space rules. The host's buttons control every change; there is no answer timer.
 
 Use **Full screen** for projection and the collapsible **How to play** guide for a quick refresher. Motion follows the browser's reduced-motion setting.
+
+## Prepare a question file offline
+
+The setup screen offers a [plain-text template](../public/templates/quiz-circuit-questions.txt) and a [JSON template](../public/templates/quiz-circuit-questions.json). The text format is intended for ordinary text editors such as TextEdit or Notepad. Edit the examples and copy a complete question block for each additional question. Save as UTF-8 plain text with the `.txt` extension; Word and rich-text files are not supported.
+
+```text
+Q: What is the capital of Canada?
+A: Toronto
+B: Ottawa
+C: Montreal
+D: Vancouver
+ANSWER: B
+
+---
+
+Q: Which of these numbers is prime?
+A: 4
+B: 6
+C: 7
+D: 9
+ANSWER: C
+```
+
+Keep each field on one line, in the order shown. `C:` and `D:` are optional; at least `A:` and `B:` are required. Separate questions with `---` on its own line. Blank lines and lines beginning with `#` are ignored. The correct answer is a letter corresponding to an available choice. Text labels and answer letters can use either case. Do not add comments after a field value.
+
+The JSON alternative has exactly `version` and `questions` fields; version is `1`. Each question has `question`, `choices` and `answer` fields, with an uppercase answer letter `A`–`D`.
+
+```json
+{
+  "version": 1,
+  "questions": [
+    {
+      "question": "What is the capital of Canada?",
+      "choices": ["Toronto", "Ottawa", "Montreal", "Vancouver"],
+      "answer": "B"
+    }
+  ]
+}
+```
+
+Files are limited to 256 KiB. The complete bank can hold up to 100 questions, each with a question of up to 300 characters and two to four distinct choices of up to 120 characters each. The entire file must pass validation before any question is added. Import appends to the existing bank and never replaces or partially imports it. The preview can be canceled without changing saved questions. Imported questions can be edited individually before team setup, and manual entry remains available. Save or cancel any unfinished manual question before importing.
+
+File reading, validation and import happen entirely in the browser. File contents and filenames are not sent to a server or model. An import file contains questions and answers only; it cannot replace team setup, progress or game settings. Answer keys are visible in the host's setup preview and hidden when setup continues.
 
 ## Storage and boundaries
 
