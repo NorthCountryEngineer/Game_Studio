@@ -1,26 +1,27 @@
-# QUIZ CIRCUIT - QUESTION FILE
+# 10TH GRADE HEALTH - QUESTION FILE
+# Prepare review questions for your 10th Grade Health class.
 # Edit these examples, or copy a complete block for each new question.
 # Keep the fields in this order: Q, A, B, optional C and D, ANSWER.
 # ANSWER is the letter of the correct choice: A, B, C or D.
 # Put --- on a separate line between questions.
 # Keep each question and answer choice on one line. Lines starting with # are comments.
 # Save as plain text (.txt), using UTF-8. Do not save as Word or rich text.
-# In Quiz Circuit, choose the file, review the preview, then confirm the import.
+# In 10th Grade Health, choose the file, review the preview, then confirm the import.
 # You can also enter questions one at a time in the game.
 # Limits: 100 questions in the bank, 300 characters per question, 120 per choice.
 
-Q: What is the capital of Canada?
-A: Toronto
-B: Ottawa
-C: Montreal
-D: Vancouver
+Q: Which response shows active listening?
+A: Interrupting with advice
+B: Summarizing what the speaker said
+C: Looking at another screen
+D: Changing the subject
 ANSWER: B
 
 ---
 
-Q: Which of these numbers is prime?
-A: 4
-B: 6
-C: 7
-D: 9
+Q: Which step helps with making a responsible decision?
+A: Acting without considering the outcome
+B: Letting someone else decide every time
+C: Comparing options and their likely consequences
+D: Ignoring reliable information
 ANSWER: C

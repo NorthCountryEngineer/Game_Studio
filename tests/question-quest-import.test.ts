@@ -25,7 +25,7 @@ test('the downloadable TXT and JSON templates produce the same two normalized qu
   const text = parseQuestQuestionImport(readFileSync(new URL('../public/templates/quiz-circuit-questions.txt', import.meta.url)), 'txt');
   const structured = parseQuestQuestionImport(readFileSync(new URL('../public/templates/quiz-circuit-questions.json', import.meta.url)), 'json');
   assert.deepEqual(text.questions, structured.questions); assert.equal(text.questions.length, 2); assert.deepEqual(text.questions.map(q => q.correctIndex), [1, 2]);
-  assert.equal(text.questions[0].choices[text.questions[0].correctIndex], 'Ottawa'); assert.equal(text.questions[1].choices[text.questions[1].correctIndex], '7');
+  assert.equal(text.questions[0].choices[text.questions[0].correctIndex], 'Summarizing what the speaker said'); assert.equal(text.questions[1].choices[text.questions[1].correctIndex], 'Comparing options and their likely consequences');
   assert.ok(text.questions.every(q => !Object.hasOwn(q, 'id'))); assert.equal(text.format, 'txt'); assert.equal(structured.format, 'json');
 });
 
