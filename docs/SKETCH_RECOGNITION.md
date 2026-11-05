@@ -26,14 +26,13 @@ and action queues. Normal room polls and drawing submissions never import the
 vision runtime or run inference. A slow classifier cannot hold the drawing queue,
 advance an action sequence, or replace a room snapshot. One client request is in
 flight at a time; changed ink coalesces, context changes abort old requests, and
-busy/network retries are bounded. Clients do not submit pixels, labels or scores.
+busy, network, temporary-unavailability and current-ink stale retries are bounded to an initial attempt and three retries. Cooldowns begin when the response arrives, including the service's ten-second recovery delay. Clients do not submit pixels, labels or scores.
 
 `POST /party/rooms/{roomId}/recognition` requires an active human seat capability
 and exactly `{phaseId, drawingEpoch, inkSha256}` from the current public drawing.
 The service claims that exact public-ink identity through a conditional write,
 releases storage for inference, then conditionally saves candidates only if the
-phase, clear epoch, ink hash and job owner are still current. No model work runs
-inside a conditional-write retry. Clear/leave/close/new ink discard stale work.
+phase, clear epoch, drawing generation and job owner are still current. Append-only colored ink may reuse a recent recognized prefix for up to twelve seconds, allowing the agent to think while the artist keeps drawing. Erasing, clearing, compaction or dropped geometry invalidates the generation. The endpoint returns `cached` only for the exact requested ink hash, so a prefix never suppresses recognition of a completed drawing. No model work runs inside a conditional-write retry.
 Responses contain only a versioned acknowledgement, never observations or room
 snapshots. Humans cannot publish their own recognition scores.
 
@@ -47,6 +46,8 @@ The guesser waits at least eight seconds after first visible ink and three secon
 of candidate stability, allows six seconds between guesses, and reserves its last
 attempt for a quiet drawing or the final quarter of the turn. Clearing resets its
 ink/stability timer while retaining the phase's three-guess budget.
+
+The room exposes only a coarse AI status: watching, thinking, needing more detail or temporarily unavailable. Labels, probabilities and secret answers remain excluded. Updated clients identify recognition support on room GET requests with `sketchRecognition=1`. An older open page receives a clear refresh instruction during an AI-guessing drawing turn, after seat authorization; saved room state and drawing actions remain intact. Other games, human-only rounds and AI drawing turns are unaffected.
 
 ## Model provenance and local packaging
 

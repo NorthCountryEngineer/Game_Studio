@@ -121,17 +121,24 @@ class PartyRecognitionTests(unittest.TestCase):
         self.action(self.room_id, 'close')
         self.assertEqual(self.recognize(body)['status'], 'idle')
 
-    def test_drawing_changes_during_inference_discard_observation_and_preserve_new_ink(self):
+    def test_appended_ink_during_inference_publishes_usable_prefix_without_claiming_exact_cache(self):
         body = self.start()
         def draw(strokes):
             self.ink(8)
             return [{'label': 'cat', 'score': .95}]
         self.model.predict.side_effect = draw
-        self.assertEqual(self.recognize(body)['status'], 'stale')
+        self.assertEqual(self.recognize(body)['status'], 'ready')
         game = self.state()['game']['_game']
         self.assertEqual(len(game['strokes']), 2)
-        self.assertNotIn('_recognition', game)
+        self.assertEqual(game['_recognition']['inkSha256'], body['inkSha256'])
+        self.assertIsNotNone(party.engine().recognition_observation(self.state()['game'], self.clock))
+        self.assertIsNone(party.engine().recognition_observation(self.state()['game'], self.clock, exact=True))
         self.assertNotIn('_recognitionJob', game)
+        self.model.predict.side_effect = None
+        self.clock += 4
+        self.assertEqual(self.recognize()['status'], 'ready')
+        self.assertEqual(self.model.predict.call_count, 2)
+        self.assertEqual(self.recognize()['status'], 'cached')
 
     def test_clear_invalidates_inflight_job_and_cache_without_resetting_budget(self):
         body = self.start()
@@ -145,6 +152,139 @@ class PartyRecognitionTests(unittest.TestCase):
         self.assertEqual(game['_recognitionBudget']['count'], 1)
         self.assertNotIn('_recognition', game)
         self.assertNotIn('_recognitionJob', game)
+
+    def test_prefix_cache_has_bounded_age_but_unchanged_exact_ink_remains_reusable(self):
+        self.start(); self.recognize(); completed = self.clock
+        self.clock += 20
+        self.assertIsNotNone(party.engine().recognition_observation(self.state()['game'], self.clock))
+        self.ink(5)
+        self.assertIsNone(party.engine().recognition_observation(self.state()['game'], self.clock))
+        self.clock = completed + 21
+        self.assertEqual(self.recognize()['status'], 'ready')
+        self.clock += 12
+        self.ink(6)
+        self.assertIsNotNone(party.engine().recognition_observation(self.state()['game'], self.clock))
+        self.clock += 1
+        self.assertIsNone(party.engine().recognition_observation(self.state()['game'], self.clock))
+
+    def test_eraser_during_inference_rejects_prefix_and_preserves_spent_budget(self):
+        body = self.start()
+        def erase(strokes):
+            self.action(self.room_id, 'stroke', color='#ffffff', width=10, points=[[.1, .2], [.3, .5]])
+            return [{'label': 'cat', 'score': .9}]
+        self.model.predict.side_effect = erase
+        self.assertEqual(self.recognize(body)['status'], 'stale')
+        private = self.state()['game']['_game']
+        self.assertEqual(private['_recognitionBudget']['count'], 1)
+        self.assertNotIn('_recognition', private)
+        self.assertNotIn('_recognitionJob', private)
+
+    def test_prefix_age_starts_at_snapshot_capture_not_slow_inference_completion(self):
+        body = self.start(); captured = self.clock
+        def slow(strokes):
+            self.clock += 8; self.ink(8)
+            return [{'label': 'moon', 'score': .9}]
+        self.model.predict.side_effect = slow
+        self.assertEqual(self.recognize(body)['status'], 'ready')
+        self.assertEqual(self.state()['game']['_game']['_recognition']['capturedAt'], captured)
+        self.assertIsNotNone(party.engine().recognition_observation(self.state()['game'], captured + 12))
+        self.assertIsNone(party.engine().recognition_observation(self.state()['game'], captured + 13))
+
+    def test_dropped_or_compacted_ink_invalidates_inflight_prefix(self):
+        for limit in ('DRAWING_STROKES', 'DRAWING_POINTS'):
+            with self.subTest(limit=limit):
+                if limit == 'DRAWING_POINTS':
+                    self.action(self.room_id, 'close')
+                    self.room_id = uuid(10); self.create_body = self.new_create_body(self.room_id)
+                body = self.start()
+                def draw(strokes):
+                    with patch.object(party.engine(), limit, 1 if limit == 'DRAWING_STROKES' else 4):
+                        self.ink(8)
+                    return [{'label': 'cat', 'score': .9}]
+                self.model.predict.side_effect = draw
+                self.assertEqual(self.recognize(body)['status'], 'stale')
+                private = self.state()['game']['_game']
+                self.assertNotIn('_recognition', private)
+                self.assertGreater(private['_recognitionGeneration'], 0)
+
+    def test_one_human_one_ai_continuous_drawing_for_55_seconds_can_be_guessed_before_60(self):
+        self.start(seconds=60)
+        self.assertEqual(len(self.state()['game']['players']), 2)
+        state = self.state(); previous = self.database.rows['published-games'][party.key('game-party-room', self.room_id)]
+        state['game']['_game']['order'][0] = next(i for i, (label, _) in enumerate(party.engine().PROMPTS) if label == 'moon')
+        party.transact(self.api, [party.put('game-party-room', self.room_id, state, previous)])
+        started = self.clock
+        def infer_while_human_adds_ink(strokes):
+            # A real drawing action lands while the independent CPU request is
+            # running. The model stub is an explicit known public-ink result,
+            # not an accuracy claim or the artist template recognizer.
+            self.ink(9)
+            return [{'label': 'moon' if self.clock - started >= 51 else 'airplane', 'score': .91}]
+        self.model.predict.side_effect = infer_while_human_adds_ink
+        with patch.object(party.engine().secrets, 'randbelow', return_value=1):
+            for elapsed in range(56):
+                self.clock = started + elapsed
+                self.ink(elapsed)
+                if elapsed % 3 == 0:
+                    self.assertEqual(self.recognize()['status'], 'ready')
+                self.get()
+            self.assertEqual(self.state()['game']['phase'], 'draw')
+            self.assertGreaterEqual(len(self.state()['game']['_game']['strokes']), 56)
+            for elapsed in range(56, 60):
+                self.clock = started + elapsed
+                room = self.get()
+                if room['phase'] == 'reveal': break
+        self.assertLess(self.clock, started + 60)
+        self.assertEqual(room['phase'], 'reveal')
+        self.assertEqual(len(room['game']['guessedIds']), 1)
+        self.assertGreater(room['players'][0]['score'], 0)
+        self.assertLessEqual(self.model.predict.call_count, 20)
+
+    def test_old_loaded_clients_get_authenticated_refresh_message_without_losing_saved_ink(self):
+        self.start(); before = deepcopy(self.database.rows)
+        for capability in (None, {}, {'sketchRecognition': '0'}, {'sketchRecognition': ['1']}):
+            event = {**self.request_event(self.room_id), 'queryStringParameters': capability}
+            self.assertIn('Refresh this page', self.error(426, lambda: party.room_request(self.api, event, self.room_id)))
+            self.assertEqual(before, self.database.rows)
+        self.error(401, lambda: party.room_request(self.api, {'queryStringParameters': {'sketchRecognition': '1'}}, self.room_id))
+        body = self.body(self.room_id, 'stroke', color='#244b50', width=5, points=[[.2, .2], [.4, .4]])
+        event = {**self.request_event(self.room_id), 'queryStringParameters': None}
+        saved = party.room_request(self.api, event, self.room_id, body)
+        self.assertGreater(len(saved['room']['game']['strokes']), 1)
+        self.assertEqual(self.get()['game']['aiDrawingStatus'], 'watching')
+
+    def test_refresh_gate_does_not_affect_ai_artist_or_human_only_rounds(self):
+        self.start()
+        state = self.state(); previous = self.database.rows['published-games'][party.key('game-party-room', self.room_id)]
+        state['game']['_game']['artistId'] = state['game']['players'][1]['id']
+        party.transact(self.api, [party.put('game-party-room', self.room_id, state, previous)])
+        event = {**self.request_event(self.room_id), 'queryStringParameters': None}
+        room = party.room_request(self.api, event, self.room_id)['room']
+        self.assertNotIn('aiDrawingStatus', room['game'])
+        self.action(self.room_id, 'close')
+        self.room_id = uuid(10); self.create_body = self.new_create_body(self.room_id)
+        self.create(kind='sketch-guess'); self.join(2); self.action(self.room_id, 'start')
+        event = {**self.request_event(self.room_id), 'queryStringParameters': None}
+        self.assertNotIn('aiDrawingStatus', party.room_request(self.api, event, self.room_id)['room']['game'])
+
+    def test_coarse_status_never_projects_labels_scores_or_private_recognition_details(self):
+        self.start()
+        self.assertEqual(self.get()['game']['aiDrawingStatus'], 'watching')
+        during = []
+        def infer(strokes):
+            during.append(self.get()['game']['aiDrawingStatus'])
+            return [{'label': 'airplane', 'score': .99}]
+        self.model.predict.side_effect = infer
+        self.recognize()
+        self.assertEqual(during, ['thinking'])
+        room = self.get()
+        self.assertEqual(room['game']['aiDrawingStatus'], 'needs-detail')
+        for secret in ('airplane', 'candidates', 'completedAt', 'modelVersion', '_recognition', '0.99'):
+            self.assertNotIn(secret, json.dumps(room))
+        self.clock += 4; self.ink(4)
+        self.model.predict.side_effect = RuntimeError('Synthetic optional runtime failure')
+        self.assertEqual(self.recognize()['status'], 'unavailable')
+        self.assertEqual(self.get()['game']['aiDrawingStatus'], 'unavailable')
 
     def test_phase_change_and_close_discard_inflight_results(self):
         body = self.start()

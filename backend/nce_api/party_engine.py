@@ -36,6 +36,7 @@ DRAWING_BYTES = 120000
 DRAWING_ACK_IDS = 128
 AI_ACTIONS_PER_TICK = 8
 AI_MEMORY_BYTES = 1024
+RECOGNITION_PREFIX_SECONDS = 12
 _ai_rules = None
 
 
@@ -220,7 +221,7 @@ def _emit(state, text, now):
 
 def _phase(state, phase, now, seconds=None):
     if state.get('kind') == 'sketch-guess':
-        for key in ('_recognition', '_recognitionJob', '_recognitionBudget', '_inkSha256'):
+        for key in ('_recognition', '_recognitionJob', '_recognitionBudget', '_recognitionGeneration', '_recognitionFailure', '_inkSha256'):
             state.get('_game', {}).pop(key, None)
     state.update(phase=phase, phaseId=state['phaseId'] + 1, phaseStartedAt=now,
                  deadlineAt=now + seconds if seconds else None)
@@ -333,15 +334,21 @@ def _artist(state):
     return state['_game'].get('artistId')
 
 
-def recognition_eligible(state):
-    """Only a live drawing with a computer guesser needs recognition work."""
+def recognition_guessers(state):
+    """Unsolved computer seats, without exposing any private candidate."""
     if state.get('kind') != 'sketch-guess' or state.get('status') != 'playing' or state.get('phase') != 'draw':
-        return False
-    game, runtime = state['_game'], state.get('_ai', {})
-    return any(player.get('isAI') is True and not player.get('left')
+        return []
+    game = state['_game']
+    return [player for player in state['players'] if player.get('isAI') is True and not player.get('left')
         and player['id'] != game.get('artistId') and player['id'] not in game.get('guessedIds', [])
-        and len(runtime.get(player['id'], {}).get('memory', {}).get('guesses', [])) < 3
-        for player in state['players'])
+    ]
+
+
+def recognition_eligible(state):
+    """Only a live drawing with an unspent computer guesser needs CPU work."""
+    runtime = state.get('_ai', {})
+    return any(len(runtime.get(player['id'], {}).get('memory', {}).get('guesses', [])) < 3
+        for player in recognition_guessers(state))
 
 
 def recognition_strokes(state):
@@ -361,20 +368,52 @@ def recognition_binding(state):
     return {'phaseId': state['phaseId'], 'drawingEpoch': game.get('drawingEpoch', 0), 'inkSha256': ink_hash}
 
 
-def _refresh_recognition_ink(state):
+def _refresh_recognition_ink(state, invalidate=False):
     game = state['_game']
-    game.pop('_recognition', None)
+    if invalidate:
+        # A generation proves that a prior snapshot remains an unchanged prefix
+        # of the current colored ink. Erasing or compacting destroys that proof.
+        game['_recognitionGeneration'] = game.get('_recognitionGeneration', 0) + 1
+        for key in ('_recognition', '_recognitionJob', '_recognitionFailure'):
+            game.pop(key, None)
     game.pop('_inkSha256', None)
     binding = recognition_binding(state)
     if binding: game['_inkSha256'] = binding['inkSha256']
 
 
-def recognition_observation(state):
+def recognition_observation(state, now=None, exact=False):
     binding = recognition_binding(state)
-    observation = state.get('_game', {}).get('_recognition')
-    if not binding or not isinstance(observation, dict) or any(observation.get(key) != value for key, value in binding.items()):
+    game = state.get('_game', {})
+    observation = game.get('_recognition')
+    if (not binding or not isinstance(observation, dict)
+            or observation.get('phaseId') != binding['phaseId']
+            or observation.get('drawingEpoch') != binding['drawingEpoch']
+            or observation.get('generation', 0) != game.get('_recognitionGeneration', 0)):
+        return None
+    captured_at = observation.get('capturedAt', observation.get('completedAt'))
+    if observation.get('inkSha256') != binding['inkSha256'] and (exact
+            or type(captured_at) is not int
+            or not 0 <= _now(now) - captured_at <= RECOGNITION_PREFIX_SECONDS):
         return None
     return {'modelVersion': observation.get('modelVersion'), 'candidates': deepcopy(observation.get('candidates', []))}
+
+
+def recognition_status(state, now):
+    if not recognition_guessers(state):
+        return None
+    game = state['_game']
+    failure = game.get('_recognitionFailure', {})
+    if (failure.get('generation') == game.get('_recognitionGeneration', 0)
+            and type(failure.get('at')) is int and 0 <= now - failure['at'] < 10):
+        return 'unavailable'
+    job = game.get('_recognitionJob', {})
+    if job.get('generation', 0) == game.get('_recognitionGeneration', 0) and job.get('expiresAt', 0) > now:
+        return 'thinking'
+    observation = recognition_observation(state, now)
+    if (observation is not None and not ai_rules().rank_recognition(observation)
+            or not recognition_eligible(state) or game.get('_recognitionBudget', {}).get('count', 0) >= 20):
+        return 'needs-detail'
+    return 'watching'
 
 
 def _trivia_reveal(state, now):
@@ -607,7 +646,7 @@ def tick(state, now=None):
         phase = state['phaseId']
         view = deepcopy(project(state, player['id'], now))
         if state['kind'] == 'sketch-guess' and player['id'] != _artist(state):
-            observation = recognition_observation(state)
+            observation = recognition_observation(state, now)
             if observation: view['game']['recognition'] = observation
         action, memory = ai_rules().decide(view, deepcopy(agent.get('memory', {})), now)
         if not isinstance(memory, dict) or len(json.dumps(memory, ensure_ascii=True, allow_nan=False, separators=(',', ':'))) > AI_MEMORY_BYTES:
@@ -851,6 +890,7 @@ def _drawing_segment(segment, actor_id, identifier):
 def _compact_drawing(game):
     # Preserve both endpoints when reducing older polylines, including the shared
     # endpoint between streamed chunks. Recent ink keeps its original detail.
+    changed = len(game['strokes']) > DRAWING_STROKES
     strokes = game['strokes'][-DRAWING_STROKES:]
     total = sum(len(stroke['points']) for stroke in strokes)
     encoded = len(json.dumps(strokes, separators=(',', ':'), ensure_ascii=True))
@@ -864,11 +904,13 @@ def _compact_drawing(game):
             if reduced[-1] != points[-1]:
                 reduced.append(points[-1])
             stroke['points'] = reduced
+            changed = True
             total -= len(points) - len(reduced)
             encoded -= before - len(json.dumps(reduced, separators=(',', ':')))
             if total <= DRAWING_POINTS and encoded <= DRAWING_BYTES:
                 break
     game['strokes'] = strokes
+    return changed
 
 
 def _sketch_action(state, actor, kind, action, now):
@@ -893,8 +935,7 @@ def _sketch_action(state, actor, kind, action, now):
             game['drawingRate'] = {'second': now, 'count': count + 1}
             game['clearCount'] += 1
             game.update(strokes=[], drawingEpoch=epoch + 1, drawingAckIds=[])
-            game.pop('_recognitionJob', None)
-            _refresh_recognition_ink(state)
+            _refresh_recognition_ink(state, invalidate=True)
             return
         if kind == 'drawing-batch':
             segments = action.get('segments')
@@ -918,8 +959,8 @@ def _sketch_action(state, actor, kind, action, now):
         game['drawingRate'] = {'second': now, 'count': count + 1}
         game['strokes'].extend(clean)
         game['drawingAckIds'] = [*game.get('drawingAckIds', []), *identifiers][-DRAWING_ACK_IDS:]
-        _compact_drawing(game)
-        _refresh_recognition_ink(state)
+        compacted = _compact_drawing(game)
+        _refresh_recognition_ink(state, invalidate=compacted or any(stroke['color'] == '#ffffff' for stroke in clean))
     elif kind == 'guess':
         if actor['id'] == artist_id:
             fail('The artist cannot guess their own prompt.', 403)
@@ -1056,7 +1097,7 @@ def _ship_action(state, actor, kind, action, now):
 
 def project(state, viewer_id, now=None):
     """An allowlisted per-seat view: roles, answers and prompts are never shared early."""
-    _now(now)
+    now = _now(now)
     viewer = _player(state, _identifier(viewer_id))
     result = {key: deepcopy(state[key]) for key in ('version', 'kind', 'hostId', 'status', 'phase', 'phaseId', 'round',
                                                    'settings', 'createdAt', 'deadlineAt', 'winner', 'events', 'chat')}
@@ -1094,6 +1135,8 @@ def project(state, viewer_id, now=None):
                       drawingEpoch=game.get('drawingEpoch', 0), drawingAckIds=list(game.get('drawingAckIds', [])))
         binding = recognition_binding(state)
         if binding: public['inkSha256'] = binding['inkSha256']
+        status = recognition_status(state, now)
+        if status: public['aiDrawingStatus'] = status
         if reveal:
             public['prompt'] = prompt
         if viewer_id == _artist(state):
