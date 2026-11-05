@@ -25,3 +25,4 @@
 .health-class-game :is(.quest-panel,.quest-team-draft,.quest-question-card,.quest-dice-stage,.quest-celebration,.quest-confirm,.quest-recovery){--health-focus:#004c1c}.health-class-game a:focus-visible,.health-class-game .quest-import-list:focus-visible{outline-color:var(--health-focus)}.health-class-game .quest-answer-editor legend,.health-class-game .quest-team-draft legend,.health-class-game .quest-panel-heading>span,.health-class-game .quest-confirm p,.health-class-game .quest-recovery p,.health-class-game .quest-confirm .quest-eyebrow,.health-class-game .quest-recovery .quest-eyebrow{color:#4a6652}
 
 .health-class-game .quest-correct-picker input:focus-visible+span{outline-color:var(--health-focus)}
+.health-class-game .quest-center-finished{margin-top:10%}
