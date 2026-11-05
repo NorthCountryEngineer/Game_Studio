@@ -57,6 +57,8 @@ Party adapters reserve phrases within their existing bounded admission index. Th
 
 Per-source and installation attempt limits constrain lookup traffic. Phrases confer only anonymous room admission, never host/narrator, creator or Core authority. No new infrastructure, IAM grant, schema migration, provider call or assignment SDK change is introduced. See [passphrase joining](ROOM_PASSPHRASES.md).
 
+Question Quest is a separate local shared-screen category at `/party/question-quest`. It has a bounded versioned question bank and deterministic host-operated race state in browser storage, with no online room, provider or Core authority. Its public projection omits the question bank and correct-answer indices; team setup does not mount the editor. Existing online party kinds and published GameSpec formats are unchanged. See [Question Quest](QUESTION_QUEST.md).
+
 ## Host embedding
 
 `/embed/games/{id}` is the public player surface. Host IDs resolve only against operator-configured exact origins; the parent referrer must match. The hosting policy allows framing only by those origins. Private creation, account, settings and OAuth pages reject framing. The common SDK verifies sender origin, source window, channel, game ID, protocol version and message shape. Messages never carry identity, access tokens, roles or private drafts.
