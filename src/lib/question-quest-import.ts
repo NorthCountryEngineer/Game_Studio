@@ -1,8 +1,10 @@
 import { createQuestionQuest, upsertQuestQuestion, type QuestQuestionInput } from './question-quest';
+import { parseQuestQuestionSource, type QuestQuestionSource } from './question-quest-sources';
 
 export const QUEST_IMPORT_MAX_BYTES = 256 * 1024;
 export type QuestImportFormat = 'txt' | 'json';
-export type QuestImportPreview = { format: QuestImportFormat; questions: QuestQuestionInput[] };
+export type QuestImportPreview = { format: QuestImportFormat; questions: QuestQuestionInput[]; sources?: (QuestQuestionSource | null)[] };
+type ImportedRows = { questions: QuestQuestionInput[]; sources: (QuestQuestionSource | null)[] };
 export class QuestionQuestImportError extends Error {
   constructor(message: string, readonly questionNumber?: number, readonly lineNumber?: number) {
     const location = questionNumber !== undefined ? `Question ${questionNumber}${lineNumber !== undefined ? `, line ${lineNumber}` : ''}` : lineNumber !== undefined ? `Line ${lineNumber}` : '';
@@ -17,6 +19,10 @@ function validated(input: QuestQuestionInput, number: number, line?: number): Qu
     const card = upsertQuestQuestion(createQuestionQuest('import-preview'), { id: 'preview-card', ...input }).questions[0];
     return { prompt: card.prompt, choices: [...card.choices], correctIndex: card.correctIndex };
   } catch (error) { fail(error instanceof Error ? error.message : 'Check the question and answer choices.', number, line); }
+}
+function validatedSource(value: unknown, number: number, line?: number): QuestQuestionSource {
+  try { return parseQuestQuestionSource(value); }
+  catch (error) { fail(error instanceof Error ? error.message : 'Check the source URL and citation.', number, line); }
 }
 function uniqueJsonFields(text: string): void {
   // JSON.parse establishes syntax first. Check its string/structural tokens so
@@ -36,7 +42,7 @@ function uniqueJsonFields(text: string): void {
     }
   }
 }
-function jsonQuestions(text: string): QuestQuestionInput[] {
+function jsonQuestions(text: string): ImportedRows {
   let value: unknown;
   try { value = JSON.parse(text); }
   catch (error) {
@@ -49,41 +55,47 @@ function jsonQuestions(text: string): QuestQuestionInput[] {
   if (!exact(root, ['version', 'questions']) || root!.version !== 1 || !Array.isArray(root!.questions)) fail('Use exactly {"version":1,"questions":[...]} from the JSON template.');
   const questions = root!.questions as unknown[];
   if (questions.length < 1 || questions.length > 100) fail('The file must contain between 1 and 100 questions.');
-  return questions.map((value, index) => {
+  const sources: (QuestQuestionSource | null)[] = [];
+  const inputs = questions.map((value, index) => {
     const row = object(value), number = index + 1;
-    if (!exact(row, ['question', 'choices', 'answer'])) fail('Use only question, choices and answer fields; do not include question IDs.', number);
+    if (!exact(row, row && Object.hasOwn(row, 'source') ? ['question', 'choices', 'answer', 'source'] : ['question', 'choices', 'answer'])) fail('Use only question, choices and answer fields, plus optional source; do not include question IDs.', number);
     if (typeof row!.answer !== 'string' || !/^[A-D]$/.test(row!.answer)) fail('Set answer to one uppercase choice letter: A, B, C or D.', number);
+    sources.push(Object.hasOwn(row!, 'source') ? validatedSource(row!.source, number) : null);
     return validated({ prompt: row!.question as string, choices: row!.choices as string[], correctIndex: row!.answer.charCodeAt(0) - 65 }, number);
   });
+  return { questions: inputs, sources };
 }
 type Field = { tag: string; value: string; line: number };
-function textQuestions(text: string): QuestQuestionInput[] {
-  const questions: QuestQuestionInput[] = []; let fields: Field[] = [];
+function textQuestions(text: string): ImportedRows {
+  const questions: QuestQuestionInput[] = [], sources: (QuestQuestionSource | null)[] = []; let fields: Field[] = [];
   const finish = () => {
     const number = questions.length + 1, start = fields[0]?.line;
-    if (fields.at(-1)?.tag !== 'ANSWER') fail('Add ANSWER: with the correct choice letter before the separator or end of the file.', number, start);
+    const answerAt = fields.findIndex(field => field.tag === 'ANSWER');
+    if (answerAt < 0) fail('Add ANSWER: with the correct choice letter before the separator or end of the file.', number, start);
     if (questions.length >= 100) fail('A file can contain up to 100 questions.', number, start);
-    const answer = fields.at(-1)!;
+    const answer = fields[answerAt], source = fields.find(field => field.tag === 'SOURCE'), citation = fields.find(field => field.tag === 'CITATION'), explanation = fields.find(field => field.tag === 'EXPLANATION');
     if (!/^[A-D]$/i.test(answer.value)) fail('Set ANSWER: to one choice letter: A, B, C or D.', number, answer.line);
-    questions.push(validated({ prompt: fields[0].value, choices: fields.slice(1, -1).map(field => field.value), correctIndex: answer.value.toUpperCase().charCodeAt(0) - 65 }, number, start));
+    if (source && !citation) fail('Add CITATION: after SOURCE: so the source URL and citation stay together.', number, source.line);
+    questions.push(validated({ prompt: fields[0].value, choices: fields.slice(1, answerAt).map(field => field.value), correctIndex: answer.value.toUpperCase().charCodeAt(0) - 65 }, number, start));
+    sources.push(source ? validatedSource({ url: source.value, citation: citation!.value, ...(explanation ? { explanation: explanation.value } : {}) }, number, source.line) : null);
     fields = [];
   };
   for (const [index, raw] of text.split('\n').entries()) {
     const line = raw.trim(), number = questions.length + 1, lineNumber = index + 1;
     if (!line || line.startsWith('#')) continue;
     if (line === '---') { if (!fields.length) fail('Put --- between complete questions, not before an empty question.', number, lineNumber); finish(); continue; }
-    const match = /^(Q|A|B|C|D|ANSWER)[ \t]*:[ \t]*(.*)$/i.exec(line);
-    if (!match) fail('Use one field per line: Q:, A:, B:, optional C:/D:, then ANSWER:.', number, lineNumber);
+    const match = /^(Q|A|B|C|D|ANSWER|SOURCE|CITATION|EXPLANATION)[ \t]*:[ \t]*(.*)$/i.exec(line);
+    if (!match) fail('Use one field per line: Q:, A:, B:, optional C:/D:, then ANSWER:. Optional SOURCE:, CITATION: and EXPLANATION: follow the answer.', number, lineNumber);
     const tag = match[1].toUpperCase(), previous = fields.at(-1)?.tag;
     if (tag === 'Q' && fields.length) fail('Add --- between questions.', number, lineNumber);
     if (fields.some(field => field.tag === tag)) fail(`${tag}: appears twice in this question. Keep one of each field.`, number, lineNumber);
-    const allowed = !previous ? ['Q'] : previous === 'Q' ? ['A'] : previous === 'A' ? ['B'] : previous === 'B' ? ['C', 'ANSWER'] : previous === 'C' ? ['D', 'ANSWER'] : previous === 'D' ? ['ANSWER'] : [];
+    const allowed = !previous ? ['Q'] : previous === 'Q' ? ['A'] : previous === 'A' ? ['B'] : previous === 'B' ? ['C', 'ANSWER'] : previous === 'C' ? ['D', 'ANSWER'] : previous === 'D' ? ['ANSWER'] : previous === 'ANSWER' ? ['SOURCE'] : previous === 'SOURCE' ? ['CITATION'] : previous === 'CITATION' ? ['EXPLANATION'] : [];
     if (!allowed.includes(tag)) fail(`Expected ${allowed.length ? allowed.map(field => `${field}:`).join(' or ') : '--- before the next question'}. Keep question and choices in order.`, number, lineNumber);
     fields.push({ tag, value: match[2].trim(), line: lineNumber });
   }
   if (fields.length) finish();
   if (!questions.length) fail('The file has no questions. Start with Q: using the TXT template.');
-  return questions;
+  return { questions, sources };
 }
 
 /** Read local bytes into a validated preview. This never edits a bank or saves data. */
@@ -99,5 +111,6 @@ export function parseQuestQuestionImport(bytes: Uint8Array, format: QuestImportF
   text = text.replace(/\r\n/g, '\n');
   if (text.includes('\r')) fail('Use normal LF or CRLF line endings. Do not use a bare carriage return.');
   if (!text.trim()) fail('The file is empty. Add at least one question using the template.');
-  return { format, questions: format === 'txt' ? textQuestions(text) : jsonQuestions(text) };
+  const result = format === 'txt' ? textQuestions(text) : jsonQuestions(text);
+  return { format, questions: result.questions, ...(result.sources.some(Boolean) ? { sources: result.sources } : {}) };
 }

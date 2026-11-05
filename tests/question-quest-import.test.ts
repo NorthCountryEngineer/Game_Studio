@@ -150,3 +150,31 @@ test('batch import is locked outside question setup and leaves active progress a
   let result = playing(); while (result.phase !== 'results') { result = rollQuestDie(answerQuestCard(drawQuestCard(result, () => 0), 0), () => .99); if (result.phase !== 'results') result = nextQuestTeam(result); }
   for (const state of [teams, first, game, rolled, result]) { const raw = serializeQuestionQuest(freeze(state)); assert.throws(() => appendQuestQuestions(state, preview().questions, () => 'new-card'), /Return to question setup/); assert.equal(serializeQuestionQuest(state), raw); }
 });
+
+test('optional JSON sources and TXT SOURCE CITATION EXPLANATION fields remain aligned with strict engine inputs', () => {
+  const source = { url: 'https://example.test/facts', citation: 'Example Agency. (2026). Synthetic facts.', explanation: 'Synthetic explanation.' };
+  const withSource = { question: 'Which is a prime number?', choices: ['4', '7'], answer: 'B', source };
+  const structured = parseQuestQuestionImport(bytes(json([withSource, { question: 'No source?', choices: ['Yes', 'No'], answer: 'A' }])), 'json');
+  const text = parseQuestQuestionImport(bytes(txt() + '\nSOURCE: ' + source.url + '\nCITATION: ' + source.citation + '\nEXPLANATION: ' + source.explanation + '\n---\nQ: No source?\nA: Yes\nB: No\nANSWER: A'), 'txt');
+  assert.deepEqual(text.questions, structured.questions); assert.deepEqual(text.sources, [source, null]); assert.deepEqual(text.sources, structured.sources);
+  assert.ok(text.questions.every(question => !Object.hasOwn(question, 'source') && !Object.hasOwn(question, 'citation')));
+  assert.equal(Object.hasOwn(preview(), 'sources'), false);
+  assert.deepEqual(parseQuestQuestionImport(bytes(txt() + '\nsource: https://example.test/facts\ncitation: Source without explanation.'), 'txt').sources, [{ url: source.url, citation: 'Source without explanation.' }]);
+});
+
+test('source pairs are required together and invalid source data cannot produce a partial import', () => {
+  for (const source of [null, {}, { url: 'https://example.test' }, { citation: 'Missing URL' }, { url: 'javascript:alert(1)', citation: 'Unsafe' }, { url: 'https://example.test', citation: 'Line\nbreak' }, { url: 'https://example.test', citation: 'Complete', extra: true }]) {
+    const error = importedError(json([{ question: 'Good first?', choices: ['One', 'Two'], answer: 'A' }, { question: 'Bad source?', choices: ['One', 'Two'], answer: 'B', source }]), 'json'); assert.equal(error.questionNumber, 2);
+  }
+  assert.match(importedError(txt() + '\nSOURCE: https://example.test').message, /Add CITATION/);
+  assert.match(importedError(txt() + '\nCITATION: Missing URL').message, /Expected SOURCE/);
+  assert.match(importedError(txt() + '\nEXPLANATION: Missing pair').message, /Expected SOURCE/);
+  assert.match(importedError(txt() + '\nSOURCE: https://example.test\nEXPLANATION: Missing citation').message, /Expected CITATION/);
+  assert.match(importedError(txt() + '\nSOURCE: https://example.test\nCITATION: ').message, /Source citation/);
+  assert.match(importedError(txt() + '\nSOURCE: https://example.test\nCITATION: Complete\nSOURCE: https://other.test').message, /appears twice/);
+});
+
+test('duplicate source JSON keys and forged engine fields inside sources are rejected', () => {
+  assert.match(importedError('{"version":1,"questions":[{"question":"Test?","choices":["A","B"],"answer":"A","source":{"url":"https://example.test","url":"https://other.test","citation":"Source"}}]}', 'json').message, /field is repeated/);
+  assert.match(importedError(json([{ question: 'Test?', choices: ['A', 'B'], answer: 'A', source: { url: 'https://example.test', citation: 'Source', correctIndex: 1 } }]), 'json').message, /source needs/i);
+});
