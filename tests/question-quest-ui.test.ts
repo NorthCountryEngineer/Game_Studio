@@ -5,6 +5,8 @@ import vm from 'node:vm';
 import ts from 'typescript';
 import * as quest from '../src/lib/question-quest';
 import * as questionImport from '../src/lib/question-quest-import';
+import * as questionSources from '../src/lib/question-quest-sources';
+import * as gracieQuestions from '../src/lib/gracie-questions';
 
 type Element = { type: unknown; props: Record<string, any> };
 function elements(value: any): Element[] { if (Array.isArray(value)) return value.flatMap(elements); return value && typeof value === 'object' && 'type' in value ? [value, ...elements(value.props?.children)] : []; }
@@ -21,10 +23,12 @@ function nearHome(): quest.QuestState {
   for (let i = 0; i < 52; i++) s = quest.nextQuestTeam(quest.rollQuestDie(quest.answerQuestCard(quest.drawQuestCard(s, () => 0), 0), () => 0));
   return s;
 }
-function mount(options: { state?: quest.QuestState; raw?: string; readFails?: boolean; saveFails?: boolean; reducedMotion?: boolean } = {}) {
+function mount(options: { state?: quest.QuestState; raw?: string; readFails?: boolean; saveFails?: boolean; reducedMotion?: boolean; sources?: questionSources.QuestQuestionSources; sidecarRaw?: string; sourceSaveFails?: boolean; storageAccessFails?: boolean } = {}) {
   const data = new Map<string, string>(); if (options.state) data.set(quest.QUESTION_QUEST_STORAGE_KEY, quest.serializeQuestionQuest(options.state)); if (options.raw !== undefined) data.set(quest.QUESTION_QUEST_STORAGE_KEY, options.raw);
+  if (options.sources && options.state) questionSources.saveQuestQuestionSources({ setItem: (key, value) => data.set(key, value) }, options.state, options.sources);
+  if (options.sidecarRaw !== undefined) data.set(questionSources.QUEST_QUESTION_SOURCES_STORAGE_KEY, options.sidecarRaw);
   const writes: { key: string; value: string }[] = [];
-  const storage = { getItem(key: string) { if (options.readFails) throw new Error('unreadable storage'); return data.get(key) ?? null; }, setItem(key: string, value: string) { if (options.saveFails) throw new Error('quota exceeded'); writes.push({ key, value }); data.set(key, value); } };
+  const storage = { getItem(key: string) { if (options.readFails) throw new Error('unreadable storage'); return data.get(key) ?? null; }, setItem(key: string, value: string) { if (options.saveFails || options.sourceSaveFails && key === questionSources.QUEST_QUESTION_SOURCES_STORAGE_KEY) throw new Error('quota exceeded'); writes.push({ key, value }); data.set(key, value); } };
   const hooks: any[] = [], effects: any[] = []; let cursor = 0, dirty = true, tree: Element, unmounted = false, lateSetters = 0, now = 0, timerId = 0, random = 0, uuid = 0, randomCalls = 0;
   const timers = new Map<number, { at: number; callback: () => void }>(), windowListeners = new Map<string, () => void>(), docListeners = new Map<string, () => void>();
   const fakeReact = {
@@ -34,10 +38,11 @@ function mount(options: { state?: quest.QuestState; raw?: string; readFails?: bo
   };
   const jsx = (type: unknown, props: Record<string, any>) => ({ type, props });
   const window = { localStorage: storage, innerWidth: 1200, innerHeight: 800, matchMedia: () => ({ matches: options.reducedMotion ?? false, addEventListener() {}, removeEventListener() {} }), addEventListener(type: string, fn: () => void) { windowListeners.set(type, fn); }, removeEventListener(type: string) { windowListeners.delete(type); } };
+  if (options.storageAccessFails) Object.defineProperty(window, 'localStorage', { get() { throw new Error('storage access blocked'); } });
   const document = { activeElement: { focus() {} }, fullscreenElement: undefined, getElementById: () => ({ focus() {} }), addEventListener(type: string, fn: () => void) { docListeners.set(type, fn); }, removeEventListener(type: string) { docListeners.delete(type); } };
   const exported: Record<string, any> = {}, navigated: string[] = [];
   const source = ts.transpileModule(readFileSync(new URL('../src/components/QuestionQuest.tsx', import.meta.url), 'utf8'), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true } }).outputText;
-  vm.runInNewContext(source, { exports: exported, require(name: string) { if (name === 'react') return fakeReact; if (name === 'react/jsx-runtime') return { jsx, jsxs: jsx, Fragment: 'FRAGMENT' }; if (name === '../lib/question-quest') return quest; if (name === '../lib/question-quest-import') return questionImport; if (name === '../question-quest.css') return {}; throw new Error(`Unexpected dependency ${name}`); }, window, document, Uint32Array, Uint8Array, crypto: { randomUUID: () => `00000000-0000-4000-8000-${String(++uuid).padStart(12, '0')}`, getRandomValues(value: Uint32Array) { randomCalls++; value[0] = Math.floor(random * 4294967296); return value; } }, setTimeout(callback: () => void, delay: number) { const id = ++timerId; timers.set(id, { at: now + delay, callback }); return id; }, clearTimeout(id: number) { timers.delete(id); }, Error, Math, Object, Array, Number, Boolean, String, Set, Map, Promise });
+  vm.runInNewContext(source, { exports: exported, require(name: string) { if (name === 'react') return fakeReact; if (name === 'react/jsx-runtime') return { jsx, jsxs: jsx, Fragment: 'FRAGMENT' }; if (name === '../lib/question-quest') return quest; if (name === '../lib/question-quest-import') return questionImport; if (name === '../lib/question-quest-sources') return questionSources; if (name === '../lib/gracie-questions') return gracieQuestions; if (name === '../question-quest.css') return {}; throw new Error(`Unexpected dependency ${name}`); }, window, document, Uint32Array, Uint8Array, crypto: { randomUUID: () => `00000000-0000-4000-8000-${String(++uuid).padStart(12, '0')}`, getRandomValues(value: Uint32Array) { randomCalls++; value[0] = Math.floor(random * 4294967296); return value; } }, setTimeout(callback: () => void, delay: number) { const id = ++timerId; timers.set(id, { at: now + delay, callback }); return id; }, clearTimeout(id: number) { timers.delete(id); }, Error, Math, Object, Array, Number, Boolean, String, Set, Map, Promise });
   function flush() { let rounds = 0; while (dirty && !unmounted) { assert.ok(++rounds < 50, 'finite render/effect settling'); dirty = false; cursor = 0; effects.length = 0; tree = exported.QuestionQuest({ navigate: (path: string) => { navigated.push(path); } }); for (const effect of [...effects]) { effect.cleanup?.(); effect.cleanup = effect.setup(); } } }
   function all() { return elements(tree); }
   const label = (button: Element) => clean(button.props['aria-label'] ?? content(button.props.children));
@@ -282,4 +287,142 @@ test('capacity is checked against existing questions and only an explicit import
   const tooMany = view.button('Import 2 questions')!; assert.equal(tooMany.props.disabled, true); view.invoke(tooMany.props.onClick); assert.equal(view.state().questions.length, 99); assert.match(view.text(), /101 questions|limit of 100/);
   view.selectFile(localFile(JSON.stringify({ version: 1, questions: [{ question: 'Last slot?', choices: ['One', 'Two'], answer: 'A' }] }), 'questions.json')); await view.settle();
   view.click('Import 1 question'); assert.equal(view.state().questions.length, 100); assert.equal(view.field('quest-question-file')!.props.disabled, true); assert.equal(view.state().questions[99].prompt, 'Last slot?'); view.unmount();
+});
+
+const citationFixture: questionSources.QuestQuestionSource = {
+  url: 'https://www.cdc.gov/cannabis/health-effects/index.html',
+  citation: 'Centers for Disease Control and Prevention. (2024). Synthetic classroom source.',
+  explanation: 'Synthetic explanation visible after the team answers.',
+};
+function sourceMapFor(state: quest.QuestState) { return { [questionSources.questionSourceKey(state.questions[0])]: citationFixture }; }
+function questionSourceLinks(view: ReturnType<typeof mount>) { return view.all().filter(element => element.type === 'a' && element.props.href === citationFixture.url); }
+
+test('Gracie preset appends reviewed cards and sources once while preserving existing authored cards', () => {
+  const view = mount({ state: authored() }), original = structuredClone(view.state().questions[0]), teams = structuredClone(view.state().teams), count = gracieQuestions.GRACIE_QUESTION_PRESET.questions.length;
+  const load = view.button("Use Gracie's Questions")!.props.onClick;
+  view.invoke(load); view.invoke(load);
+  assert.equal(view.state().questions.length, count + 1); assert.deepEqual(view.state().questions[0], original); assert.deepEqual(view.state().teams, teams);
+  assert.equal(view.state().phase, 'questions'); assert.equal(new Set(view.state().questions.map(card => card.id)).size, count + 1);
+  const saved = quest.parseQuestionQuest(JSON.parse(view.data.get(quest.QUESTION_QUEST_STORAGE_KEY)!));
+  assert.ok(saved.questions.every(card => !Object.hasOwn(card, 'source')));
+  const sources = questionSources.loadQuestQuestionSources({ getItem: key => view.data.get(key) ?? null }, saved);
+  assert.equal(sources.status, 'ready'); assert.equal(Object.keys(sources.sources).length, count);
+  view.click("Use Gracie's Questions"); assert.equal(view.state().questions.length, count + 1); assert.match(view.text(), /already in this bank/);
+  const reopened = mount({ state: saved, sources: sources.sources }); reopened.click("Use Gracie's Questions"); assert.equal(reopened.state().questions.length, count + 1); assert.deepEqual(reopened.state().questions.map(card => card.id), saved.questions.map(card => card.id));
+  view.unmount(); reopened.unmount();
+});
+
+test('a retained preset callback cannot bypass a later manual draft, navigation or unmount', () => {
+  for (const mode of ['draft', 'source-draft', 'navigate', 'unmount']) {
+    const view = mount(), load = view.button("Use Gracie's Questions")!.props.onClick;
+    if (mode === 'draft') view.change('quest-question-prompt', 'Keep this unfinished question?');
+    if (mode === 'source-draft') view.change('quest-source-url', citationFixture.url);
+    if (mode === 'navigate') view.click('← Party games');
+    if (mode === 'unmount') view.unmount();
+    const writes = view.writes.length; view.invoke(load);
+    assert.equal(view.state().questions.length, 0, mode); assert.equal(view.writes.length, writes, mode); assert.equal(view.lateSetters(), 0, mode);
+    if (mode === 'draft' || mode === 'source-draft') assert.equal(view.button("Use Gracie's Questions")!.props.disabled, true);
+    if (mode !== 'unmount') view.unmount();
+  }
+});
+
+test('loading Gracie questions cancels pending reads and retained file confirmations', async () => {
+  for (const mode of ['reading', 'preview']) {
+    const view = mount({ state: authored() }), pending = delayedFile(); let oldConfirm: (() => void) | undefined;
+    if (mode === 'reading') view.selectFile(pending.file);
+    else { view.selectFile(localFile(importText('Obsolete file'))); await view.settle(); oldConfirm = view.button('Import 1 question')!.props.onClick; }
+    view.click("Use Gracie's Questions"); const expected = quest.serializeQuestionQuest(view.state());
+    if (mode === 'reading') pending.resolve(importText('Late imported question'));
+    else view.invoke(oldConfirm!);
+    await view.settle(); assert.equal(quest.serializeQuestionQuest(view.state()), expected); assert.equal(view.button('Import 1 question'), undefined); assert.doesNotMatch(view.text(), /Late imported question|Obsolete file/); view.unmount();
+  }
+});
+
+test('Gracie preset capacity is atomic and counts only missing cards', () => {
+  const count = gracieQuestions.GRACIE_QUESTION_PRESET.questions.length;
+  const full = mount({ state: authored(100 - count) }); full.click("Use Gracie's Questions"); assert.equal(full.state().questions.length, 100); full.click("Use Gracie's Questions"); assert.equal(full.state().questions.length, 100); assert.match(full.text(), /already in this bank/); full.unmount();
+  const tooSmall = mount({ state: authored(101 - count) }), before = quest.serializeQuestionQuest(tooSmall.state()); tooSmall.click("Use Gracie's Questions"); assert.equal(quest.serializeQuestionQuest(tooSmall.state()), before); assert.match(tooSmall.text(), /No questions were added/); tooSmall.unmount();
+});
+
+test('manual citations validate before saving, reopen for editing and remain outside the legacy game record', () => {
+  const view = mount(); view.change('quest-question-prompt', 'A sourced manual question?'); view.change('Number of answer choices', '2'); view.change('Answer A', 'Yes'); view.change('Answer B', 'No');
+  view.change('quest-source-url', citationFixture.url); view.submit(); assert.equal(view.state().questions.length, 0);
+  view.change('quest-source-citation', citationFixture.citation); view.change('quest-source-explanation', citationFixture.explanation!); view.submit();
+  const card = view.state().questions[0], raw = view.data.get(quest.QUESTION_QUEST_STORAGE_KEY)!;
+  assert.ok(card); assert.doesNotMatch(raw, /Synthetic classroom source|Synthetic explanation/);
+  let loaded = questionSources.loadQuestQuestionSources({ getItem: key => view.data.get(key) ?? null }, view.state()); assert.deepEqual(loaded.sources[questionSources.questionSourceKey(card)], citationFixture);
+  const reopened = mount({ state: view.state(), sources: loaded.sources }); reopened.click('Edit');
+  assert.equal(reopened.field('quest-source-url')!.props.value, citationFixture.url); assert.equal(reopened.field('quest-source-citation')!.props.value, citationFixture.citation);
+  reopened.change('quest-question-prompt', 'A revised sourced manual question?'); reopened.submit();
+  loaded = questionSources.loadQuestQuestionSources({ getItem: key => reopened.data.get(key) ?? null }, reopened.state()); assert.equal(loaded.sources[questionSources.questionSourceKey(card)], undefined); assert.deepEqual(loaded.sources[questionSources.questionSourceKey(reopened.state().questions[0])], citationFixture);
+  reopened.click('Edit'); reopened.change('quest-source-url', ''); reopened.change('quest-source-citation', ''); reopened.change('quest-source-explanation', ''); reopened.submit();
+  loaded = questionSources.loadQuestQuestionSources({ getItem: key => reopened.data.get(key) ?? null }, reopened.state()); assert.equal(Object.keys(loaded.sources).length, 0);
+  reopened.click('Set up teams →'); assert.doesNotMatch(reopened.text(), /Synthetic classroom source|Synthetic explanation|A revised sourced manual question/); view.unmount(); reopened.unmount();
+});
+
+test('retained manual save callbacks cannot attach a stale citation after the draft changes', () => {
+  const view = mount(); view.change('quest-question-prompt', 'Current draft?'); view.change('Number of answer choices', '2'); view.change('Answer A', 'One'); view.change('Answer B', 'Two');
+  view.change('quest-source-url', citationFixture.url); view.change('quest-source-citation', citationFixture.citation);
+  const save = view.all().find(element => element.type === 'form')!.props.onSubmit;
+  view.change('quest-source-citation', 'New citation chosen by the host.'); view.invoke(() => save({ preventDefault() {} }));
+  assert.equal(view.state().questions.length, 0); assert.equal(view.field('quest-source-citation')!.props.value, 'New citation chosen by the host.'); view.submit(); assert.equal(view.state().questions.length, 1); view.unmount();
+});
+
+test('both correct and incorrect answers reveal the correct choice, explanation, source link and citation only after answering', () => {
+  for (const selected of [0, 1]) {
+    const state = active(), view = mount({ state, sources: sourceMapFor(state) });
+    assert.equal(questionSourceLinks(view).length, 0); assert.doesNotMatch(view.text(), /Synthetic explanation|Synthetic classroom source/);
+    view.click('Draw a question ↗'); view.advance(700);
+    assert.equal(questionSourceLinks(view).length, 0); assert.doesNotMatch(view.text(), /Correct answer: A\.|Synthetic explanation|Synthetic classroom source/);
+    view.invoke(view.all().find(element => element.type === 'button' && clean(content(element.props.children)) === (selected ? 'B Wrong option' : 'A Right option'))!.props.onClick);
+    assert.match(view.text(), /Correct answer: A\. Right option/); assert.match(view.text(), /Synthetic explanation visible after the team answers/); assert.match(view.text(), /Synthetic classroom source/);
+    const link = questionSourceLinks(view)[0]; assert.ok(link); assert.equal(link.props.target, '_blank'); assert.equal(link.props.rel, 'noopener noreferrer');
+    assert.equal(view.all().find(element => element.type === 'button' && clean(content(element.props.children)).startsWith('A Right option'))!.props.className, 'is-right');
+    assert.equal(view.state().teams[0].points, selected ? 0 : 1); assert.equal(view.state().turn.stage, selected ? 'complete' : 'roll'); view.unmount();
+  }
+});
+
+test('matching legacy and imported preset text receives its reviewed source without changing the v1 saved format', () => {
+  const input = gracieQuestions.GRACIE_QUESTION_PRESET.questions[0]; let s = quest.appendQuestQuestions(quest.createQuestionQuest('matched-legacy'), [input], () => 'legacy-matched-card');
+  s = quest.finishQuestQuestions(s); s = quest.configureQuestTeams(s, s.teams.map(({ id, name, avatar }) => ({ id, name, avatar }))); s = quest.startQuestionQuest(quest.pickFirstQuestTeam(s, () => 0));
+  const view = mount({ state: s }); view.click('Draw a question ↗'); view.advance(700);
+  const before = view.all().find(element => element.props['aria-label'] === 'Correct answer and information source'); assert.equal(before, undefined);
+  const correctChoice = input.choices[input.correctIndex]; view.invoke(view.all().find(element => element.type === 'button' && clean(content(element.props.children)) === `${String.fromCharCode(65 + input.correctIndex)} ${correctChoice}`)!.props.onClick);
+  const source = gracieQuestions.sourceForGracieQuestion(input)!; assert.ok(source); assert.match(view.text(), new RegExp(source.citation.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.ok(view.all().some(element => element.type === 'a' && element.props.href === source.url)); assert.equal(Object.hasOwn(view.state().questions[0], 'source'), false); view.unmount();
+});
+
+test('a sourced file previews its citation and persists it separately while team setup hides all private material', async () => {
+  const view = mount({ state: authored() });
+  view.selectFile(localFile(JSON.stringify({ version: 1, questions: [{ question: 'Imported sourced question?', choices: ['One', 'Two'], answer: 'B', source: citationFixture }] }), 'sourced.json')); await view.settle();
+  assert.match(view.text(), /Synthetic classroom source|Synthetic explanation/); assert.equal(view.state().questions.length, 1); view.click('Import 1 question');
+  const loaded = questionSources.loadQuestQuestionSources({ getItem: key => view.data.get(key) ?? null }, view.state()), imported = view.state().questions[1]; assert.deepEqual(loaded.sources[questionSources.questionSourceKey(imported)], citationFixture);
+  view.click('Set up teams →'); assert.doesNotMatch(view.text(), /Imported sourced question|Synthetic classroom source|Synthetic explanation|Correct answer/); assert.equal(questionSourceLinks(view).length, 0); view.unmount();
+});
+
+test('unknown legacy cards reveal their answer honestly without fabricating a source and corrupt citation storage leaves the game readable', () => {
+  const original = active(), sidecar = '{malformed citations', view = mount({ state: original, sidecarRaw: sidecar });
+  assert.match(view.text(), /Saved citations could not be opened/); assert.equal(view.data.get(questionSources.QUEST_QUESTION_SOURCES_STORAGE_KEY), sidecar);
+  view.click('Draw a question ↗'); view.advance(700); view.invoke(view.all().find(element => element.type === 'button' && clean(content(element.props.children)) === 'B Wrong option')!.props.onClick);
+  assert.match(view.text(), /Correct answer: A\. Right option/); assert.match(view.text(), /No information source was supplied/); assert.equal(view.all().filter(element => element.type === 'a').length, 0); assert.equal(view.state().teams[0].points, 0); view.unmount();
+});
+
+test('citation-only storage failures retain both the saved question and its in-memory answer feedback', () => {
+  const view = mount({ sourceSaveFails: true }); view.change('quest-question-prompt', 'Source storage failure?'); view.change('Number of answer choices', '2'); view.change('Answer A', 'Yes'); view.change('Answer B', 'No'); view.change('quest-source-url', citationFixture.url); view.change('quest-source-citation', citationFixture.citation); view.change('quest-source-explanation', citationFixture.explanation!); view.submit();
+  assert.equal(view.state().questions.length, 1); assert.equal(JSON.parse(view.data.get(quest.QUESTION_QUEST_STORAGE_KEY)!).questions.length, 1); assert.equal(view.data.get(questionSources.QUEST_QUESTION_SOURCES_STORAGE_KEY), undefined); assert.match(view.text(), /can’t save citations/);
+  view.click('Set up teams →'); view.submit(); view.click('Choose first team'); view.advance(1000); view.click('Start game →'); view.click('Draw a question ↗'); view.advance(700);
+  view.invoke(view.all().find(element => element.type === 'button' && clean(content(element.props.children)) === 'B No')!.props.onClick);
+  assert.match(view.text(), /Correct answer: A\. Yes/); assert.match(view.text(), /Synthetic explanation visible/); assert.match(view.text(), /Synthetic classroom source/); view.unmount();
+});
+
+test('mutating a bank with damaged citation storage preserves the unreadable raw sidecar before replacement', () => {
+  const original = '{broken citation save', view = mount({ state: authored(), sidecarRaw: original });
+  view.change('quest-question-prompt', 'New manual card?'); view.change('Number of answer choices', '2'); view.change('Answer A', 'One'); view.change('Answer B', 'Two'); view.submit();
+  assert.equal(view.state().questions.length, 2); assert.equal(view.data.get(`${questionSources.QUEST_QUESTION_SOURCES_STORAGE_KEY}:previous`), original); assert.equal(questionSources.loadQuestQuestionSources({ getItem: key => view.data.get(key) ?? null }, view.state()).status, 'ready'); view.unmount();
+});
+
+test('a browser that blocks the localStorage property itself still opens recovery and preserves prior saves', () => {
+  const original = quest.serializeQuestionQuest(active()), view = mount({ raw: original, storageAccessFails: true });
+  assert.match(view.text(), /Saved game unavailable/); assert.match(view.text(), /saved data has not been changed/); assert.equal(view.data.get(quest.QUESTION_QUEST_STORAGE_KEY), original); assert.equal(view.writes.length, 0);
+  view.click('New game'); view.click('Start new game'); assert.equal(view.state().phase, 'questions'); assert.match(view.text(), /Keep this tab open/); assert.equal(view.data.get(quest.QUESTION_QUEST_STORAGE_KEY), original); assert.equal(view.writes.length, 0); view.unmount();
 });

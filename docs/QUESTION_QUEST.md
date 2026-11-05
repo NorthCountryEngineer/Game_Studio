@@ -6,12 +6,16 @@ The class identity appears throughout setup, question-file import, cards, the bo
 
 ## Prepare and play
 
-1. Add your own multiple-choice questions one at a time, or download a question-file template, fill it out offline and upload it during setup. Review the preview and confirm the import to add the questions to the current bank. Each has two to four choices and exactly one correct answer. Add at least one question before continuing; a larger bank gives the group more variety.
+1. Click **Use Gracie's Questions** for the 19-card reviewed class bank, add your own multiple-choice questions one at a time, or download a question-file template, fill it out offline and upload it during setup. Review the preview and confirm the import to add the questions to the current bank. Each has two to four choices and exactly one correct answer. Add at least one question before continuing; a larger bank gives the group more variety.
 2. Hide the question editor, then let each of the four teams enter a name and choose a meme piece: Mewing Cat, Aura Farmer, Locked In, Cooked Toast, Six Seven, Side Eye, NPC Buffering or Absolute Cinema. The same original artwork appears in the picker, on the board and in the standings and winner screen. Each piece plays by the same rules. Questions and correct answers are absent from the team setup screen. See [artwork and references](MEME_PIECES.md).
 3. Use the random team picker to choose the first team. Turns continue in that order, skipping teams already finished.
 4. Draw a card from the board's deck. The card flies into view and presents the question and choices. The host selects the answer given by the current team.
-5. A correct answer earns one point and unlocks a roll of two six-sided dice. The dice replace the question card, cycle rapidly and slow to their final faces within three seconds. Their combined total moves the team's piece along the board, one space at a time. An incorrect answer earns no points or movement. The host moves to the next team after either outcome.
+5. A correct answer earns one point and unlocks a roll of two six-sided dice. The dice replace the question card, cycle rapidly and slow to their final faces within three seconds. Their combined total moves the team's piece along the board, one space at a time. An incorrect answer earns no points or movement. After either answer, the card reveals the correct letter and text. Cards with a source also show an explanation, a **Read source** link and an APA-style citation. The host moves to the next team after either outcome.
 6. The first team to reach or pass space 28 wins and receives a celebration. Continue playing until all four teams have finished; finish order and question points remain visible separately. An exact roll is not required.
+
+The prepared bank covers Gracie's 13 unique recorded topics and the six selected additions. The recording's removed duplicate is omitted. Each prepared card has a reviewed answer, explanation and original information source with an APA-style citation. See [the question bank and source review](GRACIE_QUESTIONS.md).
+
+The preset appends only exact missing cards, keeping existing questions. Repeated clicks skip existing copies. To play only the reviewed bank, start **New game** and then choose **Use Gracie's Questions**. The existing new-game confirmation keeps a previous local copy when storage is available. A full bank or unsaved manual draft prevents the batch from changing any questions.
 
 The deck is shuffled and uses every question before reshuffling. A short question bank repeats; the next cycle avoids immediately repeating the previous card when possible. There are no collision penalties or hidden special-space rules. The host's buttons control every change; there is no answer timer.
 
@@ -41,7 +45,7 @@ ANSWER: C
 
 Keep each field on one line, in the order shown. `C:` and `D:` are optional; at least `A:` and `B:` are required. Separate questions with `---` on its own line. Blank lines and lines beginning with `#` are ignored. The correct answer is a letter corresponding to an available choice. Text labels and answer letters can use either case. Do not add comments after a field value.
 
-The JSON alternative has exactly `version` and `questions` fields; version is `1`. Each question has `question`, `choices` and `answer` fields, with an uppercase answer letter `A`–`D`.
+The JSON alternative has exactly `version` and `questions` fields; version is `1`. Each question has `question`, `choices` and `answer` fields, with an uppercase answer letter `A`–`D`. An optional `source` object contains `url`, `citation` and optional `explanation` plain-text fields. Existing files without sources remain valid.
 
 ```json
 {
@@ -72,3 +76,24 @@ Question banks and match progress are saved privately in the host browser's loca
 The fixed TypeScript engine validates bounded inert question and team data, phase transitions, one answer and one roll per turn, deck order, movement, score and finish order. UI projections omit the complete question bank and correct-answer indices. The host's local browser still owns the underlying questions; this is a shared-screen party game, not confidential assessment software. Existing published GameSpecs, identity permissions, leaderboards and online party rooms are unchanged.
 
 The visible game uses mature class-review labels and sans-serif headings. The existing `/party/quiz-circuit` and `/party/quiz-circuit/host` routes, original `/party/question-quest` aliases and question-template URLs are retained. Downloaded template names identify the drug education unit, and the sample questions cover refusing peer pressure and supporting a friend. These editable examples are consistent with [NIAAA refusal guidance](https://www.niaaa.nih.gov/alcohols-effects-health/niaaa-middle-school/right-resist) and [CDC guidance on talking to a friend about drugs](https://www.cdc.gov/free-mind/teens/talk-to-a-friend.html), checked November 5, 2026. They are examples for the host to review, not a replacement for the class question bank. Previously prepared files remain valid under the same format. The existing local storage key, version 1 state format and eight internal avatar IDs are retained, preserving saved questions, teams and match progress, including completed single-die turns. The meme artwork replaces the old animal presentation for those same IDs. Branding never rewrites a saved question bank. New turns record both dice and their combined total before the animation starts, so refreshing never rerolls them. Refreshing during an animation restores the committed board position.
+
+
+## Sources and answer feedback
+
+Manual entry offers an optional source URL, APA citation and answer explanation. Add the URL and citation together. Text files support `SOURCE:`, `CITATION:` and optional `EXPLANATION:` in that order after `ANSWER:`. All fields occupy one line. For example:
+
+```text
+Q: What type of drug is caffeine?
+A: A stimulant
+B: An antibiotic
+ANSWER: A
+SOURCE: https://medlineplus.gov/caffeine.html
+CITATION: National Library of Medicine. (2021, September 8). Caffeine. MedlinePlus. https://medlineplus.gov/caffeine.html
+EXPLANATION: Caffeine stimulates the central nervous system.
+```
+
+URLs must use HTTPS without credentials, whitespace, backslashes or control characters. URLs are limited to 2,048 characters; citations and explanations each to 1,000 printable characters. Text and links remain inert until the host or player chooses to open the source. Link validation checks the URL format, not the authority or truth of a host-provided source. Hosts should review the original source and update the citation when editing a question or answer.
+
+The original game save key and version 1 format are unchanged. Bounded source metadata lives in the separate `game-studio-question-quest-v1:sources:v1` companion key, matched to the exact game ID, normalized question, ordered choices and correct answer. Removed or changed cards cannot inherit an unrelated citation. Invalid or unavailable citation storage does not erase questions or match progress; a warning describes persistence problems. A damaged citation copy is retained locally before replacement when storage allows.
+
+Prepared sources can also be found for an exact matching manual or imported card. An unrelated older card still reveals its correct answer and states when no source was supplied; the app does not invent a citation or make a model call. The answer key, explanation and citation remain hidden during team setup and before an answer is selected. The shared-screen bank is not confidential assessment content; prepared questions and keys are included in the public application and downloadable files.

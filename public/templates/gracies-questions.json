@@ -1,0 +1,269 @@
+{
+  "version": 1,
+  "questions": [
+    {
+      "question": "Most respondents in the 2024 St. Lawrence County youth assessment said they had never tried this substance shown in its survey chart.",
+      "choices": [
+        "Marijuana",
+        "Caffeine"
+      ],
+      "answer": "A",
+      "source": {
+        "url": "https://www.stlawco.gov/sites/default/files/CommunityServices/2026_LSP_St.%20Lawrence.pdf#page=32",
+        "citation": "St. Lawrence County Youth Bureau. (2024). 2024 needs assessment summary. St. Lawrence County. https://www.stlawco.gov/sites/default/files/CommunityServices/2026_LSP_St.%20Lawrence.pdf#page=32",
+        "explanation": "The survey chart shows many more respondents saying no than yes to ever trying marijuana. It reports lifetime experience and does not measure caffeine use."
+      }
+    },
+    {
+      "question": "According to the American Academy of Pediatrics, avoiding this stimulant is the best choice for children and teens.",
+      "choices": [
+        "Marijuana",
+        "Caffeine"
+      ],
+      "answer": "B",
+      "source": {
+        "url": "https://www.healthychildren.org/English/healthy-living/nutrition/Pages/the-effects-of-caffeine-on-kids-a-parents-guide.aspx",
+        "citation": "Corkins, M. (2025, August 11). The effects of caffeine on kids: A parent's guide. HealthyChildren.org. https://www.healthychildren.org/English/healthy-living/nutrition/Pages/the-effects-of-caffeine-on-kids-a-parents-guide.aspx",
+        "explanation": "The AAP recommends avoiding caffeine for kids. Age 12 is not a threshold that makes caffeinated drinks appropriate."
+      }
+    },
+    {
+      "question": "CDC estimates that about 3 in 10 people who use this substance have a use disorder involving that substance.",
+      "choices": [
+        "Marijuana",
+        "Caffeine"
+      ],
+      "answer": "A",
+      "source": {
+        "url": "https://www.cdc.gov/cannabis/health-effects/cannabis-use-disorder.html",
+        "citation": "Centers for Disease Control and Prevention. (2024, December 5). Understanding your risk for cannabis use disorder. https://www.cdc.gov/cannabis/health-effects/cannabis-use-disorder.html",
+        "explanation": "This is a national CDC estimate about cannabis use disorder, not a St. Lawrence County rate or a 30-day quitting statistic."
+      }
+    },
+    {
+      "question": "Coffee and tea are commonly shared at gatherings. Which stimulant do these beverages naturally contain?",
+      "choices": [
+        "Caffeine",
+        "Marijuana"
+      ],
+      "answer": "A",
+      "source": {
+        "url": "https://medlineplus.gov/caffeine.html",
+        "citation": "National Library of Medicine. (2021, September 8). Caffeine. MedlinePlus. https://medlineplus.gov/caffeine.html",
+        "explanation": "Coffee beans and tea leaves naturally contain caffeine. Caffeine is also added to some drinks and medicines."
+      }
+    },
+    {
+      "question": "Someone who regularly drinks coffee suddenly stops. Withdrawal from this substance can cause headache, drowsiness and irritability.",
+      "choices": [
+        "Caffeine",
+        "Marijuana"
+      ],
+      "answer": "A",
+      "source": {
+        "url": "https://medlineplus.gov/caffeine.html",
+        "citation": "National Library of Medicine. (2021, September 8). Caffeine. MedlinePlus. https://medlineplus.gov/caffeine.html",
+        "explanation": "Regular caffeine use can lead to withdrawal when stopped suddenly. Possible symptoms include headache, drowsiness and irritability."
+      }
+    },
+    {
+      "question": "This substance is a stimulant.",
+      "choices": [
+        "Caffeine",
+        "Alcohol",
+        "Marijuana",
+        "Narcotics"
+      ],
+      "answer": "A",
+      "source": {
+        "url": "https://www.healthychildren.org/English/healthy-living/nutrition/Pages/the-effects-of-caffeine-on-kids-a-parents-guide.aspx",
+        "citation": "Corkins, M. (2025, August 11). The effects of caffeine on kids: A parent's guide. HealthyChildren.org. https://www.healthychildren.org/English/healthy-living/nutrition/Pages/the-effects-of-caffeine-on-kids-a-parents-guide.aspx",
+        "explanation": "Caffeine stimulates the central nervous system and can increase alertness."
+      }
+    },
+    {
+      "question": "This drug contains THC, a compound that can alter perception and cause an intoxicating high.",
+      "choices": [
+        "Marijuana",
+        "Caffeine",
+        "Alcohol"
+      ],
+      "answer": "A",
+      "source": {
+        "url": "https://cannabis.ny.gov/adult-use-information",
+        "citation": "New York State Office of Cannabis Management. (n.d.). Adult-use information. Retrieved November 5, 2026, from https://cannabis.ny.gov/adult-use-information",
+        "explanation": "THC is the cannabis compound known for psychoactive and intoxicating effects, including changes in perception."
+      }
+    },
+    {
+      "question": "CDC warns that this substance can slow reaction time and impair coordination, making driving unsafe.",
+      "choices": [
+        "Caffeine",
+        "Marijuana"
+      ],
+      "answer": "B",
+      "source": {
+        "url": "https://www.cdc.gov/cannabis/health-effects/driving.html",
+        "citation": "Centers for Disease Control and Prevention. (2024, February 22). Cannabis and driving. https://www.cdc.gov/cannabis/health-effects/driving.html",
+        "explanation": "Cannabis can slow reactions, impair coordination and distort perception. Those effects make driving dangerous."
+      }
+    },
+    {
+      "question": "THC in this substance can interfere with a student's memory, attention and learning.",
+      "choices": [
+        "Marijuana",
+        "Caffeine"
+      ],
+      "answer": "A",
+      "source": {
+        "url": "https://www.cdc.gov/cannabis/health-effects/cannabis-and-teens.html",
+        "citation": "Centers for Disease Control and Prevention. (2024, February 15). Cannabis and teens. https://www.cdc.gov/cannabis/health-effects/cannabis-and-teens.html",
+        "explanation": "CDC identifies memory, learning and attention problems among the negative effects of teen cannabis use."
+      }
+    },
+    {
+      "question": "CDC lists continuing use despite relationship problems as a warning sign of this substance's use disorder.",
+      "choices": [
+        "Marijuana",
+        "Caffeine"
+      ],
+      "answer": "A",
+      "source": {
+        "url": "https://www.cdc.gov/cannabis/health-effects/cannabis-use-disorder.html",
+        "citation": "Centers for Disease Control and Prevention. (2024, December 5). Understanding your risk for cannabis use disorder. https://www.cdc.gov/cannabis/health-effects/cannabis-use-disorder.html",
+        "explanation": "Continuing cannabis use despite social or relationship problems is one listed sign of cannabis use disorder."
+      }
+    },
+    {
+      "question": "Which statement about out-of-pocket costs for cannabis treatment is accurate?",
+      "choices": [
+        "Every insured person pays the same price",
+        "Costs depend on the plan and services",
+        "Having insurance removes every treatment cost",
+        "All treatment requires the same inpatient program"
+      ],
+      "answer": "B",
+      "source": {
+        "url": "https://www.healthcare.gov/choose-a-plan/your-total-costs/",
+        "citation": "HealthCare.gov. (n.d.). Your total costs for health care: Premium, deductible, and out-of-pocket costs. Retrieved November 5, 2026, from https://www.healthcare.gov/choose-a-plan/your-total-costs/",
+        "explanation": "Deductibles, copayments, coinsurance and covered services affect what a person pays for care. Check the specific plan and services."
+      }
+    },
+    {
+      "question": "Regular use of this THC-containing substance during adolescence can harm learning and memory.",
+      "choices": [
+        "Marijuana",
+        "Caffeine"
+      ],
+      "answer": "A",
+      "source": {
+        "url": "https://www.cdc.gov/cannabis/health-effects/cannabis-and-teens.html",
+        "citation": "Centers for Disease Control and Prevention. (2024, February 15). Cannabis and teens. https://www.cdc.gov/cannabis/health-effects/cannabis-and-teens.html",
+        "explanation": "Cannabis use during adolescence can affect learning and memory while the brain is developing. The wording describes a risk, not an inevitable outcome for every person."
+      }
+    },
+    {
+      "question": "In the 2024 St. Lawrence County youth assessment, about 650 respondents said this substance was very difficult to obtain.",
+      "choices": [
+        "Marijuana",
+        "Caffeine"
+      ],
+      "answer": "A",
+      "source": {
+        "url": "https://www.stlawco.gov/sites/default/files/CommunityServices/2026_LSP_St.%20Lawrence.pdf#page=32",
+        "citation": "St. Lawrence County Youth Bureau. (2024). 2024 needs assessment summary. St. Lawrence County. https://www.stlawco.gov/sites/default/files/CommunityServices/2026_LSP_St.%20Lawrence.pdf#page=32",
+        "explanation": "This is an approximate reading of the marijuana bar in the report, not an exact published count. The survey included 1,767 youth and teens; the chart does not measure caffeine."
+      }
+    },
+    {
+      "question": "In the 2024 St. Lawrence County youth assessment, which issue ranked second among concerns about peers?",
+      "choices": [
+        "Bullying and cyberbullying",
+        "Drugs, alcohol and vaping",
+        "Academic pressure",
+        "Access to activities and recreation"
+      ],
+      "answer": "B",
+      "source": {
+        "url": "https://www.stlawco.gov/sites/default/files/CommunityServices/2026_LSP_St.%20Lawrence.pdf#page=32",
+        "citation": "St. Lawrence County Youth Bureau. (2024). 2024 needs assessment summary. St. Lawrence County. https://www.stlawco.gov/sites/default/files/CommunityServices/2026_LSP_St.%20Lawrence.pdf#page=32",
+        "explanation": "The ranking describes what surveyed youth were concerned about. It is not a marijuana-use rate. The assessment included 1,767 youth and participation from 16 of 18 districts."
+      }
+    },
+    {
+      "question": "Under New York law, what is the minimum age for adult-use cannabis in St. Lawrence County?",
+      "choices": [
+        "16",
+        "18",
+        "25",
+        "21"
+      ],
+      "answer": "D",
+      "source": {
+        "url": "https://cannabis.ny.gov/adult-use-information",
+        "citation": "New York State Office of Cannabis Management. (n.d.). Adult-use information. Retrieved November 5, 2026, from https://cannabis.ny.gov/adult-use-information",
+        "explanation": "New York's adult-use rule applies across the state, including St. Lawrence County. The medical cannabis program has separate rules."
+      }
+    },
+    {
+      "question": "Someone stops using marijuana, then starts using it again. Which health term describes this?",
+      "choices": [
+        "Return to use, sometimes called relapse",
+        "Tolerance",
+        "Withdrawal",
+        "Intoxication only"
+      ],
+      "answer": "A",
+      "source": {
+        "url": "https://medlineplus.gov/ency/patientinstructions/000796.htm",
+        "citation": "A.D.A.M., Inc. (n.d.). Substance use - marijuana. In A.D.A.M. medical encyclopedia. MedlinePlus. Retrieved November 5, 2026, from https://medlineplus.gov/ency/patientinstructions/000796.htm",
+        "explanation": "Starting to use marijuana again after a period without it is a return to use; relapse is another term for it."
+      }
+    },
+    {
+      "question": "Which symptoms can occur when someone stops heavy or long-term marijuana use?",
+      "choices": [
+        "A new cannabis high without taking cannabis",
+        "Permanent loss of the need for sleep",
+        "Withdrawal cannot occur with cannabis",
+        "Irritability and trouble sleeping"
+      ],
+      "answer": "D",
+      "source": {
+        "url": "https://medlineplus.gov/ency/patientinstructions/000796.htm",
+        "citation": "A.D.A.M., Inc. (n.d.). Substance use - marijuana. In A.D.A.M. medical encyclopedia. MedlinePlus. Retrieved November 5, 2026, from https://medlineplus.gov/ency/patientinstructions/000796.htm",
+        "explanation": "Some people experience anxiety, irritability or sleep difficulties when stopping cannabis. These symptoms are possible, not inevitable."
+      }
+    },
+    {
+      "question": "What type of drug is caffeine?",
+      "choices": [
+        "An opioid",
+        "An antibiotic",
+        "A stimulant",
+        "A sedative"
+      ],
+      "answer": "C",
+      "source": {
+        "url": "https://www.healthychildren.org/English/healthy-living/nutrition/Pages/the-effects-of-caffeine-on-kids-a-parents-guide.aspx",
+        "citation": "Corkins, M. (2025, August 11). The effects of caffeine on kids: A parent's guide. HealthyChildren.org. https://www.healthychildren.org/English/healthy-living/nutrition/Pages/the-effects-of-caffeine-on-kids-a-parents-guide.aspx",
+        "explanation": "Caffeine stimulates the central nervous system and can increase alertness."
+      }
+    },
+    {
+      "question": "A regular caffeine user suddenly stops. Which symptom can occur during withdrawal?",
+      "choices": [
+        "A new stimulant high without caffeine",
+        "A permanent decrease in the need for sleep",
+        "Headache",
+        "Guaranteed improvement in concentration"
+      ],
+      "answer": "C",
+      "source": {
+        "url": "https://medlineplus.gov/caffeine.html",
+        "citation": "National Library of Medicine. (2021, September 8). Caffeine. MedlinePlus. https://medlineplus.gov/caffeine.html",
+        "explanation": "MedlinePlus lists headache, drowsiness, irritability, nausea and difficulty concentrating as possible caffeine withdrawal symptoms."
+      }
+    }
+  ]
+}
